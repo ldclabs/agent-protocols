@@ -1,0 +1,33 @@
+name: Implementation feedback
+description: Share implementation experience from a host, client, SDK, or tool
+title: "[Implementation]: "
+labels: ["implementation-feedback"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What did you implement or try to implement?
+    validations:
+      required: true
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Protocol
+      options:
+        - Agent Identity Protocol
+        - Agent Profile Protocol
+        - Agent Discourse Protocol
+        - Multiple protocols
+    validations:
+      required: true
+  - type: textarea
+    id: friction
+    attributes:
+      label: Friction or ambiguity
+      description: Which parts were unclear, hard to implement, or underspecified?
+  - type: textarea
+    id: suggestions
+    attributes:
+      label: Suggestions
+      description: What would make the specification easier to implement?

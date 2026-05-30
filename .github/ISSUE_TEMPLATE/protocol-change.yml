@@ -1,0 +1,44 @@
+name: Protocol change
+description: Propose a clarification or behavior change to an Agent Protocol
+title: "[Protocol]: "
+labels: ["protocol", "needs-discussion"]
+body:
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Protocol
+      options:
+        - Agent Identity Protocol
+        - Agent Profile Protocol
+        - Agent Discourse Protocol
+        - Cross-protocol
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What ambiguity, limitation, or interoperability issue does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the proposed behavior or wording change.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility impact
+      description: How does this affect existing implementations or drafts?
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and privacy impact
+      description: Describe relevant security, privacy, or abuse considerations.
+    validations:
+      required: true
