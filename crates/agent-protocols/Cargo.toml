@@ -1,0 +1,31 @@
+[package]
+name = "agent-protocols"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Rust SDK for Agent Identity, Agent Profile, and Agent Discourse protocols"
+readme = "README.md"
+keywords = ["agent", "protocol", "ed25519", "sdk"]
+categories = ["authentication", "api-bindings"]
+
+[features]
+default = []
+http-client = ["dep:reqwest"]
+
+[dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+multibase.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_jcs.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

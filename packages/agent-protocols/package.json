@@ -1,0 +1,52 @@
+{
+  "name": "agent-protocols",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Agent Identity, Agent Profile, and Agent Discourse protocols",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ldclabs/agent-protocols.git",
+    "directory": "packages/agent-protocols"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./identity": {
+      "types": "./dist/identity.d.ts",
+      "import": "./dist/identity.js"
+    },
+    "./profile": {
+      "types": "./dist/profile.d.ts",
+      "import": "./dist/profile.js"
+    },
+    "./discourse": {
+      "types": "./dist/discourse.d.ts",
+      "import": "./dist/discourse.js"
+    },
+    "./http-client": {
+      "types": "./dist/http-client.d.ts",
+      "import": "./dist/http-client.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "bs58": "^6.0.0",
+    "canonicalize": "^3.0.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.22.0",
+    "typescript": "^6.0.0"
+  }
+}

@@ -43,6 +43,12 @@ Agent Identity
 ## 仓库结构
 
 ```text
+crates/
+  agent-protocols/      面向客户端和服务端实现的 Rust SDK
+packages/
+  agent-protocols/      面向客户端和服务端实现的 TypeScript SDK
+python/
+  agent-protocols/      面向客户端和服务端实现的 Python SDK
 docs/
   protocols/
     agent-identity/
@@ -50,7 +56,17 @@ docs/
     agent-discourse/
 ```
 
-未来可能会增加 JSON Schema 文件、测试向量、OpenAPI 描述、SDK 指南和一致性测试套件。
+## SDK
+
+本仓库包含三个草案协议的通用客户端和服务端构建模块：
+
+- Rust：[crates/agent-protocols](crates/agent-protocols)
+- TypeScript：[packages/agent-protocols](packages/agent-protocols)
+- Python：[python/agent-protocols](python/agent-protocols)
+
+这些 SDK 覆盖 Agent ID 编码、签名事件信封、Profile 物化、Discourse payload 类型、权限 helper，以及 HTTP client。
+
+未来可能会增加 JSON Schema 文件、测试向量、OpenAPI 描述、其他语言的 SDK 指南和一致性测试套件。
 
 ## 参与贡献
 

@@ -43,6 +43,12 @@ Draft requirements use the RFC 2119 terms `MUST`, `MUST NOT`, `SHOULD`, `SHOULD 
 ## Repository Layout
 
 ```text
+crates/
+  agent-protocols/      Rust SDK for client and server implementations
+packages/
+  agent-protocols/      TypeScript SDK for client and server implementations
+python/
+  agent-protocols/      Python SDK for client and server implementations
 docs/
   protocols/
     agent-identity/
@@ -50,7 +56,17 @@ docs/
     agent-discourse/
 ```
 
-Future additions may include JSON Schema files, test vectors, OpenAPI descriptions, SDK guidance, and conformance suites.
+## SDKs
+
+This repository includes SDKs for common client and server building blocks across all three draft protocols:
+
+- Rust: [crates/agent-protocols](crates/agent-protocols)
+- TypeScript: [packages/agent-protocols](packages/agent-protocols)
+- Python: [python/agent-protocols](python/agent-protocols)
+
+The SDKs cover Agent ID encoding, signed event envelopes, Profile materialization, Discourse payload types, permission helpers, and HTTP clients.
+
+Future additions may include JSON Schema files, test vectors, OpenAPI descriptions, SDK guidance for other languages, and conformance suites.
 
 ## Contributing
 

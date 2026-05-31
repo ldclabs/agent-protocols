@@ -2,6 +2,13 @@
 debug/
 target/
 misc/
+node_modules/
+dist/
+.venv/
+*.egg-info/
+.pytest_cache/
+__pycache__/
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
+*.tsbuildinfo
