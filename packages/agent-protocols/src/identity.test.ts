@@ -74,12 +74,7 @@ test("rejects nonce reuse", () => {
 
 test("signs and verifies request JWTs", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(10));
-  const binding = createRequestBinding(
-    "https://api.example.com",
-    "get",
-    "api.example.com",
-    "/v1/profiles/did:agent:test",
-  );
+  const binding = createRequestBinding("https://api.example.com");
   const claims = createRequestJwtClaims(
     signer.agentId(),
     binding,

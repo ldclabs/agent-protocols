@@ -52,7 +52,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_signs_and_verifies_request_jwts(self):
         signer = AgentSigner.from_seed(bytes([10]) * 32)
-        binding = RequestBinding.create("https://api.example.com", "get", "api.example.com", "/v1/profiles/did:agent:test")
+        binding = RequestBinding.create("https://api.example.com")
         claims = create_request_jwt_claims(signer.agent_id(), binding, 100, 300, "jwt_nonce")
         token = signer.sign_request_jwt(claims)
         store = MemoryNonceStore()
@@ -61,9 +61,6 @@ class IdentityTests(unittest.TestCase):
             token,
             store,
             audience=binding.audience,
-            method=binding.method,
-            host=binding.host,
-            path=binding.path,
             now_secs=120,
             max_ttl_secs=300,
         )
@@ -74,9 +71,6 @@ class IdentityTests(unittest.TestCase):
                 token,
                 store,
                 audience=binding.audience,
-                method=binding.method,
-                host=binding.host,
-                path=binding.path,
                 now_secs=120,
                 max_ttl_secs=300,
             )

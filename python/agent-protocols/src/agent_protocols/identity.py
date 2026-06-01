@@ -50,13 +50,10 @@ def validate_agent_id(agent_id: AgentId) -> AgentId:
 @dataclass(frozen=True)
 class RequestBinding:
     audience: str
-    method: str
-    host: str
-    path: str
 
     @classmethod
-    def create(cls, audience: str, method: str, host: str, path: str) -> "RequestBinding":
-        return cls(audience=audience, method=method.upper(), host=host, path=path)
+    def create(cls, audience: str) -> "RequestBinding":
+        return cls(audience=audience)
 
 
 class AgentSigner:
@@ -191,13 +188,10 @@ def create_request_jwt_claims(agent_id: AgentId, binding: RequestBinding, issued
         "iat": issued_at,
         "exp": issued_at + ttl_secs,
         "jti": jti,
-        "method": binding.method.upper(),
-        "host": binding.host,
-        "path": binding.path,
     }
 
 
-def verify_request_jwt(token: str, *, audience: str, method: str, host: str, path: str, now_secs: int | None = None, max_ttl_secs: int = DEFAULT_REQUEST_JWT_TTL_SECS) -> dict[str, Any]:
+def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None, max_ttl_secs: int = DEFAULT_REQUEST_JWT_TTL_SECS) -> dict[str, Any]:
     parts = token.split(".")
     if len(parts) != 3:
         raise AgentProtocolError("invalid_jwt", "expected three compact JWS parts")
@@ -219,15 +213,8 @@ def verify_request_jwt(token: str, *, audience: str, method: str, host: str, pat
     except InvalidSignature as exc:
         raise AgentProtocolError("invalid_signature", "JWT signature verification failed") from exc
 
-    expected_method = method.upper()
     if claims.get("aud") != audience:
         raise AgentProtocolError("invalid_jwt_claim", "aud mismatch")
-    if claims.get("method") != expected_method:
-        raise AgentProtocolError("invalid_jwt_claim", "method mismatch")
-    if claims.get("host") != host:
-        raise AgentProtocolError("invalid_jwt_claim", "host mismatch")
-    if claims.get("path") != path:
-        raise AgentProtocolError("invalid_jwt_claim", "path mismatch")
 
     now = now_secs if now_secs is not None else unix_time_secs()
     if claims["iat"] > now or claims["exp"] < now:

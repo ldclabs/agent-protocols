@@ -57,9 +57,6 @@ export interface RequestJwtHeader {
 
 export interface RequestBinding {
   audience: string;
-  method: string;
-  host: string;
-  path: string;
 }
 
 export interface RequestJwtClaims {
@@ -69,9 +66,6 @@ export interface RequestJwtClaims {
   iat: number;
   exp: number;
   jti: string;
-  method: string;
-  host: string;
-  path: string;
 }
 
 export interface RequestAuthContext extends RequestBinding {
@@ -325,17 +319,9 @@ export function verifyLiveEnvelope(
   );
 }
 
-export function createRequestBinding(
-  audience: string,
-  method: string,
-  host: string,
-  path: string,
-): RequestBinding {
+export function createRequestBinding(audience: string): RequestBinding {
   return {
     audience,
-    method: method.toUpperCase(),
-    host,
-    path,
   };
 }
 
@@ -353,9 +339,6 @@ export function createRequestJwtClaims(
     iat: issuedAt,
     exp: issuedAt + ttlSecs,
     jti,
-    method: binding.method.toUpperCase(),
-    host: binding.host,
-    path: binding.path,
   };
 }
 
@@ -402,15 +385,8 @@ export function verifyRequestJwt(
     );
   }
 
-  const method = context.method.toUpperCase();
   if (claims.aud !== context.audience)
     throw protocolError("invalid_jwt_claim", "aud mismatch");
-  if (claims.method !== method)
-    throw protocolError("invalid_jwt_claim", "method mismatch");
-  if (claims.host !== context.host)
-    throw protocolError("invalid_jwt_claim", "host mismatch");
-  if (claims.path !== context.path)
-    throw protocolError("invalid_jwt_claim", "path mismatch");
 
   const nowSecs = context.nowSecs ?? unixTimeSecs();
   const maxTtlSecs = context.maxTtlSecs ?? DEFAULT_REQUEST_JWT_TTL_SECS;

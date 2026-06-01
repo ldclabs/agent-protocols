@@ -393,31 +393,17 @@ pub struct RequestJwtClaims {
     pub iat: i64,
     pub exp: i64,
     pub jti: String,
-    pub method: String,
-    pub host: String,
-    pub path: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestBinding {
     pub audience: String,
-    pub method: String,
-    pub host: String,
-    pub path: String,
 }
 
 impl RequestBinding {
-    pub fn new(
-        audience: impl Into<String>,
-        method: impl Into<String>,
-        host: impl Into<String>,
-        path: impl Into<String>,
-    ) -> Self {
+    pub fn new(audience: impl Into<String>) -> Self {
         Self {
             audience: audience.into(),
-            method: method.into().to_ascii_uppercase(),
-            host: host.into(),
-            path: path.into(),
         }
     }
 }
@@ -437,9 +423,6 @@ impl RequestJwtClaims {
             iat: issued_at,
             exp: issued_at + ttl_secs,
             jti: jti.into(),
-            method: binding.method,
-            host: binding.host,
-            path: binding.path,
         }
     }
 }
@@ -447,26 +430,15 @@ impl RequestJwtClaims {
 #[derive(Clone, Debug)]
 pub struct RequestAuthContext {
     pub audience: String,
-    pub method: String,
-    pub host: String,
-    pub path: String,
     pub now_secs: i64,
     pub max_ttl_secs: i64,
 }
 
 impl RequestAuthContext {
-    pub fn new(
-        audience: impl Into<String>,
-        method: impl Into<String>,
-        host: impl Into<String>,
-        path: impl Into<String>,
-    ) -> Self {
-        let binding = RequestBinding::new(audience, method, host, path);
+    pub fn new(audience: impl Into<String>) -> Self {
+        let binding = RequestBinding::new(audience);
         Self {
             audience: binding.audience,
-            method: binding.method,
-            host: binding.host,
-            path: binding.path,
             now_secs: unix_time_secs(),
             max_ttl_secs: DEFAULT_REQUEST_JWT_TTL_SECS,
         }
@@ -507,15 +479,6 @@ pub fn verify_request_jwt(token: &str, context: &RequestAuthContext) -> Result<R
 
     if claims.aud != context.audience {
         return Err(SdkError::InvalidJwtClaim("aud"));
-    }
-    if claims.method != context.method {
-        return Err(SdkError::InvalidJwtClaim("method"));
-    }
-    if claims.host != context.host {
-        return Err(SdkError::InvalidJwtClaim("host"));
-    }
-    if claims.path != context.path {
-        return Err(SdkError::InvalidJwtClaim("path"));
     }
     if claims.iat > context.now_secs || claims.exp < context.now_secs {
         return Err(SdkError::InvalidJwtClaim("iat/exp"));
@@ -628,12 +591,7 @@ mod tests {
         let signer = AgentSigner::from_seed([10; 32]);
         let claims = RequestJwtClaims::new(
             signer.agent_id(),
-            RequestBinding::new(
-                "https://api.example.com",
-                "get",
-                "api.example.com",
-                "/v1/profiles/did:agent:test",
-            ),
+            RequestBinding::new("https://api.example.com"),
             100,
             300,
             "jwt_nonce",
@@ -641,9 +599,6 @@ mod tests {
         let token = signer.sign_request_jwt(&claims).unwrap();
         let context = RequestAuthContext {
             audience: "https://api.example.com".to_owned(),
-            method: "GET".to_owned(),
-            host: "api.example.com".to_owned(),
-            path: "/v1/profiles/did:agent:test".to_owned(),
             now_secs: 120,
             max_ttl_secs: 300,
         };
