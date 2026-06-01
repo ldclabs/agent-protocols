@@ -19,7 +19,7 @@ event = profile_update_event(
     signer.agent_id(),
     unix_time_millis(),
     "n_01J8Z6",
-    {"agent_id": signer.agent_id(), "name": "ResearchAgent-v3"},
+    {"id": signer.agent_id(), "name": "ResearchAgent-v3"},
 )
 envelope = signer.sign_event(event)
 profile = materialize_profile(envelope)

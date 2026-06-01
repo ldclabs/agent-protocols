@@ -19,7 +19,10 @@ pub struct ServiceEndpoint {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ProfileUpdatePayload {
-    pub agent_id: AgentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -38,9 +41,10 @@ pub struct ProfileUpdatePayload {
 }
 
 impl ProfileUpdatePayload {
-    pub fn new(agent_id: AgentId, name: impl Into<String>) -> Self {
+    pub fn new(id: AgentId, name: impl Into<String>) -> Self {
         Self {
-            agent_id,
+            id: Some(id),
+            agent_id: None,
             name: name.into(),
             description: None,
             avatar_url: None,
@@ -51,11 +55,15 @@ impl ProfileUpdatePayload {
             metadata: BTreeMap::new(),
         }
     }
+
+    pub fn effective_id(&self) -> Option<&AgentId> {
+        self.id.as_ref().or(self.agent_id.as_ref())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AgentProfile {
-    pub agent_id: AgentId,
+    pub id: AgentId,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -76,10 +84,18 @@ pub struct AgentProfile {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ProfileReadResponse {
-    pub profile: AgentProfile,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile_event: Option<Envelope<ProfileUpdatePayload>>,
+pub struct ProfileBatchReadRequest {
+    pub ids: Vec<AgentId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ProfileBatchReadResponse {
+    pub result: Vec<AgentProfile>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ProfileEventsResponse {
+    pub result: Vec<Envelope<ProfileUpdatePayload>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,6 +110,8 @@ pub struct ProfileServiceDiscovery {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileServiceEndpoints {
     pub profiles: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_batch: Option<String>,
 }
 
 pub fn profile_update_event(
@@ -119,9 +137,22 @@ pub fn validate_profile_update(envelope: &Envelope<ProfileUpdatePayload>) -> Res
             actual: envelope.event.kind.clone(),
         });
     }
-    if envelope.event.actor != envelope.event.payload.agent_id {
+    let payload_id = envelope.event.payload.effective_id().ok_or_else(|| {
+        SdkError::InvalidActor("profile update actor must match payload.id".to_owned())
+    })?;
+    if let (Some(id), Some(agent_id)) = (
+        envelope.event.payload.id.as_ref(),
+        envelope.event.payload.agent_id.as_ref(),
+    ) {
+        if id != agent_id {
+            return Err(SdkError::InvalidActor(
+                "profile update payload.id and payload.agent_id must be equal".to_owned(),
+            ));
+        }
+    }
+    if envelope.event.actor != *payload_id {
         return Err(SdkError::InvalidActor(
-            "profile update actor must match payload.agent_id".to_owned(),
+            "profile update actor must match payload.id".to_owned(),
         ));
     }
     Ok(())
@@ -130,8 +161,11 @@ pub fn validate_profile_update(envelope: &Envelope<ProfileUpdatePayload>) -> Res
 pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<AgentProfile> {
     validate_profile_update(envelope)?;
     let payload = &envelope.event.payload;
+    let payload_id = payload.effective_id().ok_or_else(|| {
+        SdkError::InvalidActor("profile update actor must match payload.id".to_owned())
+    })?;
     Ok(AgentProfile {
-        agent_id: payload.agent_id.clone(),
+        id: payload_id.clone(),
         name: payload.name.clone(),
         description: payload.description.clone(),
         avatar_url: payload.avatar_url.clone(),
@@ -161,6 +195,7 @@ mod tests {
 
         let profile = materialize_profile(&envelope).unwrap();
 
+        assert_eq!(profile.id, signer.agent_id());
         assert_eq!(profile.name, "ResearchAgent-v3");
         assert_eq!(profile.updated_at, 1_779_753_600_000);
         assert_eq!(profile.profile_event_id, envelope.event_id);
@@ -179,5 +214,29 @@ mod tests {
             validate_profile_update(&envelope),
             Err(SdkError::InvalidActor(_))
         ));
+    }
+
+    #[test]
+    fn materializes_legacy_agent_id_payload() {
+        let signer = AgentSigner::from_seed([14; 32]);
+        let legacy_event = crate::identity::Event::new(
+            PROTOCOL,
+            PROFILE_UPDATE,
+            signer.agent_id(),
+            1_779_753_600_001,
+            "n_legacy",
+            serde_json::json!({
+                "agent_id": signer.agent_id(),
+                "name": "LegacyAgent"
+            }),
+        );
+        let signed = signer.sign_event(legacy_event).unwrap();
+        let envelope: Envelope<ProfileUpdatePayload> =
+            serde_json::from_value(serde_json::to_value(signed).unwrap()).unwrap();
+
+        let profile = materialize_profile(&envelope).unwrap();
+
+        assert_eq!(profile.id, signer.agent_id());
+        assert_eq!(profile.name, "LegacyAgent");
     }
 }

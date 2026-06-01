@@ -7,7 +7,10 @@ use crate::discourse::{
 };
 use crate::error::Result;
 use crate::identity::{AgentId, Envelope};
-use crate::profile::{AgentProfile, ProfileReadResponse, ProfileUpdatePayload};
+use crate::profile::{
+    AgentProfile, ProfileBatchReadRequest, ProfileBatchReadResponse, ProfileEventsResponse,
+    ProfileUpdatePayload,
+};
 
 #[derive(Clone, Debug)]
 pub struct ProfileClient {
@@ -30,10 +33,44 @@ impl ProfileClient {
         }
     }
 
-    pub async fn get_profile(&self, agent_id: &AgentId) -> Result<ProfileReadResponse> {
+    pub async fn get_profile(&self, agent_id: &AgentId) -> Result<AgentProfile> {
         Ok(self
             .inner
             .get(self.url(&format!("/v1/profiles/{agent_id}")))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn get_profiles(&self, agent_ids: &[AgentId]) -> Result<ProfileBatchReadResponse> {
+        let request = ProfileBatchReadRequest {
+            ids: agent_ids.to_vec(),
+        };
+        Ok(self
+            .inner
+            .post(self.url("/v1/profiles/batch"))
+            .json(&request)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn profile_events(
+        &self,
+        agent_id: &AgentId,
+        limit: Option<usize>,
+    ) -> Result<ProfileEventsResponse> {
+        let mut path = format!("/v1/profiles/{agent_id}/events");
+        if let Some(limit) = limit {
+            path.push_str(&format!("?limit={limit}"));
+        }
+        Ok(self
+            .inner
+            .get(self.url(&path))
             .send()
             .await?
             .error_for_status()?

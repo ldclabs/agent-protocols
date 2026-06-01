@@ -17,7 +17,8 @@ export interface ServiceEndpoint {
 }
 
 export interface ProfileUpdatePayload {
-  agent_id: AgentId;
+  id?: AgentId;
+  agent_id?: AgentId;
   name: string;
   description?: string;
   avatar_url?: string;
@@ -28,18 +29,35 @@ export interface ProfileUpdatePayload {
   metadata?: Record<string, unknown>;
 }
 
-export interface AgentProfile extends ProfileUpdatePayload {
+export interface AgentProfile {
+  id: AgentId;
+  name: string;
+  description?: string;
+  avatar_url?: string;
+  provider?: string;
+  capabilities?: string[];
+  service_endpoints?: ServiceEndpoint[];
+  links?: Record<string, string>;
+  metadata?: Record<string, unknown>;
   updated_at: number;
   profile_event_id: string;
 }
 
-export interface ProfileReadResponse {
-  profile: AgentProfile;
-  profile_event?: Envelope<ProfileUpdatePayload>;
+export interface ProfileBatchReadRequest {
+  ids: AgentId[];
+}
+
+export interface ProfileBatchReadResponse {
+  result: AgentProfile[];
+}
+
+export interface ProfileEventsResponse {
+  result: Envelope<ProfileUpdatePayload>[];
 }
 
 export interface ProfileServiceEndpoints {
   profiles: string;
+  profile_batch?: string;
 }
 
 export interface ProfileServiceDiscovery {
@@ -68,6 +86,8 @@ export function profileUpdateEvent(
 export function validateProfileUpdate(
   envelope: Envelope<ProfileUpdatePayload>,
 ): void {
+  const payloadId =
+    envelope.event.payload.id ?? envelope.event.payload.agent_id;
   verifyEnvelope(envelope);
   if (envelope.event.protocol !== PROFILE_PROTOCOL) {
     throw protocolError(
@@ -81,10 +101,10 @@ export function validateProfileUpdate(
       `expected ${PROFILE_UPDATE}, got ${envelope.event.type}`,
     );
   }
-  if (envelope.event.actor !== envelope.event.payload.agent_id) {
+  if (!payloadId || envelope.event.actor !== payloadId) {
     throw protocolError(
       "invalid_actor",
-      "profile update actor must match payload.agent_id",
+      "profile update actor must match payload.id",
     );
   }
 }
@@ -94,8 +114,9 @@ export function materializeProfile(
 ): AgentProfile {
   validateProfileUpdate(envelope);
   const payload = envelope.event.payload;
+  const payloadId = payload.id ?? payload.agent_id;
   return {
-    agent_id: payload.agent_id,
+    id: payloadId as AgentId,
     name: payload.name,
     description: payload.description,
     avatar_url: payload.avatar_url,

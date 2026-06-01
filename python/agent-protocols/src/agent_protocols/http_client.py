@@ -18,10 +18,16 @@ class ProfileClient:
     def get_profile(self, agent_id: AgentId) -> dict[str, Any]:
         return self._get(f"/v1/profiles/{agent_id}")
 
+    def get_profiles(self, agent_ids: list[AgentId]) -> dict[str, Any]:
+        return self._post("/v1/profiles/batch", {"ids": agent_ids})
+
+    def profile_events(self, agent_id: AgentId, limit: int = 1) -> dict[str, Any]:
+        return self._get(f"/v1/profiles/{agent_id}/events?limit={limit}")
+
     def submit_profile_update(self, envelope: Envelope) -> dict[str, Any]:
         return self._post("/v1/profiles", envelope)
 
-    def _get(self, path: str) -> dict[str, Any]:
+    def _get(self, path: str) -> Any:
         response = self.session.get(self.base_url + path)
         response.raise_for_status()
         return response.json()

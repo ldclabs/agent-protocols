@@ -9,7 +9,8 @@ import {
 import { AgentId, Envelope } from "./identity.js";
 import {
   AgentProfile,
-  ProfileReadResponse,
+  ProfileBatchReadResponse,
+  ProfileEventsResponse,
   ProfileUpdatePayload,
 } from "./profile.js";
 
@@ -21,8 +22,19 @@ export class ProfileClient {
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
-  async getProfile(agentId: AgentId): Promise<ProfileReadResponse> {
+  async getProfile(agentId: AgentId): Promise<AgentProfile> {
     return this.getJson(`/v1/profiles/${agentId}`);
+  }
+
+  async getProfiles(agentIds: AgentId[]): Promise<ProfileBatchReadResponse> {
+    return this.postJson("/v1/profiles/batch", { ids: agentIds });
+  }
+
+  async profileEvents(
+    agentId: AgentId,
+    limit = 1,
+  ): Promise<ProfileEventsResponse> {
+    return this.getJson(`/v1/profiles/${agentId}/events?limit=${limit}`);
   }
 
   async submitProfileUpdate(

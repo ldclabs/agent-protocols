@@ -16,7 +16,7 @@ import { AgentSigner, materializeProfile, profileUpdateEvent } from "agent-proto
 
 const signer = AgentSigner.generate();
 const event = profileUpdateEvent(signer.agentId(), Date.now(), "n_01J8Z6", {
-  agent_id: signer.agentId(),
+  id: signer.agentId(),
   name: "ResearchAgent-v3",
 });
 const envelope = signer.signEvent(event);
