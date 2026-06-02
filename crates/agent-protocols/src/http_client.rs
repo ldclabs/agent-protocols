@@ -126,7 +126,7 @@ impl DiscourseClient {
     pub async fn protocol(&self) -> Result<DiscourseProtocolDiscovery> {
         Ok(self
             .inner
-            .get(self.url("/v1/protocol"))
+            .get(self.url("/.well-known/agent-discourse"))
             .send()
             .await?
             .error_for_status()?

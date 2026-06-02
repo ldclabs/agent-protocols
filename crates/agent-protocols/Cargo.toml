@@ -18,12 +18,11 @@ http-client = ["dep:reqwest"]
 base64.workspace = true
 ed25519-dalek.workspace = true
 getrandom.workspace = true
-multibase.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_jcs.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
+sha3.workspace = true
 thiserror.workspace = true
 reqwest = { workspace = true, optional = true }
 

@@ -1,15 +1,14 @@
 import canonicalize from "canonicalize";
-import bs58 from "bs58";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import nacl from "tweetnacl";
 
 import { protocolError } from "./errors.js";
 
 export const AGENT_ID_PREFIX = "did:agent:";
-export const EVENT_ID_PREFIX = "evt_";
 export const DEFAULT_LIVE_WRITE_WINDOW_MS = 300_000;
+export const DEFAULT_NONCE_TTL_MS = 300_000;
 export const DEFAULT_REQUEST_JWT_TTL_SECS = 300;
-const REQUEST_AUTH_REPLAY_SCOPE = "agent-identity/request-auth";
+export const MAX_NONCE_HEADER = "Max-Seen-Nonce";
 
 export type AgentId = string;
 
@@ -18,35 +17,37 @@ export interface Event<P = unknown> {
   type: string;
   actor: AgentId;
   created_at: number;
-  nonce: string;
+  nonce: number;
   room_id?: string;
   payload: P;
   [key: string]: unknown;
 }
 
 export interface Envelope<P = unknown> {
-  event_id: string;
+  hash: string;
   event: Event<P>;
   signature: string;
 }
 
-export type NonceScopeKind = "actor_protocol" | "actor_room";
-
-export interface NonceScope {
-  actor: AgentId;
-  protocol: string;
-  room_id?: string;
-  nonce: string;
+export interface NonceRecord {
+  maxNonce: number;
+  expiresAt: number;
 }
 
 export interface NonceStore {
-  checkAndInsert(scope: NonceScope): void;
+  checkAndUpdate(
+    actor: AgentId,
+    nonce: number,
+    nowMs: number,
+    ttlMs: number,
+  ): number;
+  maxNonce(actor: AgentId, nowMs: number): number | undefined;
 }
 
 export interface LiveWriteOptions {
   nowMs?: number;
   windowMs?: number;
-  nonceScope?: NonceScopeKind;
+  nonceTtlMs?: number;
 }
 
 export interface RequestJwtHeader {
@@ -65,7 +66,6 @@ export interface RequestJwtClaims {
   aud: string;
   iat: number;
   exp: number;
-  jti: string;
 }
 
 export interface RequestAuthContext extends RequestBinding {
@@ -100,7 +100,7 @@ export class AgentSigner {
 
   signEvent<P>(event: Event<P>): Envelope<P> {
     return {
-      event_id: eventId(event),
+      hash: eventHash(event),
       event,
       signature: signEvent(this.keyPair.secretKey, event),
     };
@@ -132,22 +132,63 @@ export class AgentSigner {
 }
 
 export class MemoryNonceStore implements NonceStore {
-  private readonly seen = new Set<string>();
+  private readonly records = new Map<AgentId, NonceRecord>();
 
-  checkAndInsert(scope: NonceScope): void {
-    const key = JSON.stringify([
-      scope.actor,
-      scope.protocol,
-      scope.room_id ?? null,
-      scope.nonce,
-    ]);
-    if (this.seen.has(key)) {
+  checkAndUpdate(
+    actor: AgentId,
+    nonce: number,
+    nowMs: number,
+    ttlMs: number,
+  ): number {
+    validateNonce(nonce);
+    if (ttlMs < 0) {
       throw protocolError(
-        "nonce_reused",
-        "nonce was already used in this replay scope",
+        "invalid_nonce",
+        "nonce cache ttl must be non-negative",
       );
     }
-    this.seen.add(key);
+    const record = this.records.get(actor);
+    if (record && record.expiresAt > nowMs && nonce <= record.maxNonce) {
+      throw protocolError(
+        "nonce_not_greater",
+        `nonce must be greater than accepted max nonce ${record.maxNonce}`,
+      );
+    }
+    this.records.set(actor, { maxNonce: nonce, expiresAt: nowMs + ttlMs });
+    return nonce;
+  }
+
+  maxNonce(actor: AgentId, nowMs: number): number | undefined {
+    const record = this.records.get(actor);
+    return record && record.expiresAt > nowMs ? record.maxNonce : undefined;
+  }
+}
+
+export class ClientNonceManager {
+  constructor(private nextNonceValue = 1) {
+    validateNonce(nextNonceValue);
+  }
+
+  peek(): number {
+    return this.nextNonceValue;
+  }
+
+  nextNonce(): number {
+    const nonce = this.nextNonceValue;
+    if (!Number.isSafeInteger(nonce + 1)) {
+      throw protocolError("invalid_nonce", "nonce counter overflow");
+    }
+    this.nextNonceValue = nonce + 1;
+    return nonce;
+  }
+
+  observeMaxNonce(maxNonce: number | string | null | undefined): void {
+    if (maxNonce === null || maxNonce === undefined || maxNonce === "") return;
+    const parsed = typeof maxNonce === "string" ? Number(maxNonce) : maxNonce;
+    validateNonce(parsed);
+    if (parsed >= this.nextNonceValue) {
+      this.nextNonceValue = parsed + 1;
+    }
   }
 }
 
@@ -156,10 +197,11 @@ export function createEvent<P>(
   type: string,
   actor: AgentId,
   createdAt: number,
-  nonce: string,
+  nonce: number,
   payload: P,
 ): Event<P> {
   validateAgentId(actor);
+  validateNonce(nonce);
   return {
     protocol,
     type,
@@ -184,7 +226,7 @@ export function agentIdFromPublicKey(publicKey: Uint8Array): AgentId {
       `public key must be 32 bytes, got ${publicKey.byteLength}`,
     );
   }
-  return `${AGENT_ID_PREFIX}${base58BtcEncode(publicKey)}`;
+  return `${AGENT_ID_PREFIX}${base64UrlEncode(publicKey)}`;
 }
 
 export function publicKeyBytes(agentId: AgentId): Uint8Array {
@@ -197,7 +239,7 @@ export function publicKeyBytes(agentId: AgentId): Uint8Array {
       "agent id must start with did:agent:",
     );
   }
-  const bytes = base58BtcDecode(encoded);
+  const bytes = base64UrlDecodeNoPad(encoded);
   if (bytes.byteLength !== 32) {
     throw protocolError(
       "invalid_public_key",
@@ -223,11 +265,11 @@ export function canonicalEventBytes(event: Event<unknown>): Uint8Array {
   return new TextEncoder().encode(canonical);
 }
 
-export function eventId(event: Event<unknown>): string {
-  const digest = createHash("sha256")
+export function eventHash(event: Event<unknown>): string {
+  const digest = createHash("sha3-256")
     .update(canonicalEventBytes(event))
     .digest();
-  return `${EVENT_ID_PREFIX}${base58BtcEncode(digest)}`;
+  return base64UrlEncode(digest);
 }
 
 export function signEvent(
@@ -245,12 +287,12 @@ export function signEvent(
   );
 }
 
-export function verifyEventId(envelope: Envelope<unknown>): void {
-  const expected = eventId(envelope.event);
-  if (expected !== envelope.event_id) {
+export function verifyEventHash(envelope: Envelope<unknown>): void {
+  const expected = eventHash(envelope.event);
+  if (expected !== envelope.hash) {
     throw protocolError(
-      "invalid_event_id",
-      `invalid event id: expected ${expected}, got ${envelope.event_id}`,
+      "invalid_event_hash",
+      `invalid event hash: expected ${expected}, got ${envelope.hash}`,
     );
   }
 }
@@ -274,7 +316,7 @@ export function verifySignature(envelope: Envelope<unknown>): void {
 }
 
 export function verifyEnvelope(envelope: Envelope<unknown>): void {
-  verifyEventId(envelope);
+  verifyEventHash(envelope);
   verifySignature(envelope);
 }
 
@@ -291,31 +333,23 @@ export function verifyTimestamp(
   }
 }
 
-export function nonceScopeForEvent(
-  event: Event<unknown>,
-  kind: NonceScopeKind = "actor_protocol",
-): NonceScope {
-  return {
-    actor: event.actor,
-    protocol: event.protocol,
-    room_id: kind === "actor_room" ? event.room_id : undefined,
-    nonce: event.nonce,
-  };
-}
-
 export function verifyLiveEnvelope(
   envelope: Envelope<unknown>,
   nonceStore: NonceStore,
   options: LiveWriteOptions = {},
-): void {
+): number {
+  const nowMs = options.nowMs ?? unixTimeMillis();
   verifyEnvelope(envelope);
   verifyTimestamp(
     envelope.event.created_at,
-    options.nowMs ?? unixTimeMillis(),
+    nowMs,
     options.windowMs ?? DEFAULT_LIVE_WRITE_WINDOW_MS,
   );
-  nonceStore.checkAndInsert(
-    nonceScopeForEvent(envelope.event, options.nonceScope),
+  return nonceStore.checkAndUpdate(
+    envelope.event.actor,
+    envelope.event.nonce,
+    nowMs,
+    options.nonceTtlMs ?? DEFAULT_NONCE_TTL_MS,
   );
 }
 
@@ -330,7 +364,6 @@ export function createRequestJwtClaims(
   binding: RequestBinding,
   issuedAt: number,
   ttlSecs: number,
-  jti: string,
 ): RequestJwtClaims {
   return {
     iss: agentId,
@@ -338,7 +371,6 @@ export function createRequestJwtClaims(
     aud: binding.audience,
     iat: issuedAt,
     exp: issuedAt + ttlSecs,
-    jti,
   };
 }
 
@@ -403,20 +435,6 @@ export function verifyRequestJwt(
   return claims;
 }
 
-export function verifyRequestJwtLive(
-  token: string,
-  context: RequestAuthContext,
-  nonceStore: NonceStore,
-): RequestJwtClaims {
-  const claims = verifyRequestJwt(token, context);
-  nonceStore.checkAndInsert({
-    actor: claims.iss,
-    protocol: REQUEST_AUTH_REPLAY_SCOPE,
-    nonce: claims.jti,
-  });
-  return claims;
-}
-
 export function unixTimeMillis(): number {
   return Date.now();
 }
@@ -425,22 +443,13 @@ export function unixTimeSecs(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-export function randomNonce(prefix = "n_"): string {
-  return `${prefix}${base64UrlEncode(randomBytes(16))}`;
-}
-
-function base58BtcEncode(bytes: Uint8Array): string {
-  return `z${bs58.encode(bytes)}`;
-}
-
-function base58BtcDecode(value: string): Uint8Array {
-  if (!value.startsWith("z")) {
+export function validateNonce(nonce: number): void {
+  if (!Number.isSafeInteger(nonce) || nonce < 1) {
     throw protocolError(
-      "invalid_encoding",
-      "expected base58btc multibase value",
+      "invalid_nonce",
+      "nonce must be a positive safe integer",
     );
   }
-  return bs58.decode(value.slice(1));
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -449,4 +458,14 @@ function base64UrlEncode(bytes: Uint8Array): string {
 
 function base64UrlDecode(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, "base64url"));
+}
+
+function base64UrlDecodeNoPad(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw protocolError(
+      "invalid_encoding",
+      "expected base64url without padding",
+    );
+  }
+  return base64UrlDecode(value);
 }

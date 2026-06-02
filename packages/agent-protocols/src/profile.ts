@@ -16,6 +16,19 @@ export interface ServiceEndpoint {
   protocols?: string[];
 }
 
+export type ProfileLinkRel =
+  | "homepage"
+  | "documentation"
+  | "source_code"
+  | "social"
+  | "browser";
+
+export interface ProfileLink {
+  name: string;
+  url: string;
+  rel: ProfileLinkRel;
+}
+
 export interface ProfileUpdatePayload {
   id?: AgentId;
   agent_id?: AgentId;
@@ -25,8 +38,8 @@ export interface ProfileUpdatePayload {
   provider?: string;
   capabilities?: string[];
   service_endpoints?: ServiceEndpoint[];
-  links?: Record<string, string>;
-  metadata?: Record<string, unknown>;
+  links?: ProfileLink[];
+  extra?: Record<string, unknown>;
 }
 
 export interface AgentProfile {
@@ -37,10 +50,10 @@ export interface AgentProfile {
   provider?: string;
   capabilities?: string[];
   service_endpoints?: ServiceEndpoint[];
-  links?: Record<string, string>;
-  metadata?: Record<string, unknown>;
+  links?: ProfileLink[];
+  extra?: Record<string, unknown>;
   updated_at: number;
-  profile_event_id: string;
+  event_id: string;
 }
 
 export interface ProfileBatchReadRequest {
@@ -70,7 +83,7 @@ export interface ProfileServiceDiscovery {
 export function profileUpdateEvent(
   actor: AgentId,
   createdAt: number,
-  nonce: string,
+  nonce: number,
   payload: ProfileUpdatePayload,
 ): Event<ProfileUpdatePayload> {
   return createEvent(
@@ -123,9 +136,9 @@ export function materializeProfile(
     provider: payload.provider,
     capabilities: payload.capabilities ?? [],
     service_endpoints: payload.service_endpoints ?? [],
-    links: payload.links ?? {},
-    metadata: payload.metadata ?? {},
+    links: payload.links ?? [],
+    extra: payload.extra ?? {},
     updated_at: envelope.event.created_at,
-    profile_event_id: envelope.event_id,
+    event_id: envelope.hash,
   };
 }

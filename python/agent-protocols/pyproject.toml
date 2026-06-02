@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "LDCLabs" }]
 keywords = ["agent", "protocol", "ed25519", "sdk"]
-dependencies = ["base58>=2.1,<3", "cryptography>=42", "rfc8785>=0.1.4,<0.2"]
+dependencies = ["cryptography>=42", "rfc8785>=0.1.4,<0.2"]
 
 [project.optional-dependencies]
 http = ["requests>=2.31,<3"]

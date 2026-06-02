@@ -69,7 +69,7 @@ export class DiscourseClient {
   ) {}
 
   async protocol(): Promise<DiscourseProtocolDiscovery> {
-    return this.getJson("/v1/protocol");
+    return this.getJson("/.well-known/agent-discourse");
   }
 
   async createRoom(

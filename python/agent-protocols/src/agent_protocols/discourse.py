@@ -16,20 +16,18 @@ ROOM_INVITE = "room.invite"
 ROOM_INVITE_REVOKE = "room.invite.revoke"
 ROOM_CLOSE = "room.close"
 ROOM_CANCEL = "room.cancel"
-MESSAGE_TEXT = "message.text"
-MESSAGE_MARKDOWN = "message.markdown"
-MESSAGE_DATA = "message.data"
+MESSAGE_CREATE = "message.create"
 REACTION_CREATE = "reaction.create"
-PROPOSAL_CREATE = "proposal.create"
-POLL_CREATE = "poll.create"
-POLL_VOTE = "poll.vote"
-RESOLUTION_CREATE = "resolution.create"
+MESSAGE_PROPOSAL_CREATE = "message.proposal.create"
+MESSAGE_POLL_CREATE = "message.poll.create"
+MESSAGE_POLL_VOTE = "message.poll.vote"
+MESSAGE_RESOLUTION_CREATE = "message.resolution.create"
 SOURCE_ADD = "source.add"
 TURN_UPDATE = "turn.update"
-QUESTION_GENERATE = "question.generate"
-DISCOURSE_STEER = "discourse.steer"
-MINDMAP_UPDATE = "mindmap.update"
-REPORT_GENERATE = "report.generate"
+QUESTION_CREATE = "question.create"
+ROOM_STEER = "room.steer"
+MAP_UPDATE = "map.update"
+ARTIFACT_CREATE = "artifact.create"
 SESSION_AUTH = "session.auth"
 
 KNOWN_EVENT_TYPES = {
@@ -41,20 +39,18 @@ KNOWN_EVENT_TYPES = {
     ROOM_INVITE_REVOKE,
     ROOM_CLOSE,
     ROOM_CANCEL,
-    MESSAGE_TEXT,
-    MESSAGE_MARKDOWN,
-    MESSAGE_DATA,
+    MESSAGE_CREATE,
     REACTION_CREATE,
-    PROPOSAL_CREATE,
-    POLL_CREATE,
-    POLL_VOTE,
-    RESOLUTION_CREATE,
+    MESSAGE_PROPOSAL_CREATE,
+    MESSAGE_POLL_CREATE,
+    MESSAGE_POLL_VOTE,
+    MESSAGE_RESOLUTION_CREATE,
     SOURCE_ADD,
     TURN_UPDATE,
-    QUESTION_GENERATE,
-    DISCOURSE_STEER,
-    MINDMAP_UPDATE,
-    REPORT_GENERATE,
+    QUESTION_CREATE,
+    ROOM_STEER,
+    MAP_UPDATE,
+    ARTIFACT_CREATE,
     SESSION_AUTH,
 }
 
@@ -72,11 +68,11 @@ class PermissionContext(TypedDict, total=False):
     observer_poll_vote_allowed: bool
 
 
-def room_create_event(actor: AgentId, created_at: int, nonce: str, payload: dict[str, Any]) -> Event:
+def room_create_event(actor: AgentId, created_at: int, nonce: int, payload: dict[str, Any]) -> Event:
     return create_event(DISCOURSE_PROTOCOL, ROOM_CREATE, actor, created_at, nonce, payload)
 
 
-def discourse_event(event_type: str, actor: AgentId, created_at: int, nonce: str, room_id: str, payload: Any) -> Event:
+def discourse_event(event_type: str, actor: AgentId, created_at: int, nonce: int, room_id: str, payload: Any) -> Event:
     return with_room_id(create_event(DISCOURSE_PROTOCOL, event_type, actor, created_at, nonce, payload), room_id)
 
 
@@ -146,19 +142,17 @@ def _moderator_can_submit(event_type: str, moderator_authorized: bool) -> bool:
         ROOM_INVITE,
         ROOM_INVITE_REVOKE,
         ROOM_CLOSE,
-        MESSAGE_TEXT,
-        MESSAGE_MARKDOWN,
-        MESSAGE_DATA,
+        MESSAGE_CREATE,
         SOURCE_ADD,
         TURN_UPDATE,
-        QUESTION_GENERATE,
-        DISCOURSE_STEER,
-        MINDMAP_UPDATE,
-        REPORT_GENERATE,
-        PROPOSAL_CREATE,
-        POLL_CREATE,
-        POLL_VOTE,
-        RESOLUTION_CREATE,
+        QUESTION_CREATE,
+        ROOM_STEER,
+        MAP_UPDATE,
+        ARTIFACT_CREATE,
+        MESSAGE_PROPOSAL_CREATE,
+        MESSAGE_POLL_CREATE,
+        MESSAGE_POLL_VOTE,
+        MESSAGE_RESOLUTION_CREATE,
         REACTION_CREATE,
         ROOM_LEAVE,
     }
@@ -167,24 +161,22 @@ def _moderator_can_submit(event_type: str, moderator_authorized: bool) -> bool:
 
 def _speaker_can_submit(event_type: str, policy_allowed: bool) -> bool:
     allowed = {
-        MESSAGE_TEXT,
-        MESSAGE_MARKDOWN,
-        MESSAGE_DATA,
+        MESSAGE_CREATE,
         SOURCE_ADD,
-        DISCOURSE_STEER,
-        PROPOSAL_CREATE,
-        POLL_CREATE,
-        POLL_VOTE,
+        ROOM_STEER,
+        MESSAGE_PROPOSAL_CREATE,
+        MESSAGE_POLL_CREATE,
+        MESSAGE_POLL_VOTE,
         REACTION_CREATE,
         ROOM_LEAVE,
     }
-    policy_events = {QUESTION_GENERATE, MINDMAP_UPDATE, REPORT_GENERATE, RESOLUTION_CREATE}
+    policy_events = {QUESTION_CREATE, MAP_UPDATE, ARTIFACT_CREATE, MESSAGE_RESOLUTION_CREATE}
     return event_type in allowed or (policy_allowed and event_type in policy_events)
 
 
 def _observer_can_submit(event_type: str, context: PermissionContext) -> bool:
     return (
         event_type in {REACTION_CREATE, ROOM_LEAVE}
-        or (context.get("observer_steering_allowed", False) and event_type == DISCOURSE_STEER)
-        or (context.get("observer_poll_vote_allowed", False) and event_type == POLL_VOTE)
+        or (context.get("observer_steering_allowed", False) and event_type == ROOM_STEER)
+        or (context.get("observer_poll_vote_allowed", False) and event_type == MESSAGE_POLL_VOTE)
     )

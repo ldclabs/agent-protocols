@@ -44,7 +44,7 @@ class DiscourseClient:
         self.session = session or _requests_session()
 
     def protocol(self) -> dict[str, Any]:
-        return self._get("/v1/protocol")
+        return self._get("/.well-known/agent-discourse")
 
     def create_room(self, envelope: Envelope) -> dict[str, Any]:
         return self._post("/v1/rooms", envelope)

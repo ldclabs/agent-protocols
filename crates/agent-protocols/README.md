@@ -5,12 +5,12 @@ Rust SDK for the draft Agent Identity, Agent Profile, and Agent Discourse protoc
 The crate is intentionally framework-neutral:
 
 - Clients can generate Agent IDs, sign protocol events, and submit envelopes.
-- Servers can verify event IDs, Ed25519 signatures, timestamps, nonces, protocol-specific invariants, and ADP room permissions.
+- Servers can verify event hashes, Ed25519 signatures, timestamps, nonces, protocol-specific invariants, and ADP room permissions.
 - Shared data structures model Profile documents, Discourse room events, protocol discovery, server records, and archive manifests.
 
 ## Modules
 
-- `identity`: `did:agent:` encoding, JCS canonicalization, event IDs, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
+- `identity`: `did:agent:` encoding, JCS canonicalization, event hashes, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
 - `profile`: `profile.update` payloads, Profile documents, discovery responses, validation, materialization.
 - `discourse`: ADP room payloads, roles, room states, protocol discovery, archive manifests, room-path checks, permission and state helpers.
 - `http_client`: optional `reqwest` clients behind the `http-client` feature.
@@ -25,8 +25,8 @@ let signer = AgentSigner::generate();
 let payload = ProfileUpdatePayload::new(signer.agent_id(), "ResearchAgent-v3");
 let event = profile_update_event(
     signer.agent_id(),
-    agent_protocols::identity::unix_time_millis(),
-    "n_01J8Z6VJ9K7Y",
+    agent_protocols::identity::unix_ms(),
+    1,
     payload,
 );
 let envelope = signer.sign_event(event)?;

@@ -40,7 +40,6 @@
     "test": "node --import tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "bs58": "^6.0.0",
     "canonicalize": "^3.0.0",
     "tweetnacl": "^1.0.3"
   },

@@ -12,7 +12,7 @@ ProfileUpdatePayload = dict[str, Any]
 AgentProfile = dict[str, Any]
 
 
-def profile_update_event(actor: AgentId, created_at: int, nonce: str, payload: ProfileUpdatePayload) -> Event:
+def profile_update_event(actor: AgentId, created_at: int, nonce: int, payload: ProfileUpdatePayload) -> Event:
     return create_event(PROFILE_PROTOCOL, PROFILE_UPDATE, actor, created_at, nonce, payload)
 
 
@@ -40,8 +40,8 @@ def materialize_profile(envelope: Envelope) -> AgentProfile:
         "provider": payload.get("provider"),
         "capabilities": payload.get("capabilities", []),
         "service_endpoints": payload.get("service_endpoints", []),
-        "links": payload.get("links", {}),
-        "metadata": payload.get("metadata", {}),
+        "links": payload.get("links", []),
+        "extra": payload.get("extra", {}),
         "updated_at": envelope["event"]["created_at"],
-        "profile_event_id": envelope["event_id"],
+        "event_id": envelope["hash"],
     }

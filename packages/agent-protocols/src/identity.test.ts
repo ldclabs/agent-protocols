@@ -3,13 +3,14 @@ import test from "node:test";
 
 import {
   AgentSigner,
+  ClientNonceManager,
   MemoryNonceStore,
   createEvent,
   createRequestBinding,
   createRequestJwtClaims,
   verifyEnvelope,
   verifyLiveEnvelope,
-  verifyRequestJwtLive,
+  verifyRequestJwt,
 } from "./identity.js";
 
 test("signs and verifies event envelopes", () => {
@@ -19,7 +20,7 @@ test("signs and verifies event envelopes", () => {
     "profile.update",
     signer.agentId(),
     1_779_753_600_000,
-    "n_test",
+    1,
     {
       agent_id: signer.agentId(),
       name: "ResearchAgent",
@@ -28,7 +29,8 @@ test("signs and verifies event envelopes", () => {
 
   const envelope = signer.signEvent(event);
 
-  assert.match(envelope.event_id, /^evt_z/);
+  assert.equal(envelope.hash.length, 43);
+  assert.ok(!envelope.hash.startsWith("evt_"));
   assert.doesNotThrow(() => verifyEnvelope(envelope));
 });
 
@@ -40,13 +42,16 @@ test("rejects tampered payloads", () => {
       "profile.update",
       signer.agentId(),
       1000,
-      "n_test",
+      1,
       { name: "before" },
     ),
   );
   envelope.event.payload = { name: "after" };
 
-  assert.throws(() => verifyEnvelope(envelope), /invalid event id|signature/i);
+  assert.throws(
+    () => verifyEnvelope(envelope),
+    /invalid event hash|signature/i,
+  );
 });
 
 test("rejects nonce reuse", () => {
@@ -57,14 +62,15 @@ test("rejects nonce reuse", () => {
       "profile.update",
       signer.agentId(),
       1000,
-      "n_reused",
+      1,
       { name: "ResearchAgent" },
     ),
   );
   const store = new MemoryNonceStore();
 
-  assert.doesNotThrow(() =>
+  assert.equal(
     verifyLiveEnvelope(envelope, store, { nowMs: 1000, windowMs: 1000 }),
+    1,
   );
   assert.throws(
     () => verifyLiveEnvelope(envelope, store, { nowMs: 1000, windowMs: 1000 }),
@@ -72,33 +78,27 @@ test("rejects nonce reuse", () => {
   );
 });
 
+test("client nonce manager observes server max", () => {
+  const manager = new ClientNonceManager();
+
+  assert.equal(manager.nextNonce(), 1);
+  manager.observeMaxNonce("5");
+
+  assert.equal(manager.peek(), 6);
+  assert.equal(manager.nextNonce(), 6);
+});
+
 test("signs and verifies request JWTs", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(10));
   const binding = createRequestBinding("https://api.example.com");
-  const claims = createRequestJwtClaims(
-    signer.agentId(),
-    binding,
-    100,
-    300,
-    "jwt_nonce",
-  );
+  const claims = createRequestJwtClaims(signer.agentId(), binding, 100, 300);
   const token = signer.signRequestJwt(claims);
-  const store = new MemoryNonceStore();
 
-  const verified = verifyRequestJwtLive(
-    token,
-    { ...binding, nowSecs: 120, maxTtlSecs: 300 },
-    store,
-  );
+  const verified = verifyRequestJwt(token, {
+    ...binding,
+    nowSecs: 120,
+    maxTtlSecs: 300,
+  });
 
-  assert.equal(verified.jti, "jwt_nonce");
-  assert.throws(
-    () =>
-      verifyRequestJwtLive(
-        token,
-        { ...binding, nowSecs: 120, maxTtlSecs: 300 },
-        store,
-      ),
-    /nonce/,
-  );
+  assert.equal(verified.iss, signer.agentId());
 });

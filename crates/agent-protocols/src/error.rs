@@ -10,14 +10,8 @@ pub enum SdkError {
     #[error("agent id must start with did:agent:")]
     InvalidAgentIdPrefix,
 
-    #[error("agent id must use base58btc multibase encoding")]
-    UnsupportedAgentIdEncoding,
-
     #[error("invalid public key length: expected 32 bytes, got {0}")]
     InvalidPublicKeyLength(usize),
-
-    #[error("multibase decode error: {0}")]
-    Multibase(String),
 
     #[error("canonical JSON error: {0}")]
     CanonicalJson(String),
@@ -37,8 +31,8 @@ pub enum SdkError {
     #[error("invalid signature length: expected 64 bytes, got {0}")]
     InvalidSignatureLength(usize),
 
-    #[error("invalid event id: expected {expected}, got {actual}")]
-    InvalidEventId { expected: String, actual: String },
+    #[error("invalid event hash: expected {expected}, got {actual}")]
+    InvalidEventHash { expected: String, actual: String },
 
     #[error("invalid event protocol: expected {expected}, got {actual}")]
     InvalidEventProtocol { expected: String, actual: String },
@@ -52,8 +46,11 @@ pub enum SdkError {
     #[error("timestamp is outside the allowed live-write window")]
     TimestampOutOfWindow,
 
-    #[error("nonce was already used in this replay scope")]
-    NonceReused,
+    #[error("invalid nonce: {0}")]
+    InvalidNonce(String),
+
+    #[error("nonce must be greater than accepted max nonce {max_nonce}")]
+    NonceNotGreater { max_nonce: u64 },
 
     #[error("event requires a room_id")]
     MissingRoomId,

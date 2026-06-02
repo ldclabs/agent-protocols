@@ -12,7 +12,7 @@ import {
 
 test("validates room.create without room_id", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(14));
-  const event = roomCreateEvent(signer.agentId(), 100, "n_room", {
+  const event = roomCreateEvent(signer.agentId(), 100, 1, {
     topic: "Research room",
     visibility: "public",
     start_time: 1000,
@@ -27,11 +27,11 @@ test("rejects room events without room_id", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(15));
   const event = createEvent(
     "agent-discourse/1.0",
-    eventType.MESSAGE_TEXT,
+    eventType.MESSAGE_CREATE,
     signer.agentId(),
     100,
-    "n_message",
-    { text: "hello" },
+    1,
+    { content_type: "text/plain", content: "hello" },
   );
   const envelope = signer.signEvent(event);
 
@@ -44,7 +44,7 @@ test("applies permission matrix", () => {
     true,
   );
   assert.equal(
-    canSubmitEvent(eventType.MESSAGE_TEXT, { role: "observer" }),
+    canSubmitEvent(eventType.MESSAGE_CREATE, { role: "observer" }),
     false,
   );
   assert.equal(
@@ -62,13 +62,13 @@ test("applies permission matrix", () => {
 
 test("applies state restrictions", () => {
   assert.equal(
-    canAcceptRoomWrite(eventType.MESSAGE_TEXT, "active", {
+    canAcceptRoomWrite(eventType.MESSAGE_CREATE, "active", {
       role: "participant",
     }),
     true,
   );
   assert.equal(
-    canAcceptRoomWrite(eventType.MESSAGE_TEXT, "scheduled", {
+    canAcceptRoomWrite(eventType.MESSAGE_CREATE, "scheduled", {
       role: "participant",
     }),
     false,

@@ -15,22 +15,27 @@ test("materializes valid profile updates", () => {
     id: signer.agentId(),
     name: "ResearchAgent-v3",
     capabilities: ["research"],
+    extra: { domain: "research" },
+    links: [
+      {
+        name: "Homepage",
+        url: "https://example.com",
+        rel: "homepage",
+      },
+    ],
   };
   const envelope = signer.signEvent(
-    profileUpdateEvent(
-      signer.agentId(),
-      1_779_753_600_000,
-      "n_profile",
-      payload,
-    ),
+    profileUpdateEvent(signer.agentId(), 1_779_753_600_000, 1, payload),
   );
 
   const profile = materializeProfile(envelope);
 
   assert.equal(profile.id, signer.agentId());
   assert.equal(profile.name, "ResearchAgent-v3");
+  assert.deepEqual(profile.links, payload.links);
+  assert.deepEqual(profile.extra, payload.extra);
   assert.equal(profile.updated_at, 1_779_753_600_000);
-  assert.equal(profile.profile_event_id, envelope.event_id);
+  assert.equal(profile.event_id, envelope.hash);
 });
 
 test("rejects profile actor mismatch", () => {
@@ -41,12 +46,7 @@ test("rejects profile actor mismatch", () => {
     name: "Imposter",
   };
   const envelope = signer.signEvent(
-    profileUpdateEvent(
-      signer.agentId(),
-      1_779_753_600_000,
-      "n_profile",
-      payload,
-    ),
+    profileUpdateEvent(signer.agentId(), 1_779_753_600_000, 1, payload),
   );
 
   assert.throws(() => validateProfileUpdate(envelope), /actor/);
@@ -55,7 +55,7 @@ test("rejects profile actor mismatch", () => {
 test("materializes legacy agent_id payloads", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(14));
   const envelope = signer.signEvent(
-    profileUpdateEvent(signer.agentId(), 1_779_753_600_001, "n_legacy", {
+    profileUpdateEvent(signer.agentId(), 1_779_753_600_001, 1, {
       agent_id: signer.agentId(),
       name: "LegacyAgent",
     }),

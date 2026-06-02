@@ -3,12 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, MutableMapping, Protocol
 
-import base58
 import rfc8785
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -17,10 +16,10 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from .errors import AgentProtocolError
 
 AGENT_ID_PREFIX = "did:agent:"
-EVENT_ID_PREFIX = "evt_"
 DEFAULT_LIVE_WRITE_WINDOW_MS = 300_000
+DEFAULT_NONCE_TTL_MS = 300_000
 DEFAULT_REQUEST_JWT_TTL_SECS = 300
-_REQUEST_AUTH_REPLAY_SCOPE = "agent-identity/request-auth"
+MAX_NONCE_HEADER = "Max-Seen-Nonce"
 
 Event = dict[str, Any]
 Envelope = dict[str, Any]
@@ -30,13 +29,13 @@ AgentId = str
 def agent_id_from_public_key(public_key: bytes) -> AgentId:
     if len(public_key) != 32:
         raise AgentProtocolError("invalid_public_key", f"public key must be 32 bytes, got {len(public_key)}")
-    return f"{AGENT_ID_PREFIX}{_base58btc_encode(public_key)}"
+    return f"{AGENT_ID_PREFIX}{_base64url_encode(public_key)}"
 
 
 def public_key_bytes(agent_id: AgentId) -> bytes:
     if not agent_id.startswith(AGENT_ID_PREFIX):
         raise AgentProtocolError("invalid_agent_id", "agent id must start with did:agent:")
-    data = _base58btc_decode(agent_id[len(AGENT_ID_PREFIX):])
+    data = _base64url_decode_no_pad(agent_id[len(AGENT_ID_PREFIX):])
     if len(data) != 32:
         raise AgentProtocolError("invalid_public_key", f"agent id public key must be 32 bytes, got {len(data)}")
     return data
@@ -78,7 +77,7 @@ class AgentSigner:
 
     def sign_event(self, event: Event) -> Envelope:
         return {
-            "event_id": event_id(event),
+            "hash": event_hash(event),
             "event": event,
             "signature": sign_event(self._private_key, event),
         }
@@ -96,21 +95,63 @@ class AgentSigner:
 
 
 class NonceStore(Protocol):
-    def check_and_insert(self, scope: tuple[AgentId, str, str | None, str]) -> None: ...
+    def check_and_update(self, actor: AgentId, nonce: int, now_ms: int, ttl_ms: int) -> int: ...
+
+    def max_nonce(self, actor: AgentId, now_ms: int) -> int | None: ...
 
 
 class MemoryNonceStore:
     def __init__(self) -> None:
-        self._seen: set[tuple[AgentId, str, str | None, str]] = set()
+        self._records: dict[AgentId, tuple[int, int]] = {}
 
-    def check_and_insert(self, scope: tuple[AgentId, str, str | None, str]) -> None:
-        if scope in self._seen:
-            raise AgentProtocolError("nonce_reused", "nonce was already used in this replay scope")
-        self._seen.add(scope)
+    def check_and_update(self, actor: AgentId, nonce: int, now_ms: int, ttl_ms: int) -> int:
+        validate_nonce(nonce)
+        if ttl_ms < 0:
+            raise AgentProtocolError("invalid_nonce", "nonce cache ttl must be non-negative")
+        record = self._records.get(actor)
+        if record is not None:
+            max_nonce, expires_at = record
+            if expires_at > now_ms and nonce <= max_nonce:
+                raise AgentProtocolError("nonce_not_greater", f"nonce must be greater than accepted max nonce {max_nonce}")
+        self._records[actor] = (nonce, now_ms + ttl_ms)
+        return nonce
+
+    def max_nonce(self, actor: AgentId, now_ms: int) -> int | None:
+        record = self._records.get(actor)
+        if record is None:
+            return None
+        max_nonce, expires_at = record
+        return max_nonce if expires_at > now_ms else None
 
 
-def create_event(protocol: str, event_type: str, actor: AgentId, created_at: int, nonce: str, payload: Any) -> Event:
+class ClientNonceManager:
+    def __init__(self, next_nonce: int = 1) -> None:
+        validate_nonce(next_nonce)
+        self._next_nonce = next_nonce
+
+    def peek(self) -> int:
+        return self._next_nonce
+
+    def next_nonce(self) -> int:
+        nonce = self._next_nonce
+        self._next_nonce += 1
+        return nonce
+
+    def observe_max_nonce(self, max_nonce: int | str | None) -> None:
+        if max_nonce is None or max_nonce == "":
+            return
+        try:
+            parsed = int(max_nonce)
+        except (TypeError, ValueError) as exc:
+            raise AgentProtocolError("invalid_nonce", "invalid max nonce header") from exc
+        validate_nonce(parsed)
+        if parsed >= self._next_nonce:
+            self._next_nonce = parsed + 1
+
+
+def create_event(protocol: str, event_type: str, actor: AgentId, created_at: int, nonce: int, payload: Any) -> Event:
     validate_agent_id(actor)
+    validate_nonce(nonce)
     return {
         "protocol": protocol,
         "type": event_type,
@@ -132,20 +173,20 @@ def canonical_event_bytes(event: Event) -> bytes:
     return canonical if isinstance(canonical, bytes) else canonical.encode()
 
 
-def event_id(event: Event) -> str:
-    digest = hashlib.sha256(canonical_event_bytes(event)).digest()
-    return f"{EVENT_ID_PREFIX}{_base58btc_encode(digest)}"
+def event_hash(event: Event) -> str:
+    digest = hashlib.sha3_256(canonical_event_bytes(event)).digest()
+    return _base64url_encode(digest)
 
 
 def sign_event(private_key: Ed25519PrivateKey, event: Event) -> str:
     return _base64url_encode(private_key.sign(canonical_event_bytes(event)))
 
 
-def verify_event_id(envelope: Envelope) -> None:
-    expected = event_id(envelope["event"])
-    actual = envelope["event_id"]
+def verify_event_hash(envelope: Envelope) -> None:
+    expected = event_hash(envelope["event"])
+    actual = envelope["hash"]
     if expected != actual:
-        raise AgentProtocolError("invalid_event_id", f"invalid event id: expected {expected}, got {actual}")
+        raise AgentProtocolError("invalid_event_hash", f"invalid event hash: expected {expected}, got {actual}")
 
 
 def verify_signature(envelope: Envelope) -> None:
@@ -160,7 +201,7 @@ def verify_signature(envelope: Envelope) -> None:
 
 
 def verify_envelope(envelope: Envelope) -> None:
-    verify_event_id(envelope)
+    verify_event_hash(envelope)
     verify_signature(envelope)
 
 
@@ -169,25 +210,20 @@ def verify_timestamp(created_at: int, now_ms: int, window_ms: int) -> None:
         raise AgentProtocolError("timestamp_out_of_window", "timestamp is outside the allowed live-write window")
 
 
-def nonce_scope_for_event(event: Event, kind: str = "actor_protocol") -> tuple[AgentId, str, str | None, str]:
-    room_id = event.get("room_id") if kind == "actor_room" else None
-    return (event["actor"], event["protocol"], room_id, event["nonce"])
-
-
-def verify_live_envelope(envelope: Envelope, nonce_store: NonceStore, *, now_ms: int | None = None, window_ms: int = DEFAULT_LIVE_WRITE_WINDOW_MS, nonce_scope: str = "actor_protocol") -> None:
+def verify_live_envelope(envelope: Envelope, nonce_store: NonceStore, *, now_ms: int | None = None, window_ms: int = DEFAULT_LIVE_WRITE_WINDOW_MS, nonce_ttl_ms: int = DEFAULT_NONCE_TTL_MS) -> int:
+    current_now_ms = now_ms if now_ms is not None else unix_ms()
     verify_envelope(envelope)
-    verify_timestamp(envelope["event"]["created_at"], now_ms if now_ms is not None else unix_time_millis(), window_ms)
-    nonce_store.check_and_insert(nonce_scope_for_event(envelope["event"], nonce_scope))
+    verify_timestamp(envelope["event"]["created_at"], current_now_ms, window_ms)
+    return nonce_store.check_and_update(envelope["event"]["actor"], envelope["event"]["nonce"], current_now_ms, nonce_ttl_ms)
 
 
-def create_request_jwt_claims(agent_id: AgentId, binding: RequestBinding, issued_at: int, ttl_secs: int, jti: str) -> dict[str, Any]:
+def create_request_jwt_claims(agent_id: AgentId, binding: RequestBinding, issued_at: int, ttl_secs: int) -> dict[str, Any]:
     return {
         "iss": agent_id,
         "sub": agent_id,
         "aud": binding.audience,
         "iat": issued_at,
         "exp": issued_at + ttl_secs,
-        "jti": jti,
     }
 
 
@@ -216,7 +252,7 @@ def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None
     if claims.get("aud") != audience:
         raise AgentProtocolError("invalid_jwt_claim", "aud mismatch")
 
-    now = now_secs if now_secs is not None else unix_time_secs()
+    now = now_secs if now_secs is not None else unix_secs()
     if claims["iat"] > now or claims["exp"] < now:
         raise AgentProtocolError("invalid_jwt_claim", "iat/exp outside valid time window")
     if claims["exp"] - claims["iat"] > max_ttl_secs:
@@ -224,32 +260,17 @@ def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None
     return claims
 
 
-def verify_request_jwt_live(token: str, nonce_store: NonceStore, **context: Any) -> dict[str, Any]:
-    claims = verify_request_jwt(token, **context)
-    nonce_store.check_and_insert((claims["iss"], _REQUEST_AUTH_REPLAY_SCOPE, None, claims["jti"]))
-    return claims
-
-
-def unix_time_millis() -> int:
+def unix_ms() -> int:
     return int(time.time() * 1000)
 
 
-def unix_time_secs() -> int:
+def unix_secs() -> int:
     return int(time.time())
 
 
-def random_nonce(prefix: str = "n_") -> str:
-    return f"{prefix}{_base64url_encode(os.urandom(16))}"
-
-
-def _base58btc_encode(data: bytes) -> str:
-    return "z" + base58.b58encode(data).decode()
-
-
-def _base58btc_decode(value: str) -> bytes:
-    if not value.startswith("z"):
-        raise AgentProtocolError("invalid_encoding", "expected base58btc multibase value")
-    return base58.b58decode(value[1:])
+def validate_nonce(nonce: int) -> None:
+    if not isinstance(nonce, int) or nonce < 1 or nonce > 0x1FFFFFFFFFFFFF:
+        raise AgentProtocolError("invalid_nonce", "nonce must be a positive integer less than or equal to 9007199254740991")
 
 
 def _base64url_encode(data: bytes) -> str:
@@ -259,3 +280,9 @@ def _base64url_encode(data: bytes) -> str:
 def _base64url_decode(value: str) -> bytes:
     padding = "=" * ((4 - len(value) % 4) % 4)
     return base64.urlsafe_b64decode(value + padding)
+
+
+def _base64url_decode_no_pad(value: str) -> bytes:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        raise AgentProtocolError("invalid_encoding", "expected base64url without padding")
+    return _base64url_decode(value)

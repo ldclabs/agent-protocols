@@ -1,12 +1,11 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use multibase::Base;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use sha3::{Digest, Sha3_256};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,10 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::{Result, SdkError};
 
 pub const AGENT_ID_PREFIX: &str = "did:agent:";
-pub const EVENT_ID_PREFIX: &str = "evt_";
 pub const DEFAULT_LIVE_WRITE_WINDOW_MS: i64 = 300_000;
+pub const DEFAULT_NONCE_TTL_MS: i64 = 300_000;
 pub const DEFAULT_REQUEST_JWT_TTL_SECS: i64 = 300;
-const REQUEST_AUTH_REPLAY_SCOPE: &str = "agent-identity/request-auth";
+pub const MAX_NONCE_HEADER: &str = "Max-Seen-Nonce";
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct AgentId(String);
@@ -27,7 +26,7 @@ impl AgentId {
         Self(format!(
             "{}{}",
             AGENT_ID_PREFIX,
-            multibase::encode(Base::Base58Btc, public_key)
+            URL_SAFE_NO_PAD.encode(public_key)
         ))
     }
 
@@ -40,11 +39,7 @@ impl AgentId {
             .0
             .strip_prefix(AGENT_ID_PREFIX)
             .ok_or(SdkError::InvalidAgentIdPrefix)?;
-        let (base, bytes) =
-            multibase::decode(encoded).map_err(|err| SdkError::Multibase(err.to_string()))?;
-        if base != Base::Base58Btc {
-            return Err(SdkError::UnsupportedAgentIdEncoding);
-        }
+        let bytes = URL_SAFE_NO_PAD.decode(encoded)?;
         bytes
             .try_into()
             .map_err(|bytes: Vec<u8>| SdkError::InvalidPublicKeyLength(bytes.len()))
@@ -136,10 +131,10 @@ impl AgentSigner {
     where
         P: Serialize,
     {
-        let event_id = event_id(&event)?;
+        let hash = event_hash(&event)?;
         let signature = sign_event(&self.signing_key, &event)?;
         Ok(Envelope {
-            event_id,
+            hash,
             event,
             signature,
         })
@@ -174,7 +169,7 @@ pub struct Event<P = Value> {
     pub kind: String,
     pub actor: AgentId,
     pub created_at: i64,
-    pub nonce: String,
+    pub nonce: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room_id: Option<String>,
     pub payload: P,
@@ -188,7 +183,7 @@ impl<P> Event<P> {
         kind: impl Into<String>,
         actor: AgentId,
         created_at: i64,
-        nonce: impl Into<String>,
+        nonce: u64,
         payload: P,
     ) -> Self {
         Self {
@@ -196,7 +191,7 @@ impl<P> Event<P> {
             kind: kind.into(),
             actor,
             created_at,
-            nonce: nonce.into(),
+            nonce,
             room_id: None,
             payload,
             extra: BTreeMap::new(),
@@ -211,7 +206,7 @@ impl<P> Event<P> {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Envelope<P = Value> {
-    pub event_id: String,
+    pub hash: String,
     pub event: Event<P>,
     pub signature: String,
 }
@@ -223,16 +218,12 @@ where
     serde_jcs::to_vec(event).map_err(|err| SdkError::CanonicalJson(err.to_string()))
 }
 
-pub fn event_id<P>(event: &Event<P>) -> Result<String>
+pub fn event_hash<P>(event: &Event<P>) -> Result<String>
 where
     P: Serialize,
 {
-    let digest = Sha256::digest(canonical_event_bytes(event)?);
-    Ok(format!(
-        "{}{}",
-        EVENT_ID_PREFIX,
-        multibase::encode(Base::Base58Btc, digest)
-    ))
+    let digest = Sha3_256::digest(canonical_event_bytes(event)?);
+    Ok(URL_SAFE_NO_PAD.encode(digest))
 }
 
 pub fn sign_event<P>(signing_key: &SigningKey, event: &Event<P>) -> Result<String>
@@ -244,17 +235,17 @@ where
     Ok(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
 }
 
-pub fn verify_event_id<P>(envelope: &Envelope<P>) -> Result<()>
+pub fn verify_event_hash<P>(envelope: &Envelope<P>) -> Result<()>
 where
     P: Serialize,
 {
-    let expected = event_id(&envelope.event)?;
-    if expected == envelope.event_id {
+    let expected = event_hash(&envelope.event)?;
+    if expected == envelope.hash {
         Ok(())
     } else {
-        Err(SdkError::InvalidEventId {
+        Err(SdkError::InvalidEventHash {
             expected,
-            actual: envelope.event_id.clone(),
+            actual: envelope.hash.clone(),
         })
     }
 }
@@ -281,7 +272,7 @@ pub fn verify_envelope<P>(envelope: &Envelope<P>) -> Result<()>
 where
     P: Serialize,
 {
-    verify_event_id(envelope)?;
+    verify_event_hash(envelope)?;
     verify_signature(envelope)
 }
 
@@ -293,42 +284,27 @@ pub fn verify_timestamp(created_at: i64, now_ms: i64, window_ms: i64) -> Result<
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum NonceScopeKind {
-    #[default]
-    ActorProtocol,
-    ActorRoom,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct NonceScope {
-    pub actor: AgentId,
-    pub protocol: String,
-    pub room_id: Option<String>,
-    pub nonce: String,
-}
-
-impl NonceScope {
-    pub fn for_event<P>(event: &Event<P>, kind: NonceScopeKind) -> Self {
-        Self {
-            actor: event.actor.clone(),
-            protocol: event.protocol.clone(),
-            room_id: match kind {
-                NonceScopeKind::ActorProtocol => None,
-                NonceScopeKind::ActorRoom => event.room_id.clone(),
-            },
-            nonce: event.nonce.clone(),
-        }
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NonceRecord {
+    pub max_nonce: u64,
+    pub expires_at: i64,
 }
 
 pub trait NonceStore {
-    fn check_and_insert(&mut self, scope: NonceScope) -> Result<()>;
+    fn check_and_update(
+        &mut self,
+        actor: &AgentId,
+        nonce: u64,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<u64>;
+
+    fn max_nonce(&self, actor: &AgentId, now_ms: i64) -> Option<u64>;
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct MemoryNonceStore {
-    seen: HashSet<NonceScope>,
+    records: HashMap<AgentId, NonceRecord>,
 }
 
 impl MemoryNonceStore {
@@ -338,12 +314,101 @@ impl MemoryNonceStore {
 }
 
 impl NonceStore for MemoryNonceStore {
-    fn check_and_insert(&mut self, scope: NonceScope) -> Result<()> {
-        if self.seen.insert(scope) {
-            Ok(())
-        } else {
-            Err(SdkError::NonceReused)
+    fn check_and_update(
+        &mut self,
+        actor: &AgentId,
+        nonce: u64,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<u64> {
+        validate_nonce(nonce)?;
+        if ttl_ms < 0 {
+            return Err(SdkError::InvalidNonce(
+                "nonce cache ttl must be non-negative".to_owned(),
+            ));
         }
+
+        if let Some(record) = self.records.get(actor) {
+            if record.expires_at > now_ms && nonce <= record.max_nonce {
+                return Err(SdkError::NonceNotGreater {
+                    max_nonce: record.max_nonce,
+                });
+            }
+        }
+
+        let record = NonceRecord {
+            max_nonce: nonce,
+            expires_at: now_ms.saturating_add(ttl_ms),
+        };
+        self.records.insert(actor.clone(), record);
+        Ok(record.max_nonce)
+    }
+
+    fn max_nonce(&self, actor: &AgentId, now_ms: i64) -> Option<u64> {
+        self.records
+            .get(actor)
+            .filter(|record| record.expires_at > now_ms)
+            .map(|record| record.max_nonce)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientNonceManager {
+    next_nonce: u64,
+}
+
+impl Default for ClientNonceManager {
+    fn default() -> Self {
+        Self { next_nonce: 1 }
+    }
+}
+
+impl ClientNonceManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_next(next_nonce: u64) -> Result<Self> {
+        validate_nonce(next_nonce)?;
+        Ok(Self { next_nonce })
+    }
+
+    pub fn peek(&self) -> u64 {
+        self.next_nonce
+    }
+
+    pub fn next_nonce(&mut self) -> Result<u64> {
+        let nonce = self.next_nonce;
+        self.next_nonce = self
+            .next_nonce
+            .checked_add(1)
+            .ok_or_else(|| SdkError::InvalidNonce("nonce counter overflow".to_owned()))?;
+        Ok(nonce)
+    }
+
+    pub fn observe_max_nonce(&mut self, max_nonce: u64) {
+        if max_nonce >= self.next_nonce {
+            self.next_nonce = max_nonce.saturating_add(1);
+        }
+    }
+
+    pub fn observe_max_nonce_header(&mut self, value: &str) -> Result<()> {
+        let max_nonce = value
+            .parse::<u64>()
+            .map_err(|_| SdkError::InvalidNonce("invalid max nonce header".to_owned()))?;
+        self.observe_max_nonce(max_nonce);
+        Ok(())
+    }
+}
+
+pub fn validate_nonce(nonce: u64) -> Result<()> {
+    if nonce == 0 || nonce > 0x1FFFFFFFFFFFFF {
+        // Number.MAX_SAFE_INTEGER in JavaScript, to prevent interoperability issues with JS clients using Number for nonces
+        Err(SdkError::InvalidNonce(
+            "nonce must be a positive integer less than or equal to 9007199254740991".to_owned(),
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -351,15 +416,15 @@ impl NonceStore for MemoryNonceStore {
 pub struct LiveWriteOptions {
     pub now_ms: i64,
     pub window_ms: i64,
-    pub nonce_scope: NonceScopeKind,
+    pub nonce_ttl_ms: i64,
 }
 
 impl Default for LiveWriteOptions {
     fn default() -> Self {
         Self {
-            now_ms: unix_time_millis(),
+            now_ms: unix_ms(),
             window_ms: DEFAULT_LIVE_WRITE_WINDOW_MS,
-            nonce_scope: NonceScopeKind::ActorProtocol,
+            nonce_ttl_ms: DEFAULT_NONCE_TTL_MS,
         }
     }
 }
@@ -368,14 +433,19 @@ pub fn verify_live_envelope<P, S>(
     envelope: &Envelope<P>,
     options: &LiveWriteOptions,
     nonce_store: &mut S,
-) -> Result<()>
+) -> Result<u64>
 where
     P: Serialize,
     S: NonceStore,
 {
     verify_envelope(envelope)?;
     verify_timestamp(envelope.event.created_at, options.now_ms, options.window_ms)?;
-    nonce_store.check_and_insert(NonceScope::for_event(&envelope.event, options.nonce_scope))
+    nonce_store.check_and_update(
+        &envelope.event.actor,
+        envelope.event.nonce,
+        options.now_ms,
+        options.nonce_ttl_ms,
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -392,7 +462,6 @@ pub struct RequestJwtClaims {
     pub aud: String,
     pub iat: i64,
     pub exp: i64,
-    pub jti: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -409,20 +478,13 @@ impl RequestBinding {
 }
 
 impl RequestJwtClaims {
-    pub fn new(
-        agent_id: AgentId,
-        binding: RequestBinding,
-        issued_at: i64,
-        ttl_secs: i64,
-        jti: impl Into<String>,
-    ) -> Self {
+    pub fn new(agent_id: AgentId, binding: RequestBinding, issued_at: i64, ttl_secs: i64) -> Self {
         Self {
             iss: agent_id.clone(),
             sub: agent_id,
             aud: binding.audience,
             iat: issued_at,
             exp: issued_at + ttl_secs,
-            jti: jti.into(),
         }
     }
 }
@@ -439,7 +501,7 @@ impl RequestAuthContext {
         let binding = RequestBinding::new(audience);
         Self {
             audience: binding.audience,
-            now_secs: unix_time_secs(),
+            now_secs: unix_secs(),
             max_ttl_secs: DEFAULT_REQUEST_JWT_TTL_SECS,
         }
     }
@@ -490,33 +552,15 @@ pub fn verify_request_jwt(token: &str, context: &RequestAuthContext) -> Result<R
     Ok(claims)
 }
 
-pub fn verify_request_jwt_live<S>(
-    token: &str,
-    context: &RequestAuthContext,
-    nonce_store: &mut S,
-) -> Result<RequestJwtClaims>
-where
-    S: NonceStore,
-{
-    let claims = verify_request_jwt(token, context)?;
-    nonce_store.check_and_insert(NonceScope {
-        actor: claims.iss.clone(),
-        protocol: REQUEST_AUTH_REPLAY_SCOPE.to_owned(),
-        room_id: None,
-        nonce: claims.jti.clone(),
-    })?;
-    Ok(claims)
-}
-
-pub fn unix_time_millis() -> i64 {
+pub fn unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or(0)
 }
 
-pub fn unix_time_secs() -> i64 {
-    unix_time_millis() / 1000
+pub fn unix_secs() -> i64 {
+    unix_ms() / 1000
 }
 
 #[cfg(test)]
@@ -533,13 +577,14 @@ mod tests {
             "profile.update",
             signer.agent_id(),
             1_779_753_600_000,
-            "n_test",
+            1,
             json!({"agent_id": signer.agent_id(), "name": "ResearchAgent"}),
         );
 
         let envelope = signer.sign_event(event).unwrap();
 
-        assert!(envelope.event_id.starts_with("evt_z"));
+        assert!(!envelope.hash.starts_with("evt_"));
+        assert_eq!(envelope.hash.len(), 43);
         verify_envelope(&envelope).unwrap();
     }
 
@@ -551,7 +596,7 @@ mod tests {
             "profile.update",
             signer.agent_id(),
             1_779_753_600_000,
-            "n_test",
+            1,
             json!({"name": "before"}),
         );
         let mut envelope = signer.sign_event(event).unwrap();
@@ -566,24 +611,36 @@ mod tests {
         let options = LiveWriteOptions {
             now_ms: 1000,
             window_ms: 1000,
-            nonce_scope: NonceScopeKind::ActorProtocol,
+            nonce_ttl_ms: 1000,
         };
         let event = Event::new(
             "agent-profile/1.0",
             "profile.update",
             signer.agent_id(),
             1000,
-            "n_reused",
+            1,
             json!({"name": "ResearchAgent"}),
         );
         let envelope = signer.sign_event(event).unwrap();
         let mut store = MemoryNonceStore::new();
 
-        verify_live_envelope(&envelope, &options, &mut store).unwrap();
+        let max_nonce = verify_live_envelope(&envelope, &options, &mut store).unwrap();
+        assert_eq!(max_nonce, 1);
         assert!(matches!(
             verify_live_envelope(&envelope, &options, &mut store),
-            Err(SdkError::NonceReused)
+            Err(SdkError::NonceNotGreater { max_nonce: 1 })
         ));
+    }
+
+    #[test]
+    fn client_nonce_manager_observes_server_max() {
+        let mut manager = ClientNonceManager::new();
+
+        assert_eq!(manager.next_nonce().unwrap(), 1);
+        manager.observe_max_nonce(5);
+
+        assert_eq!(manager.peek(), 6);
+        assert_eq!(manager.next_nonce().unwrap(), 6);
     }
 
     #[test]
@@ -594,7 +651,6 @@ mod tests {
             RequestBinding::new("https://api.example.com"),
             100,
             300,
-            "jwt_nonce",
         );
         let token = signer.sign_request_jwt(&claims).unwrap();
         let context = RequestAuthContext {
@@ -602,14 +658,8 @@ mod tests {
             now_secs: 120,
             max_ttl_secs: 300,
         };
-        let mut store = MemoryNonceStore::new();
+        let verified = verify_request_jwt(&token, &context).unwrap();
 
-        let verified = verify_request_jwt_live(&token, &context, &mut store).unwrap();
-
-        assert_eq!(verified.jti, "jwt_nonce");
-        assert!(matches!(
-            verify_request_jwt_live(&token, &context, &mut store),
-            Err(SdkError::NonceReused)
-        ));
+        assert_eq!(verified.iss, signer.agent_id());
     }
 }

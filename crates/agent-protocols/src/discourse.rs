@@ -18,20 +18,18 @@ pub mod event_type {
     pub const ROOM_INVITE_REVOKE: &str = "room.invite.revoke";
     pub const ROOM_CLOSE: &str = "room.close";
     pub const ROOM_CANCEL: &str = "room.cancel";
-    pub const MESSAGE_TEXT: &str = "message.text";
-    pub const MESSAGE_MARKDOWN: &str = "message.markdown";
-    pub const MESSAGE_DATA: &str = "message.data";
+    pub const MESSAGE_CREATE: &str = "message.create";
     pub const REACTION_CREATE: &str = "reaction.create";
-    pub const PROPOSAL_CREATE: &str = "proposal.create";
-    pub const POLL_CREATE: &str = "poll.create";
-    pub const POLL_VOTE: &str = "poll.vote";
-    pub const RESOLUTION_CREATE: &str = "resolution.create";
+    pub const MESSAGE_PROPOSAL_CREATE: &str = "message.proposal.create";
+    pub const MESSAGE_POLL_CREATE: &str = "message.poll.create";
+    pub const MESSAGE_POLL_VOTE: &str = "message.poll.vote";
+    pub const MESSAGE_RESOLUTION_CREATE: &str = "message.resolution.create";
     pub const SOURCE_ADD: &str = "source.add";
     pub const TURN_UPDATE: &str = "turn.update";
-    pub const QUESTION_GENERATE: &str = "question.generate";
-    pub const DISCOURSE_STEER: &str = "discourse.steer";
-    pub const MINDMAP_UPDATE: &str = "mindmap.update";
-    pub const REPORT_GENERATE: &str = "report.generate";
+    pub const QUESTION_CREATE: &str = "question.create";
+    pub const ROOM_STEER: &str = "room.steer";
+    pub const MAP_UPDATE: &str = "map.update";
+    pub const ARTIFACT_CREATE: &str = "artifact.create";
     pub const SESSION_AUTH: &str = "session.auth";
 }
 
@@ -50,14 +48,6 @@ pub enum Visibility {
     Public,
     Private,
     Unlisted,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DiscourseMode {
-    Plain,
-    Collaborative,
-    Moderated,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,7 +81,7 @@ pub enum MessageIntent {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MindmapOperation {
+pub enum MapOperation {
     UpsertNode,
     MoveNode,
     DeleteNode,
@@ -113,15 +103,19 @@ pub struct RoomCreatePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub discourse_mode: Option<DiscourseMode>,
+    pub policy: Option<RoomPolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RoomPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_policy: Option<TurnPolicy>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mindmap_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_curation_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reporting_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub moderator_agent_ids: Vec<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,10 +128,14 @@ pub struct RoomCreatePayload {
     pub participant_approval_required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observer_approval_required: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile_service: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, Value>,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl RoomPolicy {
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl RoomCreatePayload {
@@ -155,19 +153,10 @@ impl RoomCreatePayload {
             end_time,
             tags: Vec::new(),
             language: None,
-            discourse_mode: None,
-            turn_policy: None,
-            mindmap_enabled: None,
-            source_curation_enabled: None,
-            reporting_enabled: None,
-            moderator_agent_ids: Vec::new(),
-            max_participants: None,
-            observer_allowed: None,
-            observer_steering_allowed: None,
-            participant_approval_required: None,
-            observer_approval_required: None,
-            profile_service: None,
-            metadata: BTreeMap::new(),
+            policy: None,
+            capabilities: Vec::new(),
+            extensions: BTreeMap::new(),
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -225,55 +214,29 @@ pub struct InviteRevokePayload {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MessageTextPayload {
-    pub text: String,
+pub struct MessageCreatePayload {
+    pub content_type: String,
+    pub content: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intent: Option<MessageIntent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_event_ids: Vec<String>,
 }
 
-impl MessageTextPayload {
-    pub fn new(text: impl Into<String>) -> Self {
+impl MessageCreatePayload {
+    pub fn new(content_type: impl Into<String>, content: Value) -> Self {
         Self {
-            text: text.into(),
+            content_type: content_type.into(),
+            content,
             references: Vec::new(),
-            intent: None,
-            turn_id: None,
-            source_event_ids: Vec::new(),
         }
     }
-}
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MessageMarkdownPayload {
-    pub markdown: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intent: Option<MessageIntent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_event_ids: Vec<String>,
-}
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::new("text/plain", Value::String(text.into()))
+    }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MessageDataPayload {
-    pub content_type: String,
-    pub body: Value,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intent: Option<MessageIntent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_event_ids: Vec<String>,
+    pub fn markdown(markdown: impl Into<String>) -> Self {
+        Self::new("text/markdown", Value::String(markdown.into()))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -307,7 +270,7 @@ pub struct SourceAddPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -351,14 +314,14 @@ pub struct DiscourseSteerPayload {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MindmapNodeStatus {
+pub enum MapNodeStatus {
     Open,
     Resolved,
     Closed,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MindmapNode {
+pub struct MapNode {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
@@ -366,30 +329,30 @@ pub struct MindmapNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<MindmapNodeStatus>,
+    pub status: Option<MapNodeStatus>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_event_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discussion_event_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<MindmapNode>,
+    pub children: Vec<MapNode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MindmapUpdatePayload {
-    pub operation: MindmapOperation,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node: Option<MindmapNode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, Value>,
-    #[serde(default, flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ReportGeneratePayload {
+pub struct MapUpdatePayload {
+    pub operation: MapOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<MapNode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+    #[serde(default, flatten)]
+    pub extensions: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ArtifactCreatePayload {
     pub artifact_id: String,
     pub format: String,
     pub title: String,
@@ -401,7 +364,7 @@ pub struct ReportGeneratePayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discussion_event_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mindmap_event_id: Option<String>,
+    pub map_event_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -446,7 +409,7 @@ pub struct DiscourseProtocolDiscovery {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MindmapSnapshotRef {
+pub struct MapSnapshotRef {
     pub event_id: String,
     pub digest: String,
 }
@@ -474,10 +437,10 @@ pub struct ArchiveManifest {
     pub event_count: u64,
     pub first_seq: u64,
     pub last_seq: u64,
-    pub events_sha256: String,
+    pub events_sha3_256: String,
     pub archive_root: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mindmap_snapshot: Option<MindmapSnapshotRef>,
+    pub map_snapshot: Option<MapSnapshotRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -489,7 +452,7 @@ pub struct ArchiveManifest {
 pub fn room_create_event(
     actor: AgentId,
     created_at: i64,
-    nonce: impl Into<String>,
+    nonce: u64,
     payload: RoomCreatePayload,
 ) -> Event<RoomCreatePayload> {
     Event::new(
@@ -506,7 +469,7 @@ pub fn discourse_event<P>(
     kind: impl Into<String>,
     actor: AgentId,
     created_at: i64,
-    nonce: impl Into<String>,
+    nonce: u64,
     room_id: impl Into<String>,
     payload: P,
 ) -> Event<P> {
@@ -656,19 +619,17 @@ fn moderator_can_submit(event_type: &str, moderator_authorized: bool) -> bool {
         event_type::ROOM_INVITE
             | event_type::ROOM_INVITE_REVOKE
             | event_type::ROOM_CLOSE
-            | event_type::MESSAGE_TEXT
-            | event_type::MESSAGE_MARKDOWN
-            | event_type::MESSAGE_DATA
+            | event_type::MESSAGE_CREATE
             | event_type::SOURCE_ADD
             | event_type::TURN_UPDATE
-            | event_type::QUESTION_GENERATE
-            | event_type::DISCOURSE_STEER
-            | event_type::MINDMAP_UPDATE
-            | event_type::REPORT_GENERATE
-            | event_type::PROPOSAL_CREATE
-            | event_type::POLL_CREATE
-            | event_type::POLL_VOTE
-            | event_type::RESOLUTION_CREATE
+            | event_type::QUESTION_CREATE
+            | event_type::ROOM_STEER
+            | event_type::MAP_UPDATE
+            | event_type::ARTIFACT_CREATE
+            | event_type::MESSAGE_PROPOSAL_CREATE
+            | event_type::MESSAGE_POLL_CREATE
+            | event_type::MESSAGE_POLL_VOTE
+            | event_type::MESSAGE_RESOLUTION_CREATE
             | event_type::REACTION_CREATE
             | event_type::ROOM_LEAVE
     ) || (moderator_authorized
@@ -681,23 +642,21 @@ fn moderator_can_submit(event_type: &str, moderator_authorized: bool) -> bool {
 fn speaker_can_submit(event_type: &str, policy_allowed: bool) -> bool {
     matches!(
         event_type,
-        event_type::MESSAGE_TEXT
-            | event_type::MESSAGE_MARKDOWN
-            | event_type::MESSAGE_DATA
+        event_type::MESSAGE_CREATE
             | event_type::SOURCE_ADD
-            | event_type::DISCOURSE_STEER
-            | event_type::PROPOSAL_CREATE
-            | event_type::POLL_CREATE
-            | event_type::POLL_VOTE
+            | event_type::ROOM_STEER
+            | event_type::MESSAGE_PROPOSAL_CREATE
+            | event_type::MESSAGE_POLL_CREATE
+            | event_type::MESSAGE_POLL_VOTE
             | event_type::REACTION_CREATE
             | event_type::ROOM_LEAVE
     ) || (policy_allowed
         && matches!(
             event_type,
-            event_type::QUESTION_GENERATE
-                | event_type::MINDMAP_UPDATE
-                | event_type::REPORT_GENERATE
-                | event_type::RESOLUTION_CREATE
+            event_type::QUESTION_CREATE
+                | event_type::MAP_UPDATE
+                | event_type::ARTIFACT_CREATE
+                | event_type::MESSAGE_RESOLUTION_CREATE
         ))
 }
 
@@ -705,8 +664,8 @@ fn observer_can_submit(event_type: &str, context: &PermissionContext) -> bool {
     matches!(
         event_type,
         event_type::REACTION_CREATE | event_type::ROOM_LEAVE
-    ) || (context.observer_steering_allowed && event_type == event_type::DISCOURSE_STEER)
-        || (context.observer_poll_vote_allowed && event_type == event_type::POLL_VOTE)
+    ) || (context.observer_steering_allowed && event_type == event_type::ROOM_STEER)
+        || (context.observer_poll_vote_allowed && event_type == event_type::MESSAGE_POLL_VOTE)
 }
 
 fn is_known_event_type(event_type: &str) -> bool {
@@ -720,20 +679,18 @@ fn is_known_event_type(event_type: &str) -> bool {
             | event_type::ROOM_INVITE_REVOKE
             | event_type::ROOM_CLOSE
             | event_type::ROOM_CANCEL
-            | event_type::MESSAGE_TEXT
-            | event_type::MESSAGE_MARKDOWN
-            | event_type::MESSAGE_DATA
+            | event_type::MESSAGE_CREATE
             | event_type::REACTION_CREATE
-            | event_type::PROPOSAL_CREATE
-            | event_type::POLL_CREATE
-            | event_type::POLL_VOTE
-            | event_type::RESOLUTION_CREATE
+            | event_type::MESSAGE_PROPOSAL_CREATE
+            | event_type::MESSAGE_POLL_CREATE
+            | event_type::MESSAGE_POLL_VOTE
+            | event_type::MESSAGE_RESOLUTION_CREATE
             | event_type::SOURCE_ADD
             | event_type::TURN_UPDATE
-            | event_type::QUESTION_GENERATE
-            | event_type::DISCOURSE_STEER
-            | event_type::MINDMAP_UPDATE
-            | event_type::REPORT_GENERATE
+            | event_type::QUESTION_CREATE
+            | event_type::ROOM_STEER
+            | event_type::MAP_UPDATE
+            | event_type::ARTIFACT_CREATE
             | event_type::SESSION_AUTH
     )
 }
@@ -752,7 +709,7 @@ mod tests {
             event_type::ROOM_CREATE,
             signer.agent_id(),
             100,
-            "n_room",
+            1,
             payload,
         );
         let envelope = signer.sign_event(event).unwrap();
@@ -765,11 +722,11 @@ mod tests {
         let signer = AgentSigner::from_seed([15; 32]);
         let event = Event::new(
             PROTOCOL,
-            event_type::MESSAGE_TEXT,
+            event_type::MESSAGE_CREATE,
             signer.agent_id(),
             100,
-            "n_message",
-            MessageTextPayload::new("hello"),
+            1,
+            MessageCreatePayload::text("hello"),
         );
         let envelope = signer.sign_event(event).unwrap();
 
@@ -783,7 +740,7 @@ mod tests {
     fn applies_permission_matrix() {
         let observer = PermissionContext::for_role(Role::Observer);
         assert!(can_submit_event(event_type::REACTION_CREATE, &observer));
-        assert!(!can_submit_event(event_type::MESSAGE_TEXT, &observer));
+        assert!(!can_submit_event(event_type::MESSAGE_CREATE, &observer));
 
         let mut moderator = PermissionContext::for_role(Role::Moderator);
         assert!(!can_submit_event(event_type::ROOM_CANCEL, &moderator));
@@ -795,13 +752,13 @@ mod tests {
     fn applies_state_restrictions() {
         let participant = PermissionContext::for_role(Role::Participant);
         assert!(can_accept_room_write(
-            event_type::MESSAGE_TEXT,
+            event_type::MESSAGE_CREATE,
             RoomState::Active,
             &participant,
             StateWriteOptions::default()
         ));
         assert!(!can_accept_room_write(
-            event_type::MESSAGE_TEXT,
+            event_type::MESSAGE_CREATE,
             RoomState::Scheduled,
             &participant,
             StateWriteOptions::default()

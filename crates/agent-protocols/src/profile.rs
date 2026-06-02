@@ -17,6 +17,23 @@ pub struct ServiceEndpoint {
     pub protocols: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileLinkRel {
+    Homepage,
+    Documentation,
+    SourceCode,
+    Social,
+    Browser,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProfileLink {
+    pub name: String,
+    pub url: String,
+    pub rel: ProfileLinkRel,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ProfileUpdatePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -34,10 +51,10 @@ pub struct ProfileUpdatePayload {
     pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service_endpoints: Vec<ServiceEndpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<ProfileLink>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub links: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl ProfileUpdatePayload {
@@ -51,8 +68,8 @@ impl ProfileUpdatePayload {
             provider: None,
             capabilities: Vec::new(),
             service_endpoints: Vec::new(),
-            links: BTreeMap::new(),
-            metadata: BTreeMap::new(),
+            links: Vec::new(),
+            extra: BTreeMap::new(),
         }
     }
 
@@ -75,12 +92,12 @@ pub struct AgentProfile {
     pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service_endpoints: Vec<ServiceEndpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<ProfileLink>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub links: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
     pub updated_at: i64,
-    pub profile_event_id: String,
+    pub event_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -117,7 +134,7 @@ pub struct ProfileServiceEndpoints {
 pub fn profile_update_event(
     actor: AgentId,
     created_at: i64,
-    nonce: impl Into<String>,
+    nonce: u64,
     payload: ProfileUpdatePayload,
 ) -> Event<ProfileUpdatePayload> {
     Event::new(PROTOCOL, PROFILE_UPDATE, actor, created_at, nonce, payload)
@@ -173,9 +190,9 @@ pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<
         capabilities: payload.capabilities.clone(),
         service_endpoints: payload.service_endpoints.clone(),
         links: payload.links.clone(),
-        metadata: payload.metadata.clone(),
+        extra: payload.extra.clone(),
         updated_at: envelope.event.created_at,
-        profile_event_id: envelope.event_id.clone(),
+        event_id: envelope.hash.clone(),
     })
 }
 
@@ -189,16 +206,27 @@ mod tests {
         let signer = AgentSigner::from_seed([11; 32]);
         let mut payload = ProfileUpdatePayload::new(signer.agent_id(), "ResearchAgent-v3");
         payload.capabilities.push("research".to_owned());
-        let event =
-            profile_update_event(signer.agent_id(), 1_779_753_600_000, "n_profile", payload);
+        payload
+            .extra
+            .insert("domain".to_owned(), Value::String("research".to_owned()));
+        payload.links.push(ProfileLink {
+            name: "Homepage".to_owned(),
+            url: "https://example.com".to_owned(),
+            rel: ProfileLinkRel::Homepage,
+        });
+        let expected_extra = payload.extra.clone();
+        let event = profile_update_event(signer.agent_id(), 1_779_753_600_000, 1, payload);
         let envelope = signer.sign_event(event).unwrap();
 
         let profile = materialize_profile(&envelope).unwrap();
 
         assert_eq!(profile.id, signer.agent_id());
         assert_eq!(profile.name, "ResearchAgent-v3");
+        assert_eq!(profile.links.len(), 1);
+        assert_eq!(profile.links[0].rel, ProfileLinkRel::Homepage);
+        assert_eq!(profile.extra, expected_extra);
         assert_eq!(profile.updated_at, 1_779_753_600_000);
-        assert_eq!(profile.profile_event_id, envelope.event_id);
+        assert_eq!(profile.event_id, envelope.hash);
     }
 
     #[test]
@@ -206,8 +234,7 @@ mod tests {
         let signer = AgentSigner::from_seed([12; 32]);
         let other = AgentSigner::from_seed([13; 32]);
         let payload = ProfileUpdatePayload::new(other.agent_id(), "Imposter");
-        let event =
-            profile_update_event(signer.agent_id(), 1_779_753_600_000, "n_profile", payload);
+        let event = profile_update_event(signer.agent_id(), 1_779_753_600_000, 1, payload);
         let envelope = signer.sign_event(event).unwrap();
 
         assert!(matches!(
@@ -224,7 +251,7 @@ mod tests {
             PROFILE_UPDATE,
             signer.agent_id(),
             1_779_753_600_001,
-            "n_legacy",
+            1,
             serde_json::json!({
                 "agent_id": signer.agent_id(),
                 "name": "LegacyAgent"

@@ -20,27 +20,24 @@ export const eventType = {
   ROOM_INVITE_REVOKE: "room.invite.revoke",
   ROOM_CLOSE: "room.close",
   ROOM_CANCEL: "room.cancel",
-  MESSAGE_TEXT: "message.text",
-  MESSAGE_MARKDOWN: "message.markdown",
-  MESSAGE_DATA: "message.data",
+  MESSAGE_CREATE: "message.create",
   REACTION_CREATE: "reaction.create",
-  PROPOSAL_CREATE: "proposal.create",
-  POLL_CREATE: "poll.create",
-  POLL_VOTE: "poll.vote",
-  RESOLUTION_CREATE: "resolution.create",
+  MESSAGE_PROPOSAL_CREATE: "message.proposal.create",
+  MESSAGE_POLL_CREATE: "message.poll.create",
+  MESSAGE_POLL_VOTE: "message.poll.vote",
+  MESSAGE_RESOLUTION_CREATE: "message.resolution.create",
   SOURCE_ADD: "source.add",
   TURN_UPDATE: "turn.update",
-  QUESTION_GENERATE: "question.generate",
-  DISCOURSE_STEER: "discourse.steer",
-  MINDMAP_UPDATE: "mindmap.update",
-  REPORT_GENERATE: "report.generate",
+  QUESTION_CREATE: "question.create",
+  ROOM_STEER: "room.steer",
+  MAP_UPDATE: "map.update",
+  ARTIFACT_CREATE: "artifact.create",
   SESSION_AUTH: "session.auth",
 } as const;
 
 export type EventType = (typeof eventType)[keyof typeof eventType];
 export type RoomState = "scheduled" | "active" | "ended" | "cancelled";
 export type Visibility = "public" | "private" | "unlisted";
-export type DiscourseMode = "plain" | "collaborative" | "moderated";
 export type TurnPolicy = "free" | "round_robin" | "moderator_led";
 export type Role = "moderator" | "expert" | "participant" | "observer";
 export type MessageIntent =
@@ -51,14 +48,14 @@ export type MessageIntent =
   | "synthesis"
   | "follow_up"
   | "other";
-export type MindmapOperation =
+export type MapOperation =
   | "upsert_node"
   | "move_node"
   | "delete_node"
   | "merge_nodes"
   | "replace_snapshot"
   | "mark_resolved";
-export type MindmapNodeStatus = "open" | "resolved" | "closed";
+export type MapNodeStatus = "open" | "resolved" | "closed";
 
 export interface RoomCreatePayload {
   topic: string;
@@ -68,19 +65,21 @@ export interface RoomCreatePayload {
   end_time: number;
   tags?: string[];
   language?: string;
-  discourse_mode?: DiscourseMode;
+  policy?: RoomPolicy;
+  capabilities?: string[];
+  extensions?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+}
+
+export interface RoomPolicy {
   turn_policy?: TurnPolicy;
-  mindmap_enabled?: boolean;
-  source_curation_enabled?: boolean;
-  reporting_enabled?: boolean;
   moderator_agent_ids?: AgentId[];
   max_participants?: number;
   observer_allowed?: boolean;
   observer_steering_allowed?: boolean;
   participant_approval_required?: boolean;
   observer_approval_required?: boolean;
-  profile_service?: string;
-  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 export interface RoomCreateResponse {
@@ -120,24 +119,10 @@ export interface InviteRevokePayload {
   reason?: string;
 }
 
-export interface MessagePayloadBase {
-  references?: string[];
-  intent?: MessageIntent;
-  turn_id?: string;
-  source_event_ids?: string[];
-}
-
-export interface MessageTextPayload extends MessagePayloadBase {
-  text: string;
-}
-
-export interface MessageMarkdownPayload extends MessagePayloadBase {
-  markdown: string;
-}
-
-export interface MessageDataPayload extends MessagePayloadBase {
+export interface MessageCreatePayload {
   content_type: string;
-  body: unknown;
+  content: unknown;
+  references?: string[];
 }
 
 export interface ReactionCreatePayload {
@@ -153,7 +138,7 @@ export interface SourceAddPayload {
   retrieved_at?: number;
   content_digest?: string;
   excerpt?: string;
-  metadata?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
 }
 
 export interface TurnUpdatePayload {
@@ -181,26 +166,26 @@ export interface DiscourseSteerPayload {
   references?: string[];
 }
 
-export interface MindmapNode {
+export interface MapNode {
   id: string;
   parent_id?: string;
   title: string;
   summary?: string;
-  status?: MindmapNodeStatus;
+  status?: MapNodeStatus;
   source_event_ids?: string[];
   discussion_event_ids?: string[];
-  children?: MindmapNode[];
-  metadata?: Record<string, unknown>;
+  children?: MapNode[];
+  extra?: Record<string, unknown>;
 }
 
-export interface MindmapUpdatePayload {
-  operation: MindmapOperation;
-  node?: MindmapNode;
-  metadata?: Record<string, unknown>;
+export interface MapUpdatePayload {
+  operation: MapOperation;
+  node?: MapNode;
+  extra?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
-export interface ReportGeneratePayload {
+export interface ArtifactCreatePayload {
   artifact_id: string;
   format: string;
   title: string;
@@ -208,7 +193,7 @@ export interface ReportGeneratePayload {
   content_digest?: string;
   source_event_ids?: string[];
   discussion_event_ids?: string[];
-  mindmap_event_id?: string;
+  map_event_id?: string;
 }
 
 export interface ServerRecord<P = unknown> {
@@ -250,9 +235,9 @@ export interface ArchiveManifest {
   event_count: number;
   first_seq: number;
   last_seq: number;
-  events_sha256: string;
+  events_sha3_256: string;
   archive_root: string;
-  mindmap_snapshot?: { event_id: string; digest: string };
+  map_snapshot?: { event_id: string; digest: string };
   artifacts?: ArtifactManifest[];
   discourse_trace_quality_score?: number;
   formats?: Record<string, string>;
@@ -275,7 +260,7 @@ export interface StateWriteOptions {
 export function roomCreateEvent(
   actor: AgentId,
   createdAt: number,
-  nonce: string,
+  nonce: number,
   payload: RoomCreatePayload,
 ): Event<RoomCreatePayload> {
   return createEvent(
@@ -292,7 +277,7 @@ export function discourseEvent<P>(
   type: string,
   actor: AgentId,
   createdAt: number,
-  nonce: string,
+  nonce: number,
   roomId: string,
   payload: P,
 ): Event<P> {
@@ -424,19 +409,17 @@ function moderatorCanSubmit(
       eventType.ROOM_INVITE,
       eventType.ROOM_INVITE_REVOKE,
       eventType.ROOM_CLOSE,
-      eventType.MESSAGE_TEXT,
-      eventType.MESSAGE_MARKDOWN,
-      eventType.MESSAGE_DATA,
+      eventType.MESSAGE_CREATE,
       eventType.SOURCE_ADD,
       eventType.TURN_UPDATE,
-      eventType.QUESTION_GENERATE,
-      eventType.DISCOURSE_STEER,
-      eventType.MINDMAP_UPDATE,
-      eventType.REPORT_GENERATE,
-      eventType.PROPOSAL_CREATE,
-      eventType.POLL_CREATE,
-      eventType.POLL_VOTE,
-      eventType.RESOLUTION_CREATE,
+      eventType.QUESTION_CREATE,
+      eventType.ROOM_STEER,
+      eventType.MAP_UPDATE,
+      eventType.ARTIFACT_CREATE,
+      eventType.MESSAGE_PROPOSAL_CREATE,
+      eventType.MESSAGE_POLL_CREATE,
+      eventType.MESSAGE_POLL_VOTE,
+      eventType.MESSAGE_RESOLUTION_CREATE,
       eventType.REACTION_CREATE,
       eventType.ROOM_LEAVE,
     ]) ||
@@ -451,23 +434,21 @@ function moderatorCanSubmit(
 function speakerCanSubmit(type: string, policyAllowed: boolean): boolean {
   return (
     eventTypeIn(type, [
-      eventType.MESSAGE_TEXT,
-      eventType.MESSAGE_MARKDOWN,
-      eventType.MESSAGE_DATA,
+      eventType.MESSAGE_CREATE,
       eventType.SOURCE_ADD,
-      eventType.DISCOURSE_STEER,
-      eventType.PROPOSAL_CREATE,
-      eventType.POLL_CREATE,
-      eventType.POLL_VOTE,
+      eventType.ROOM_STEER,
+      eventType.MESSAGE_PROPOSAL_CREATE,
+      eventType.MESSAGE_POLL_CREATE,
+      eventType.MESSAGE_POLL_VOTE,
       eventType.REACTION_CREATE,
       eventType.ROOM_LEAVE,
     ]) ||
     (policyAllowed &&
       eventTypeIn(type, [
-        eventType.QUESTION_GENERATE,
-        eventType.MINDMAP_UPDATE,
-        eventType.REPORT_GENERATE,
-        eventType.RESOLUTION_CREATE,
+        eventType.QUESTION_CREATE,
+        eventType.MAP_UPDATE,
+        eventType.ARTIFACT_CREATE,
+        eventType.MESSAGE_RESOLUTION_CREATE,
       ]))
   );
 }
@@ -476,8 +457,9 @@ function observerCanSubmit(type: string, context: PermissionContext): boolean {
   return (
     eventTypeIn(type, [eventType.REACTION_CREATE, eventType.ROOM_LEAVE]) ||
     (Boolean(context.observerSteeringAllowed) &&
-      type === eventType.DISCOURSE_STEER) ||
-    (Boolean(context.observerPollVoteAllowed) && type === eventType.POLL_VOTE)
+      type === eventType.ROOM_STEER) ||
+    (Boolean(context.observerPollVoteAllowed) &&
+      type === eventType.MESSAGE_POLL_VOTE)
   );
 }
 
