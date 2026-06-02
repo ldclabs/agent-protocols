@@ -1,0 +1,34 @@
+name: Test
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install TypeScript dependencies
+        run: npm ci
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -e ./python/agent-protocols pytest
+      - name: Run tests
+        run: |
+          rustup update --no-self-update stable
+          cargo clippy --all-targets --all-features
+          cargo test --workspace -- --nocapture
+          npm test
+          python3 -m pytest python/agent-protocols/tests
