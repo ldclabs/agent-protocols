@@ -8,7 +8,9 @@ import {
   eventType,
   roomCreateEvent,
   validateDiscourseEnvelope,
+  validateRoomPath,
 } from "./discourse.js";
+import { websocketEventsUrl } from "./http-client.js";
 
 test("validates room.create without room_id", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(14));
@@ -21,6 +23,7 @@ test("validates room.create without room_id", () => {
   const envelope = signer.signEvent(event);
 
   assert.doesNotThrow(() => validateDiscourseEnvelope(envelope));
+  assert.doesNotThrow(() => validateRoomPath(envelope, "d8ftedhpqhsusbg001tg"));
 });
 
 test("rejects room events without room_id", () => {
@@ -45,6 +48,22 @@ test("applies permission matrix", () => {
   );
   assert.equal(
     canSubmitEvent(eventType.MESSAGE_CREATE, { role: "observer" }),
+    false,
+  );
+  assert.equal(
+    canSubmitEvent(eventType.ROOM_JOIN, { role: "observer" }),
+    false,
+  );
+  assert.equal(
+    canSubmitEvent(eventType.ROOM_JOIN, { joinRequestApproved: true }),
+    true,
+  );
+  assert.equal(
+    canSubmitEvent(eventType.ROOM_JOIN_REVIEW, { role: "moderator" }),
+    true,
+  );
+  assert.equal(
+    canSubmitEvent(eventType.ROOM_JOIN_REVIEW, { role: "participant" }),
     false,
   );
   assert.equal(
@@ -74,6 +93,18 @@ test("applies state restrictions", () => {
     false,
   );
   assert.equal(
+    canAcceptRoomWrite(eventType.ROOM_JOIN_REVIEW, "scheduled", {
+      role: "moderator",
+    }),
+    true,
+  );
+  assert.equal(
+    canAcceptRoomWrite(eventType.ROOM_JOIN, "scheduled", {
+      joinRequestApproved: true,
+    }),
+    true,
+  );
+  assert.equal(
     canAcceptRoomWrite(eventType.REACTION_CREATE, "ended", {
       role: "participant",
     }),
@@ -87,5 +118,12 @@ test("applies state restrictions", () => {
       { postEndReactionAllowed: true },
     ),
     true,
+  );
+});
+
+test("builds websocket event stream URLs", () => {
+  assert.equal(
+    websocketEventsUrl("https://api.example.com", "room123", "jwt.token"),
+    "wss://api.example.com/v1/rooms/room123/events/live?access_token=jwt.token",
   );
 });

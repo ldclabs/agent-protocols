@@ -12,10 +12,9 @@ pub const LEGACY_PROTOCOL: &str = "adp/1.0";
 pub mod event_type {
     pub const ROOM_CREATE: &str = "room.create";
     pub const ROOM_JOIN: &str = "room.join";
+    pub const ROOM_JOIN_REVIEW: &str = "room.join.review";
     pub const ROOM_LEAVE: &str = "room.leave";
     pub const ROOM_MEMBER_ROLE_UPDATE: &str = "room.member.role.update";
-    pub const ROOM_INVITE: &str = "room.invite";
-    pub const ROOM_INVITE_REVOKE: &str = "room.invite.revoke";
     pub const ROOM_CLOSE: &str = "room.close";
     pub const ROOM_CANCEL: &str = "room.cancel";
     pub const MESSAGE_CREATE: &str = "message.create";
@@ -30,7 +29,6 @@ pub mod event_type {
     pub const ROOM_STEER: &str = "room.steer";
     pub const MAP_UPDATE: &str = "map.update";
     pub const ARTIFACT_CREATE: &str = "artifact.create";
-    pub const SESSION_AUTH: &str = "session.auth";
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,8 +44,8 @@ pub enum RoomState {
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
     Public,
+    Restricted,
     Private,
-    Unlisted,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,6 +63,15 @@ pub enum Role {
     Expert,
     Participant,
     Observer,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinRequestStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Expired,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,8 +111,6 @@ pub struct RoomCreatePayload {
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<RoomPolicy>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -124,10 +129,6 @@ pub struct RoomPolicy {
     pub observer_allowed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observer_steering_allowed: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub participant_approval_required: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observer_approval_required: Option<bool>,
     #[serde(default, flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -154,30 +155,108 @@ impl RoomCreatePayload {
             tags: Vec::new(),
             language: None,
             policy: None,
-            capabilities: Vec::new(),
             extensions: BTreeMap::new(),
             extra: BTreeMap::new(),
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RoomCreateResponse {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServerRecord<P = Value> {
     pub room_id: String,
+    pub seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_hash: Option<String>,
+    pub hash: String,
+    pub received_at: i64,
+    pub envelope: Envelope<P>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RoomResponse {
+    pub id: String,
     pub status: RoomState,
-    pub created_event_id: String,
-    pub room_uri: String,
+    pub url: String,
+    pub seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_hash: Option<String>,
+    pub hash: String,
+    pub received_at: i64,
+    pub envelope: Option<Envelope<RoomCreatePayload>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RoomJoinPayload {
+    pub request_id: String,
     pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perspective: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RoomJoinRequestPayload {
+    pub requested_role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invite: Option<Value>,
+    pub perspective: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub webhook_url: Option<String>,
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl RoomJoinRequestPayload {
+    pub fn new(requested_role: Role) -> Self {
+        Self {
+            requested_role,
+            perspective: None,
+            reason: None,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RoomJoinRequest {
+    pub id: String,
+    pub room_id: String,
+    pub applicant: AgentId,
+    pub requested_role: Role,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_role: Option<Role>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perspective: Option<String>,
+    pub status: JoinRequestStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_reason: Option<String>,
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_by: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinDecision {
+    Approve,
+    Reject,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RoomJoinReviewPayload {
+    pub request_id: String,
+    pub member: AgentId,
+    pub decision: JoinDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,25 +269,6 @@ pub struct RoomLeavePayload {
 pub struct RoleUpdatePayload {
     pub member: AgentId,
     pub role: Role,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RoomInvitePayload {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invitee: Option<AgentId>,
-    pub role: Role,
-    pub expires_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_uses: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_required: Option<bool>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InviteRevokePayload {
-    pub invite_event_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -241,16 +301,16 @@ impl MessageCreatePayload {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ReactionCreatePayload {
-    pub target_event_id: String,
+    pub event_id: String,
     pub reaction: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
 }
 
 impl ReactionCreatePayload {
-    pub fn new(target_event_id: impl Into<String>, reaction: impl Into<String>) -> Self {
+    pub fn new(event_id: impl Into<String>, reaction: impl Into<String>) -> Self {
         Self {
-            target_event_id: target_event_id.into(),
+            event_id: event_id.into(),
             reaction: reaction.into(),
             score: None,
         }
@@ -275,7 +335,7 @@ pub struct SourceAddPayload {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TurnUpdatePayload {
-    pub turn_id: String,
+    pub turn_id: u64,
     pub speaker: AgentId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<MessageIntent>,
@@ -379,14 +439,6 @@ pub struct RoomCancelPayload {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ServerRecord<P = Value> {
-    pub room_id: String,
-    pub seq: u64,
-    pub received_at: i64,
-    pub envelope: Envelope<P>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileResolverMetadata {
     pub mode: String,
@@ -432,11 +484,12 @@ pub struct ArchiveManifest {
     pub kind: String,
     pub host: String,
     pub room_id: String,
-    pub room_uri: String,
+    pub url: String,
     pub generated_at: i64,
     pub event_count: u64,
     pub first_seq: u64,
     pub last_seq: u64,
+    pub last_hash: String,
     pub events_sha3_256: String,
     pub archive_root: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -500,18 +553,14 @@ where
 }
 
 pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Result<()> {
-    let actual = envelope
-        .event
-        .room_id
-        .as_deref()
-        .ok_or(SdkError::MissingRoomId)?;
-    if actual == path_room_id {
-        Ok(())
-    } else {
-        Err(SdkError::RoomIdMismatch {
+    match envelope.event.room_id.as_deref() {
+        Some(actual) if actual == path_room_id => Ok(()),
+        Some(actual) => Err(SdkError::RoomIdMismatch {
             expected: path_room_id.to_owned(),
             actual: actual.to_owned(),
-        })
+        }),
+        None if envelope.event.kind == event_type::ROOM_CREATE => Ok(()),
+        None => Err(SdkError::MissingRoomId),
     }
 }
 
@@ -523,6 +572,7 @@ pub fn event_requires_room_id(event_type: &str) -> bool {
 pub struct PermissionContext {
     pub role: Option<Role>,
     pub is_creator: bool,
+    pub join_request_approved: bool,
     pub moderator_authorized: bool,
     pub expert_policy_allowed: bool,
     pub participant_policy_allowed: bool,
@@ -553,8 +603,11 @@ pub struct StateWriteOptions {
 }
 
 pub fn can_submit_event(event_type: &str, context: &PermissionContext) -> bool {
-    if event_type == event_type::ROOM_CREATE || event_type == event_type::ROOM_JOIN {
+    if event_type == event_type::ROOM_CREATE {
         return true;
+    }
+    if event_type == event_type::ROOM_JOIN {
+        return context.join_request_approved;
     }
 
     if context.is_creator {
@@ -576,10 +629,7 @@ pub fn can_write_in_state(event_type: &str, state: RoomState, options: StateWrit
     match state {
         RoomState::Scheduled => matches!(
             event_type,
-            event_type::ROOM_JOIN
-                | event_type::ROOM_INVITE
-                | event_type::ROOM_INVITE_REVOKE
-                | event_type::ROOM_CANCEL
+            event_type::ROOM_JOIN | event_type::ROOM_JOIN_REVIEW | event_type::ROOM_CANCEL
         ),
         RoomState::Active => {
             event_type != event_type::ROOM_CREATE && event_type != event_type::ROOM_CANCEL
@@ -616,8 +666,7 @@ pub fn validate_room_write(
 fn moderator_can_submit(event_type: &str, moderator_authorized: bool) -> bool {
     matches!(
         event_type,
-        event_type::ROOM_INVITE
-            | event_type::ROOM_INVITE_REVOKE
+        event_type::ROOM_JOIN_REVIEW
             | event_type::ROOM_CLOSE
             | event_type::MESSAGE_CREATE
             | event_type::SOURCE_ADD
@@ -673,10 +722,9 @@ fn is_known_event_type(event_type: &str) -> bool {
         event_type,
         event_type::ROOM_CREATE
             | event_type::ROOM_JOIN
+            | event_type::ROOM_JOIN_REVIEW
             | event_type::ROOM_LEAVE
             | event_type::ROOM_MEMBER_ROLE_UPDATE
-            | event_type::ROOM_INVITE
-            | event_type::ROOM_INVITE_REVOKE
             | event_type::ROOM_CLOSE
             | event_type::ROOM_CANCEL
             | event_type::MESSAGE_CREATE
@@ -691,7 +739,6 @@ fn is_known_event_type(event_type: &str) -> bool {
             | event_type::ROOM_STEER
             | event_type::MAP_UPDATE
             | event_type::ARTIFACT_CREATE
-            | event_type::SESSION_AUTH
     )
 }
 
@@ -715,6 +762,7 @@ mod tests {
         let envelope = signer.sign_event(event).unwrap();
 
         validate_discourse_envelope(&envelope, false).unwrap();
+        validate_room_path(&envelope, "d8ftedhpqhsusbg001tg").unwrap();
     }
 
     #[test]
@@ -741,11 +789,25 @@ mod tests {
         let observer = PermissionContext::for_role(Role::Observer);
         assert!(can_submit_event(event_type::REACTION_CREATE, &observer));
         assert!(!can_submit_event(event_type::MESSAGE_CREATE, &observer));
+        assert!(!can_submit_event(event_type::ROOM_JOIN, &observer));
+
+        let approved_join = PermissionContext {
+            join_request_approved: true,
+            ..PermissionContext::default()
+        };
+        assert!(can_submit_event(event_type::ROOM_JOIN, &approved_join));
 
         let mut moderator = PermissionContext::for_role(Role::Moderator);
+        assert!(can_submit_event(event_type::ROOM_JOIN_REVIEW, &moderator));
         assert!(!can_submit_event(event_type::ROOM_CANCEL, &moderator));
         moderator.moderator_authorized = true;
         assert!(can_submit_event(event_type::ROOM_CANCEL, &moderator));
+
+        let participant = PermissionContext::for_role(Role::Participant);
+        assert!(!can_submit_event(
+            event_type::ROOM_JOIN_REVIEW,
+            &participant
+        ));
     }
 
     #[test]
@@ -767,6 +829,21 @@ mod tests {
             event_type::REACTION_CREATE,
             RoomState::Ended,
             &participant,
+            StateWriteOptions::default()
+        ));
+        assert!(can_accept_room_write(
+            event_type::ROOM_JOIN_REVIEW,
+            RoomState::Scheduled,
+            &PermissionContext::for_role(Role::Moderator),
+            StateWriteOptions::default()
+        ));
+        assert!(can_accept_room_write(
+            event_type::ROOM_JOIN,
+            RoomState::Scheduled,
+            &PermissionContext {
+                join_request_approved: true,
+                ..PermissionContext::default()
+            },
             StateWriteOptions::default()
         ));
         assert!(can_accept_room_write(

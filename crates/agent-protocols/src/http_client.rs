@@ -2,8 +2,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::discourse::{
-    DiscourseProtocolDiscovery, RoomCreatePayload, RoomCreateResponse, RoomJoinPayload,
-    RoomLeavePayload, ServerRecord,
+    DiscourseProtocolDiscovery, RoomCreatePayload, RoomJoinPayload, RoomJoinRequest,
+    RoomJoinRequestPayload, RoomLeavePayload, RoomResponse, ServerRecord,
 };
 use crate::error::Result;
 use crate::identity::{AgentId, Envelope};
@@ -137,7 +137,7 @@ impl DiscourseClient {
     pub async fn create_room(
         &self,
         envelope: &Envelope<RoomCreatePayload>,
-    ) -> Result<RoomCreateResponse> {
+    ) -> Result<RoomResponse> {
         Ok(self
             .inner
             .post(self.url("/v1/rooms"))
@@ -149,14 +149,72 @@ impl DiscourseClient {
             .await?)
     }
 
+    pub async fn request_join(
+        &self,
+        room_id: &str,
+        jwt: &str,
+        request: &RoomJoinRequestPayload,
+    ) -> Result<RoomJoinRequest> {
+        Ok(self
+            .inner
+            .post(self.url(&format!("/v1/rooms/{room_id}/join-requests")))
+            .bearer_auth(jwt)
+            .json(request)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn join_request(
+        &self,
+        room_id: &str,
+        request_id: &str,
+        jwt: &str,
+    ) -> Result<RoomJoinRequest> {
+        Ok(self
+            .inner
+            .get(self.url(&format!("/v1/rooms/{room_id}/join-requests/{request_id}")))
+            .bearer_auth(jwt)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn join_requests(&self, room_id: &str, jwt: &str) -> Result<Vec<RoomJoinRequest>> {
+        Ok(self
+            .inner
+            .get(self.url(&format!("/v1/rooms/{room_id}/join-requests")))
+            .bearer_auth(jwt)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn room(&self, room_id: &str) -> Result<RoomResponse> {
+        Ok(self
+            .inner
+            .get(self.url(&format!("/v1/rooms/{room_id}")))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
     pub async fn join_room(
         &self,
         room_id: &str,
         envelope: &Envelope<RoomJoinPayload>,
-    ) -> Result<Value> {
+    ) -> Result<ServerRecord<RoomJoinPayload>> {
         Ok(self
             .inner
-            .post(self.url(&format!("/v1/rooms/{room_id}/join")))
+            .post(self.url(&format!("/v1/rooms/{room_id}")))
             .json(envelope)
             .send()
             .await?
@@ -169,10 +227,10 @@ impl DiscourseClient {
         &self,
         room_id: &str,
         envelope: &Envelope<RoomLeavePayload>,
-    ) -> Result<Value> {
+    ) -> Result<ServerRecord<RoomLeavePayload>> {
         Ok(self
             .inner
-            .post(self.url(&format!("/v1/rooms/{room_id}/leave")))
+            .post(self.url(&format!("/v1/rooms/{room_id}")))
             .json(envelope)
             .send()
             .await?
@@ -191,7 +249,7 @@ impl DiscourseClient {
     {
         Ok(self
             .inner
-            .post(self.url(&format!("/v1/rooms/{room_id}/events")))
+            .post(self.url(&format!("/v1/rooms/{room_id}")))
             .json(envelope)
             .send()
             .await?
@@ -201,14 +259,30 @@ impl DiscourseClient {
     }
 
     pub async fn events(&self, room_id: &str) -> Result<Vec<ServerRecord>> {
-        Ok(self
-            .inner
-            .get(self.url(&format!("/v1/rooms/{room_id}/events")))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?)
+        self.events_with_options(room_id, &RoomEventsOptions::default())
+            .await
+    }
+
+    pub async fn events_with_options(
+        &self,
+        room_id: &str,
+        options: &RoomEventsOptions,
+    ) -> Result<Vec<ServerRecord>> {
+        let mut path = format!("/v1/rooms/{room_id}/events");
+        let query = options.query_string();
+        if !query.is_empty() {
+            path.push('?');
+            path.push_str(&query);
+        }
+        let mut request = self.inner.get(self.url(&path));
+        if let Some(jwt) = &options.jwt {
+            request = request.bearer_auth(jwt);
+        }
+        Ok(request.send().await?.error_for_status()?.json().await?)
+    }
+
+    pub fn websocket_events_url(&self, room_id: &str, jwt: &str) -> String {
+        websocket_events_url(&self.base_url, room_id, jwt)
     }
 
     pub async fn archive(&self, room_id: &str) -> Result<Value> {
@@ -228,5 +302,70 @@ impl DiscourseClient {
             self.base_url.trim_end_matches('/'),
             path.trim_start_matches('/')
         )
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RoomEventsOptions {
+    pub after_seq: Option<u64>,
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+    pub jwt: Option<String>,
+}
+
+impl RoomEventsOptions {
+    fn query_string(&self) -> String {
+        let mut pairs = Vec::new();
+        if let Some(after_seq) = self.after_seq {
+            pairs.push(format!("after_seq={after_seq}"));
+        }
+        if let Some(limit) = self.limit {
+            pairs.push(format!("limit={limit}"));
+        }
+        if let Some(cursor) = &self.cursor {
+            pairs.push(format!("cursor={}", encode_query_component(cursor)));
+        }
+        pairs.join("&")
+    }
+}
+
+pub fn websocket_events_url(base_url: &str, room_id: &str, jwt: &str) -> String {
+    let mut websocket_base = base_url.trim_end_matches('/').to_owned();
+    if let Some(rest) = websocket_base.strip_prefix("https://") {
+        websocket_base = format!("wss://{rest}");
+    } else if let Some(rest) = websocket_base.strip_prefix("http://") {
+        websocket_base = format!("ws://{rest}");
+    }
+    format!(
+        "{}/v1/rooms/{}/events/live?access_token={}",
+        websocket_base,
+        room_id,
+        encode_query_component(jwt)
+    )
+}
+
+fn encode_query_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_websocket_events_url() {
+        assert_eq!(
+            websocket_events_url("https://api.example.com", "room123", "jwt.token"),
+            "wss://api.example.com/v1/rooms/room123/events/live?access_token=jwt.token"
+        );
     }
 }

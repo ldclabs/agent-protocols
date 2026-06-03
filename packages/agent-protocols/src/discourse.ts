@@ -14,10 +14,9 @@ export const LEGACY_DISCOURSE_PROTOCOL = "adp/1.0";
 export const eventType = {
   ROOM_CREATE: "room.create",
   ROOM_JOIN: "room.join",
+  ROOM_JOIN_REVIEW: "room.join.review",
   ROOM_LEAVE: "room.leave",
   ROOM_MEMBER_ROLE_UPDATE: "room.member.role.update",
-  ROOM_INVITE: "room.invite",
-  ROOM_INVITE_REVOKE: "room.invite.revoke",
   ROOM_CLOSE: "room.close",
   ROOM_CANCEL: "room.cancel",
   MESSAGE_CREATE: "message.create",
@@ -32,14 +31,15 @@ export const eventType = {
   ROOM_STEER: "room.steer",
   MAP_UPDATE: "map.update",
   ARTIFACT_CREATE: "artifact.create",
-  SESSION_AUTH: "session.auth",
 } as const;
 
 export type EventType = (typeof eventType)[keyof typeof eventType];
 export type RoomState = "scheduled" | "active" | "ended" | "cancelled";
-export type Visibility = "public" | "private" | "unlisted";
+export type Visibility = "public" | "restricted" | "private";
 export type TurnPolicy = "free" | "round_robin" | "moderator_led";
 export type Role = "moderator" | "expert" | "participant" | "observer";
+export type JoinRequestStatus = "pending" | "approved" | "rejected" | "expired";
+export type JoinDecision = "approve" | "reject";
 export type MessageIntent =
   | "question"
   | "answer"
@@ -66,7 +66,6 @@ export interface RoomCreatePayload {
   tags?: string[];
   language?: string;
   policy?: RoomPolicy;
-  capabilities?: string[];
   extensions?: Record<string, unknown>;
   extra?: Record<string, unknown>;
 }
@@ -77,23 +76,56 @@ export interface RoomPolicy {
   max_participants?: number;
   observer_allowed?: boolean;
   observer_steering_allowed?: boolean;
-  participant_approval_required?: boolean;
-  observer_approval_required?: boolean;
   [key: string]: unknown;
 }
 
-export interface RoomCreateResponse {
-  room_id: string;
+export interface RoomResponse {
+  id: string;
   status: RoomState;
-  created_event_id: string;
-  room_uri: string;
+  url: string;
+  seq: number;
+  pre_hash?: string;
+  hash: string;
+  received_at: number;
+  envelope?: Envelope<RoomCreatePayload>;
 }
 
 export interface RoomJoinPayload {
+  request_id: string;
   role: Role;
   perspective?: string;
-  invite?: unknown;
-  webhook_url?: string;
+}
+
+export interface RoomJoinRequestPayload {
+  requested_role: Role;
+  perspective?: string;
+  reason?: string;
+  extra?: Record<string, unknown>;
+}
+
+export interface RoomJoinRequest {
+  id: string;
+  room_id: string;
+  applicant: AgentId;
+  requested_role: Role;
+  approved_role?: Role;
+  perspective?: string;
+  status: JoinRequestStatus;
+  request_reason?: string;
+  review_reason?: string;
+  created_at: number;
+  reviewed_by?: AgentId;
+  reviewed_at?: number;
+  expires_at?: number;
+  extra?: Record<string, unknown>;
+}
+
+export interface RoomJoinReviewPayload {
+  request_id: string;
+  member: AgentId;
+  decision: JoinDecision;
+  role?: Role;
+  reason?: string;
 }
 
 export interface RoomLeavePayload {
@@ -106,19 +138,6 @@ export interface RoleUpdatePayload {
   reason?: string;
 }
 
-export interface RoomInvitePayload {
-  invitee?: AgentId;
-  role: Role;
-  expires_at: number;
-  max_uses?: number;
-  approval_required?: boolean;
-}
-
-export interface InviteRevokePayload {
-  invite_event_id: string;
-  reason?: string;
-}
-
 export interface MessageCreatePayload {
   content_type: string;
   content: unknown;
@@ -126,7 +145,7 @@ export interface MessageCreatePayload {
 }
 
 export interface ReactionCreatePayload {
-  target_event_id: string;
+  event_id: string;
   reaction: string;
   score?: number;
 }
@@ -142,7 +161,7 @@ export interface SourceAddPayload {
 }
 
 export interface TurnUpdatePayload {
-  turn_id: string;
+  turn_id: number;
   speaker: AgentId;
   intent?: MessageIntent;
   topic?: string;
@@ -199,6 +218,8 @@ export interface ArtifactCreatePayload {
 export interface ServerRecord<P = unknown> {
   room_id: string;
   seq: number;
+  pre_hash?: string;
+  hash: string;
   received_at: number;
   envelope: Envelope<P>;
 }
@@ -230,11 +251,12 @@ export interface ArchiveManifest {
   type: "room.archive";
   host: string;
   room_id: string;
-  room_uri: string;
+  url: string;
   generated_at: number;
   event_count: number;
   first_seq: number;
   last_seq: number;
+  last_hash: string;
   events_sha3_256: string;
   archive_root: string;
   map_snapshot?: { event_id: string; digest: string };
@@ -246,6 +268,7 @@ export interface ArchiveManifest {
 export interface PermissionContext {
   role?: Role;
   isCreator?: boolean;
+  joinRequestApproved?: boolean;
   moderatorAuthorized?: boolean;
   expertPolicyAllowed?: boolean;
   participantPolicyAllowed?: boolean;
@@ -315,6 +338,8 @@ export function validateRoomPath(
   pathRoomId: string,
 ): void {
   const actual = envelope.event.room_id;
+  if (actual === undefined && envelope.event.type === eventType.ROOM_CREATE)
+    return;
   if (actual === undefined)
     throw protocolError("missing_room_id", "event requires a room_id");
   if (actual !== pathRoomId)
@@ -332,8 +357,8 @@ export function canSubmitEvent(
   type: string,
   context: PermissionContext,
 ): boolean {
-  if (type === eventType.ROOM_CREATE || type === eventType.ROOM_JOIN)
-    return true;
+  if (type === eventType.ROOM_CREATE) return true;
+  if (type === eventType.ROOM_JOIN) return Boolean(context.joinRequestApproved);
   if (context.isCreator) return isKnownEventType(type);
 
   switch (context.role) {
@@ -359,8 +384,7 @@ export function canWriteInState(
     case "scheduled":
       return eventTypeIn(type, [
         eventType.ROOM_JOIN,
-        eventType.ROOM_INVITE,
-        eventType.ROOM_INVITE_REVOKE,
+        eventType.ROOM_JOIN_REVIEW,
         eventType.ROOM_CANCEL,
       ]);
     case "active":
@@ -406,8 +430,7 @@ function moderatorCanSubmit(
 ): boolean {
   return (
     eventTypeIn(type, [
-      eventType.ROOM_INVITE,
-      eventType.ROOM_INVITE_REVOKE,
+      eventType.ROOM_JOIN_REVIEW,
       eventType.ROOM_CLOSE,
       eventType.MESSAGE_CREATE,
       eventType.SOURCE_ADD,

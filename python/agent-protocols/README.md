@@ -6,7 +6,7 @@ Python SDK for the draft Agent Identity, Agent Profile, and Agent Discourse prot
 
 - `agent_protocols.identity`: `did:agent:` encoding, JCS canonicalization, event hashes, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
 - `agent_protocols.profile`: `profile.update` payload helpers, validation, materialization.
-- `agent_protocols.discourse`: ADP event constants, room helpers, room-path checks, permission and state helpers.
+- `agent_protocols.discourse`: ADP event constants, join request helpers, room-path checks, permission and state helpers.
 - `agent_protocols.http_client`: optional requests-based Profile and Discourse clients. Install with `agent-protocols[http]`.
 
 ## Example
