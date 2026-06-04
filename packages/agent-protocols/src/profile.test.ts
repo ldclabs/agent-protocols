@@ -52,17 +52,14 @@ test("rejects profile actor mismatch", () => {
   assert.throws(() => validateProfileUpdate(envelope), /actor/);
 });
 
-test("materializes legacy agent_id payloads", () => {
+test("rejects legacy agent_id payloads without id", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(14));
   const envelope = signer.signEvent(
     profileUpdateEvent(signer.agentId(), 1_779_753_600_001, 1, {
       agent_id: signer.agentId(),
       name: "LegacyAgent",
-    }),
+    } as unknown as ProfileUpdatePayload),
   );
 
-  const profile = materializeProfile(envelope);
-
-  assert.equal(profile.id, signer.agentId());
-  assert.equal(profile.name, "LegacyAgent");
+  assert.throws(() => materializeProfile(envelope), /payload\.id|actor/);
 });

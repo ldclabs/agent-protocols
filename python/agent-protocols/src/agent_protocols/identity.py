@@ -20,6 +20,7 @@ DEFAULT_LIVE_WRITE_WINDOW_MS = 300_000
 DEFAULT_NONCE_TTL_MS = 300_000
 DEFAULT_REQUEST_JWT_TTL_SECS = 300
 MAX_NONCE_HEADER = "Max-Seen-Nonce"
+MAX_SAFE_NONCE = 0x1FFFFFFFFFFFFF
 
 Event = dict[str, Any]
 Envelope = dict[str, Any]
@@ -134,6 +135,7 @@ class ClientNonceManager:
 
     def next_nonce(self) -> int:
         nonce = self._next_nonce
+        validate_nonce(nonce)
         self._next_nonce += 1
         return nonce
 
@@ -174,11 +176,13 @@ def canonical_event_bytes(event: Event) -> bytes:
 
 
 def event_hash(event: Event) -> str:
+    validate_nonce(event["nonce"])
     digest = hashlib.sha3_256(canonical_event_bytes(event)).digest()
     return _base64url_encode(digest)
 
 
 def sign_event(private_key: Ed25519PrivateKey, event: Event) -> str:
+    validate_nonce(event["nonce"])
     return _base64url_encode(private_key.sign(canonical_event_bytes(event)))
 
 
@@ -253,6 +257,8 @@ def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None
         raise AgentProtocolError("invalid_jwt_claim", "aud mismatch")
 
     now = now_secs if now_secs is not None else unix_secs()
+    if claims["exp"] <= claims["iat"]:
+        raise AgentProtocolError("invalid_jwt_claim", "exp must be greater than iat")
     if claims["iat"] > now or claims["exp"] < now:
         raise AgentProtocolError("invalid_jwt_claim", "iat/exp outside valid time window")
     if claims["exp"] - claims["iat"] > max_ttl_secs:
@@ -269,7 +275,7 @@ def unix_secs() -> int:
 
 
 def validate_nonce(nonce: int) -> None:
-    if not isinstance(nonce, int) or nonce < 1 or nonce > 0x1FFFFFFFFFFFFF:
+    if not isinstance(nonce, int) or nonce < 1 or nonce > MAX_SAFE_NONCE:
         raise AgentProtocolError("invalid_nonce", "nonce must be a positive integer less than or equal to 9007199254740991")
 
 

@@ -34,15 +34,13 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(Exception):
             validate_profile_update(envelope)
 
-    def test_materializes_legacy_agent_id_payload(self):
+    def test_rejects_legacy_agent_id_payload_without_id(self):
         signer = AgentSigner.from_seed(bytes([14]) * 32)
         payload = {"agent_id": signer.agent_id(), "name": "LegacyAgent"}
         envelope = signer.sign_event(profile_update_event(signer.agent_id(), 1_779_753_600_001, 1, payload))
 
-        profile = materialize_profile(envelope)
-
-        self.assertEqual(profile["id"], signer.agent_id())
-        self.assertEqual(profile["name"], "LegacyAgent")
+        with self.assertRaises(Exception):
+            materialize_profile(envelope)
 
 
 if __name__ == "__main__":

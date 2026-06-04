@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   AgentSigner,
   ClientNonceManager,
+  MAX_SAFE_NONCE,
   MemoryNonceStore,
   createEvent,
   createRequestBinding,
@@ -22,7 +23,7 @@ test("signs and verifies event envelopes", () => {
     1_779_753_600_000,
     1,
     {
-      agent_id: signer.agentId(),
+      id: signer.agentId(),
       name: "ResearchAgent",
     },
   );
@@ -88,6 +89,23 @@ test("client nonce manager observes server max", () => {
   assert.equal(manager.nextNonce(), 6);
 });
 
+test("rejects nonce values outside the safe JSON integer range", () => {
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(16));
+
+  assert.throws(
+    () =>
+      createEvent(
+        "agent-profile/1.0",
+        "profile.update",
+        signer.agentId(),
+        1000,
+        MAX_SAFE_NONCE + 1,
+        { id: signer.agentId(), name: "ResearchAgent" },
+      ),
+    /nonce/,
+  );
+});
+
 test("signs and verifies request JWTs", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(10));
   const binding = createRequestBinding("https://api.example.com");
@@ -101,4 +119,21 @@ test("signs and verifies request JWTs", () => {
   });
 
   assert.equal(verified.iss, signer.agentId());
+});
+
+test("rejects request JWTs with non-positive ttl", () => {
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(17));
+  const binding = createRequestBinding("https://api.example.com");
+  const claims = createRequestJwtClaims(signer.agentId(), binding, 100, 0);
+  const token = signer.signRequestJwt(claims);
+
+  assert.throws(
+    () =>
+      verifyRequestJwt(token, {
+        ...binding,
+        nowSecs: 100,
+        maxTtlSecs: 300,
+      }),
+    /exp/,
+  );
 });

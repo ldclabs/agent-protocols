@@ -3,6 +3,7 @@ import unittest
 from agent_protocols.identity import (
     AgentSigner,
     ClientNonceManager,
+    MAX_SAFE_NONCE,
     MemoryNonceStore,
     RequestBinding,
     create_event,
@@ -22,7 +23,7 @@ class IdentityTests(unittest.TestCase):
             signer.agent_id(),
             1_779_753_600_000,
             1,
-            {"agent_id": signer.agent_id(), "name": "ResearchAgent"},
+            {"id": signer.agent_id(), "name": "ResearchAgent"},
         )
 
         envelope = signer.sign_event(event)
@@ -61,6 +62,19 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(manager.peek(), 6)
         self.assertEqual(manager.next_nonce(), 6)
 
+    def test_rejects_nonce_values_outside_safe_json_integer_range(self):
+        signer = AgentSigner.from_seed(bytes([16]) * 32)
+
+        with self.assertRaises(Exception):
+            create_event(
+                "agent-profile/1.0",
+                "profile.update",
+                signer.agent_id(),
+                1000,
+                MAX_SAFE_NONCE + 1,
+                {"id": signer.agent_id(), "name": "ResearchAgent"},
+            )
+
     def test_signs_and_verifies_request_jwts(self):
         signer = AgentSigner.from_seed(bytes([10]) * 32)
         binding = RequestBinding.create("https://api.example.com")
@@ -75,6 +89,20 @@ class IdentityTests(unittest.TestCase):
         )
 
         self.assertEqual(verified["iss"], signer.agent_id())
+
+    def test_rejects_request_jwts_with_non_positive_ttl(self):
+        signer = AgentSigner.from_seed(bytes([17]) * 32)
+        binding = RequestBinding.create("https://api.example.com")
+        claims = create_request_jwt_claims(signer.agent_id(), binding, 100, 0)
+        token = signer.sign_request_jwt(claims)
+
+        with self.assertRaises(Exception):
+            verify_request_jwt(
+                token,
+                audience=binding.audience,
+                now_secs=100,
+                max_ttl_secs=300,
+            )
 
 
 if __name__ == "__main__":

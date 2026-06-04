@@ -9,6 +9,7 @@ export const DEFAULT_LIVE_WRITE_WINDOW_MS = 300_000;
 export const DEFAULT_NONCE_TTL_MS = 300_000;
 export const DEFAULT_REQUEST_JWT_TTL_SECS = 300;
 export const MAX_NONCE_HEADER = "Max-Seen-Nonce";
+export const MAX_SAFE_NONCE = Number.MAX_SAFE_INTEGER;
 
 export type AgentId = string;
 
@@ -175,9 +176,7 @@ export class ClientNonceManager {
 
   nextNonce(): number {
     const nonce = this.nextNonceValue;
-    if (!Number.isSafeInteger(nonce + 1)) {
-      throw protocolError("invalid_nonce", "nonce counter overflow");
-    }
+    validateNonce(nonce);
     this.nextNonceValue = nonce + 1;
     return nonce;
   }
@@ -266,6 +265,7 @@ export function canonicalEventBytes(event: Event<unknown>): Uint8Array {
 }
 
 export function eventHash(event: Event<unknown>): string {
+  validateNonce(event.nonce);
   const digest = createHash("sha3-256")
     .update(canonicalEventBytes(event))
     .digest();
@@ -276,6 +276,7 @@ export function signEvent(
   secretKey: Uint8Array,
   event: Event<unknown>,
 ): string {
+  validateNonce(event.nonce);
   if (secretKey.byteLength !== 64) {
     throw protocolError(
       "invalid_private_key",
@@ -422,6 +423,9 @@ export function verifyRequestJwt(
 
   const nowSecs = context.nowSecs ?? unixTimeSecs();
   const maxTtlSecs = context.maxTtlSecs ?? DEFAULT_REQUEST_JWT_TTL_SECS;
+  if (claims.exp <= claims.iat) {
+    throw protocolError("invalid_jwt_claim", "exp must be greater than iat");
+  }
   if (claims.iat > nowSecs || claims.exp < nowSecs) {
     throw protocolError(
       "invalid_jwt_claim",
@@ -444,7 +448,7 @@ export function unixTimeSecs(): number {
 }
 
 export function validateNonce(nonce: number): void {
-  if (!Number.isSafeInteger(nonce) || nonce < 1) {
+  if (!Number.isSafeInteger(nonce) || nonce < 1 || nonce > MAX_SAFE_NONCE) {
     throw protocolError(
       "invalid_nonce",
       "nonce must be a positive safe integer",

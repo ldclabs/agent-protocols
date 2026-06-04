@@ -19,7 +19,7 @@ def profile_update_event(actor: AgentId, created_at: int, nonce: int, payload: P
 def validate_profile_update(envelope: Envelope) -> None:
     verify_envelope(envelope)
     event = envelope["event"]
-    payload_id = event["payload"].get("id") or event["payload"].get("agent_id")
+    payload_id = event["payload"].get("id")
     if event["protocol"] != PROFILE_PROTOCOL:
         raise AgentProtocolError("invalid_event_protocol", f"expected {PROFILE_PROTOCOL}, got {event['protocol']}")
     if event["type"] != PROFILE_UPDATE:
@@ -31,7 +31,7 @@ def validate_profile_update(envelope: Envelope) -> None:
 def materialize_profile(envelope: Envelope) -> AgentProfile:
     validate_profile_update(envelope)
     payload = envelope["event"]["payload"]
-    payload_id = payload.get("id") or payload.get("agent_id")
+    payload_id = payload.get("id")
     return {
         "id": payload_id,
         "name": payload["name"],

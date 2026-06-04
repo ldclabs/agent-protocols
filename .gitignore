@@ -13,3 +13,4 @@ __pycache__/
 *.pdb
 *.tsbuildinfo
 Cargo.lock
+pnpm-lock.yaml

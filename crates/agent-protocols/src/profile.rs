@@ -36,10 +36,7 @@ pub struct ProfileLink {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ProfileUpdatePayload {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<AgentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<AgentId>,
+    pub id: AgentId,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -60,8 +57,7 @@ pub struct ProfileUpdatePayload {
 impl ProfileUpdatePayload {
     pub fn new(id: AgentId, name: impl Into<String>) -> Self {
         Self {
-            id: Some(id),
-            agent_id: None,
+            id,
             name: name.into(),
             description: None,
             avatar_url: None,
@@ -71,10 +67,6 @@ impl ProfileUpdatePayload {
             links: Vec::new(),
             extra: BTreeMap::new(),
         }
-    }
-
-    pub fn effective_id(&self) -> Option<&AgentId> {
-        self.id.as_ref().or(self.agent_id.as_ref())
     }
 }
 
@@ -154,20 +146,7 @@ pub fn validate_profile_update(envelope: &Envelope<ProfileUpdatePayload>) -> Res
             actual: envelope.event.kind.clone(),
         });
     }
-    let payload_id = envelope.event.payload.effective_id().ok_or_else(|| {
-        SdkError::InvalidActor("profile update actor must match payload.id".to_owned())
-    })?;
-    if let (Some(id), Some(agent_id)) = (
-        envelope.event.payload.id.as_ref(),
-        envelope.event.payload.agent_id.as_ref(),
-    ) {
-        if id != agent_id {
-            return Err(SdkError::InvalidActor(
-                "profile update payload.id and payload.agent_id must be equal".to_owned(),
-            ));
-        }
-    }
-    if envelope.event.actor != *payload_id {
+    if envelope.event.actor != envelope.event.payload.id {
         return Err(SdkError::InvalidActor(
             "profile update actor must match payload.id".to_owned(),
         ));
@@ -178,11 +157,8 @@ pub fn validate_profile_update(envelope: &Envelope<ProfileUpdatePayload>) -> Res
 pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<AgentProfile> {
     validate_profile_update(envelope)?;
     let payload = &envelope.event.payload;
-    let payload_id = payload.effective_id().ok_or_else(|| {
-        SdkError::InvalidActor("profile update actor must match payload.id".to_owned())
-    })?;
     Ok(AgentProfile {
-        id: payload_id.clone(),
+        id: payload.id.clone(),
         name: payload.name.clone(),
         description: payload.description.clone(),
         avatar_url: payload.avatar_url.clone(),
@@ -244,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn materializes_legacy_agent_id_payload() {
+    fn rejects_legacy_agent_id_payload_without_id() {
         let signer = AgentSigner::from_seed([14; 32]);
         let legacy_event = crate::identity::Event::new(
             PROTOCOL,
@@ -258,12 +234,10 @@ mod tests {
             }),
         );
         let signed = signer.sign_event(legacy_event).unwrap();
-        let envelope: Envelope<ProfileUpdatePayload> =
-            serde_json::from_value(serde_json::to_value(signed).unwrap()).unwrap();
 
-        let profile = materialize_profile(&envelope).unwrap();
-
-        assert_eq!(profile.id, signer.agent_id());
-        assert_eq!(profile.name, "LegacyAgent");
+        assert!(serde_json::from_value::<Envelope<ProfileUpdatePayload>>(
+            serde_json::to_value(signed).unwrap()
+        )
+        .is_err());
     }
 }

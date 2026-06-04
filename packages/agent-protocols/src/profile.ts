@@ -30,8 +30,7 @@ export interface ProfileLink {
 }
 
 export interface ProfileUpdatePayload {
-  id?: AgentId;
-  agent_id?: AgentId;
+  id: AgentId;
   name: string;
   description?: string;
   avatar_url?: string;
@@ -99,8 +98,6 @@ export function profileUpdateEvent(
 export function validateProfileUpdate(
   envelope: Envelope<ProfileUpdatePayload>,
 ): void {
-  const payloadId =
-    envelope.event.payload.id ?? envelope.event.payload.agent_id;
   verifyEnvelope(envelope);
   if (envelope.event.protocol !== PROFILE_PROTOCOL) {
     throw protocolError(
@@ -114,7 +111,10 @@ export function validateProfileUpdate(
       `expected ${PROFILE_UPDATE}, got ${envelope.event.type}`,
     );
   }
-  if (!payloadId || envelope.event.actor !== payloadId) {
+  if (
+    !envelope.event.payload.id ||
+    envelope.event.actor !== envelope.event.payload.id
+  ) {
     throw protocolError(
       "invalid_actor",
       "profile update actor must match payload.id",
@@ -127,9 +127,8 @@ export function materializeProfile(
 ): AgentProfile {
   validateProfileUpdate(envelope);
   const payload = envelope.event.payload;
-  const payloadId = payload.id ?? payload.agent_id;
   return {
-    id: payloadId as AgentId,
+    id: payload.id,
     name: payload.name,
     description: payload.description,
     avatar_url: payload.avatar_url,

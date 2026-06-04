@@ -17,6 +17,7 @@ pub const DEFAULT_LIVE_WRITE_WINDOW_MS: i64 = 300_000;
 pub const DEFAULT_NONCE_TTL_MS: i64 = 300_000;
 pub const DEFAULT_REQUEST_JWT_TTL_SECS: i64 = 300;
 pub const MAX_NONCE_HEADER: &str = "Max-Seen-Nonce";
+pub const MAX_SAFE_NONCE: u64 = 0x1FFFFFFFFFFFFF;
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct AgentId(String);
@@ -222,6 +223,7 @@ pub fn event_hash<P>(event: &Event<P>) -> Result<String>
 where
     P: Serialize,
 {
+    validate_nonce(event.nonce)?;
     let digest = Sha3_256::digest(canonical_event_bytes(event)?);
     Ok(URL_SAFE_NO_PAD.encode(digest))
 }
@@ -230,6 +232,7 @@ pub fn sign_event<P>(signing_key: &SigningKey, event: &Event<P>) -> Result<Strin
 where
     P: Serialize,
 {
+    validate_nonce(event.nonce)?;
     let bytes = canonical_event_bytes(event)?;
     let signature = signing_key.sign(&bytes);
     Ok(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
@@ -379,6 +382,7 @@ impl ClientNonceManager {
 
     pub fn next_nonce(&mut self) -> Result<u64> {
         let nonce = self.next_nonce;
+        validate_nonce(nonce)?;
         self.next_nonce = self
             .next_nonce
             .checked_add(1)
@@ -396,13 +400,14 @@ impl ClientNonceManager {
         let max_nonce = value
             .parse::<u64>()
             .map_err(|_| SdkError::InvalidNonce("invalid max nonce header".to_owned()))?;
+        validate_nonce(max_nonce)?;
         self.observe_max_nonce(max_nonce);
         Ok(())
     }
 }
 
 pub fn validate_nonce(nonce: u64) -> Result<()> {
-    if nonce == 0 || nonce > 0x1FFFFFFFFFFFFF {
+    if nonce == 0 || nonce > MAX_SAFE_NONCE {
         // Number.MAX_SAFE_INTEGER in JavaScript, to prevent interoperability issues with JS clients using Number for nonces
         Err(SdkError::InvalidNonce(
             "nonce must be a positive integer less than or equal to 9007199254740991".to_owned(),
@@ -542,6 +547,9 @@ pub fn verify_request_jwt(token: &str, context: &RequestAuthContext) -> Result<R
     if claims.aud != context.audience {
         return Err(SdkError::InvalidJwtClaim("aud"));
     }
+    if claims.exp <= claims.iat {
+        return Err(SdkError::InvalidJwtClaim("exp/iat"));
+    }
     if claims.iat > context.now_secs || claims.exp < context.now_secs {
         return Err(SdkError::InvalidJwtClaim("iat/exp"));
     }
@@ -578,7 +586,7 @@ mod tests {
             signer.agent_id(),
             1_779_753_600_000,
             1,
-            json!({"agent_id": signer.agent_id(), "name": "ResearchAgent"}),
+            json!({"id": signer.agent_id(), "name": "ResearchAgent"}),
         );
 
         let envelope = signer.sign_event(event).unwrap();
@@ -644,6 +652,24 @@ mod tests {
     }
 
     #[test]
+    fn rejects_nonce_values_outside_safe_json_integer_range() {
+        let signer = AgentSigner::from_seed([16; 32]);
+        let event = Event::new(
+            "agent-profile/1.0",
+            "profile.update",
+            signer.agent_id(),
+            1000,
+            MAX_SAFE_NONCE + 1,
+            json!({"id": signer.agent_id(), "name": "ResearchAgent"}),
+        );
+
+        assert!(matches!(
+            signer.sign_event(event),
+            Err(SdkError::InvalidNonce(_))
+        ));
+    }
+
+    #[test]
     fn signs_and_verifies_request_jwt() {
         let signer = AgentSigner::from_seed([10; 32]);
         let claims = RequestJwtClaims::new(
@@ -661,5 +687,27 @@ mod tests {
         let verified = verify_request_jwt(&token, &context).unwrap();
 
         assert_eq!(verified.iss, signer.agent_id());
+    }
+
+    #[test]
+    fn rejects_request_jwts_with_non_positive_ttl() {
+        let signer = AgentSigner::from_seed([17; 32]);
+        let claims = RequestJwtClaims::new(
+            signer.agent_id(),
+            RequestBinding::new("https://api.example.com"),
+            100,
+            0,
+        );
+        let token = signer.sign_request_jwt(&claims).unwrap();
+        let context = RequestAuthContext {
+            audience: "https://api.example.com".to_owned(),
+            now_secs: 100,
+            max_ttl_secs: 300,
+        };
+
+        assert!(matches!(
+            verify_request_jwt(&token, &context),
+            Err(SdkError::InvalidJwtClaim("exp/iat"))
+        ));
     }
 }
