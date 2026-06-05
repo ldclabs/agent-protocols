@@ -1,13 +1,15 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha3::{Digest, Sha3_256};
 
 use crate::error::{Result, SdkError};
 use crate::identity::{verify_envelope, AgentId, Envelope, Event};
 
 pub const PROTOCOL: &str = "agent-discourse/1.0";
-pub const LEGACY_PROTOCOL: &str = "adp/1.0";
 
 pub mod event_type {
     pub const ROOM_CREATE: &str = "room.create";
@@ -97,6 +99,15 @@ pub enum MapOperation {
     MarkResolved,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionOutcome {
+    Accepted,
+    Rejected,
+    Deferred,
+    Superseded,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RoomCreatePayload {
     pub topic: String,
@@ -165,11 +176,20 @@ impl RoomCreatePayload {
 pub struct ServerRecord<P = Value> {
     pub room_id: String,
     pub seq: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub pre_hash: Option<String>,
     pub hash: String,
     pub received_at: i64,
     pub envelope: Envelope<P>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ServerRecordHashPayload {
+    pub room_id: String,
+    pub seq: u64,
+    pub pre_hash: Option<String>,
+    pub envelope_hash: String,
+    pub received_at: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -178,7 +198,7 @@ pub struct RoomResponse {
     pub status: RoomState,
     pub url: String,
     pub seq: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub pre_hash: Option<String>,
     pub hash: String,
     pub received_at: i64,
@@ -297,6 +317,67 @@ impl MessageCreatePayload {
     pub fn markdown(markdown: impl Into<String>) -> Self {
         Self::new("text/markdown", Value::String(markdown.into()))
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ProposalCreatePayload {
+    pub proposal_id: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_event_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PollOption {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PollCreatePayload {
+    pub poll_id: String,
+    pub question: String,
+    pub options: Vec<PollOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_choices: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_choices: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closes_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PollVotePayload {
+    pub event_id: String,
+    pub option_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ResolutionCreatePayload {
+    pub resolution_id: String,
+    pub outcome: ResolutionOutcome,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -529,18 +610,13 @@ pub fn discourse_event<P>(
     Event::new(PROTOCOL, kind, actor, created_at, nonce, payload).with_room_id(room_id)
 }
 
-pub fn validate_discourse_envelope<P>(
-    envelope: &Envelope<P>,
-    accept_legacy_protocol: bool,
-) -> Result<()>
+pub fn validate_discourse_envelope<P>(envelope: &Envelope<P>) -> Result<()>
 where
     P: Serialize,
 {
     verify_envelope(envelope)?;
     let protocol = envelope.event.protocol.as_str();
-    let protocol_ok =
-        protocol == PROTOCOL || (accept_legacy_protocol && protocol == LEGACY_PROTOCOL);
-    if !protocol_ok {
+    if protocol != PROTOCOL {
         return Err(SdkError::InvalidEventProtocol {
             expected: PROTOCOL.to_owned(),
             actual: envelope.event.protocol.clone(),
@@ -566,6 +642,211 @@ pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Resu
 
 pub fn event_requires_room_id(event_type: &str) -> bool {
     event_type != event_type::ROOM_CREATE
+}
+
+pub fn validate_room_create_payload(payload: &RoomCreatePayload) -> Result<()> {
+    if payload.topic.trim().is_empty() {
+        return Err(SdkError::InvalidPayload(
+            "room topic must not be empty".to_owned(),
+        ));
+    }
+    if payload.start_time >= payload.end_time {
+        return Err(SdkError::InvalidPayload(
+            "start_time must be before end_time".to_owned(),
+        ));
+    }
+    if let Some(policy) = &payload.policy {
+        if matches!(policy.max_participants, Some(0)) {
+            return Err(SdkError::InvalidPayload(
+                "max_participants must be a positive integer".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_poll_create_payload(payload: &PollCreatePayload) -> Result<()> {
+    if payload.poll_id.trim().is_empty() || payload.question.trim().is_empty() {
+        return Err(SdkError::InvalidPayload(
+            "poll_id and question are required".to_owned(),
+        ));
+    }
+    if payload.options.len() < 2 {
+        return Err(SdkError::InvalidPayload(
+            "poll requires at least two options".to_owned(),
+        ));
+    }
+    let mut option_ids = BTreeSet::new();
+    for option in &payload.options {
+        if option.id.trim().is_empty() || option.label.trim().is_empty() {
+            return Err(SdkError::InvalidPayload(
+                "option id and label are required".to_owned(),
+            ));
+        }
+        if !option_ids.insert(option.id.as_str()) {
+            return Err(SdkError::InvalidPayload(
+                "poll option ids must be unique".to_owned(),
+            ));
+        }
+    }
+    let min_choices = payload.min_choices.unwrap_or(1);
+    let max_choices = payload.max_choices.unwrap_or(1);
+    if min_choices < 1 || max_choices < min_choices {
+        return Err(SdkError::InvalidPayload(
+            "invalid poll choice limits".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_poll_vote_payload(
+    payload: &PollVotePayload,
+    poll: &PollCreatePayload,
+    now_ms: Option<i64>,
+) -> Result<()> {
+    if let (Some(closes_at), Some(now_ms)) = (poll.closes_at, now_ms) {
+        if now_ms > closes_at {
+            return Err(SdkError::InvalidPayload("poll is closed".to_owned()));
+        }
+    }
+    let min_choices = poll.min_choices.unwrap_or(1) as usize;
+    let max_choices = poll.max_choices.unwrap_or(1) as usize;
+    let option_ids: BTreeSet<&str> = poll
+        .options
+        .iter()
+        .map(|option| option.id.as_str())
+        .collect();
+    let selected: BTreeSet<&str> = payload.option_ids.iter().map(String::as_str).collect();
+    if selected.len() != payload.option_ids.len() {
+        return Err(SdkError::InvalidPayload(
+            "duplicate poll options".to_owned(),
+        ));
+    }
+    if selected.len() < min_choices || selected.len() > max_choices {
+        return Err(SdkError::InvalidPayload(
+            "invalid number of options".to_owned(),
+        ));
+    }
+    if selected
+        .iter()
+        .any(|option_id| !option_ids.contains(option_id))
+    {
+        return Err(SdkError::InvalidPayload("unknown poll option".to_owned()));
+    }
+    Ok(())
+}
+
+pub fn server_record_hash_payload(
+    room_id: &str,
+    seq: u64,
+    pre_hash: Option<&str>,
+    envelope_hash: &str,
+    received_at: i64,
+) -> ServerRecordHashPayload {
+    ServerRecordHashPayload {
+        room_id: room_id.to_owned(),
+        seq,
+        pre_hash: pre_hash.map(str::to_owned),
+        envelope_hash: envelope_hash.to_owned(),
+        received_at,
+    }
+}
+
+pub fn server_record_hash(
+    room_id: &str,
+    seq: u64,
+    pre_hash: Option<&str>,
+    envelope_hash: &str,
+    received_at: i64,
+) -> Result<String> {
+    hash_canonical_json(&server_record_hash_payload(
+        room_id,
+        seq,
+        pre_hash,
+        envelope_hash,
+        received_at,
+    ))
+}
+
+pub fn build_server_record<P>(
+    room_id: impl Into<String>,
+    seq: u64,
+    pre_hash: Option<String>,
+    received_at: i64,
+    envelope: Envelope<P>,
+) -> Result<ServerRecord<P>> {
+    let room_id = room_id.into();
+    let hash = server_record_hash(
+        &room_id,
+        seq,
+        pre_hash.as_deref(),
+        &envelope.hash,
+        received_at,
+    )?;
+    Ok(ServerRecord {
+        room_id,
+        seq,
+        pre_hash,
+        hash,
+        received_at,
+        envelope,
+    })
+}
+
+pub fn verify_server_record<P>(record: &ServerRecord<P>) -> Result<()>
+where
+    P: Serialize,
+{
+    let expected = server_record_hash(
+        &record.room_id,
+        record.seq,
+        record.pre_hash.as_deref(),
+        &record.envelope.hash,
+        record.received_at,
+    )?;
+    if record.hash == expected {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidEventHash {
+            expected,
+            actual: record.hash.clone(),
+        })
+    }
+}
+
+pub fn verify_server_record_chain<P>(records: &[ServerRecord<P>]) -> Result<()>
+where
+    P: Serialize,
+{
+    let mut previous: Option<&ServerRecord<P>> = None;
+    for record in records {
+        verify_server_record(record)?;
+        if let Some(previous) = previous {
+            if record.seq != previous.seq + 1 {
+                return Err(SdkError::InvalidPayload(
+                    "seq must increase by 1".to_owned(),
+                ));
+            }
+            if record.pre_hash.as_deref() != Some(previous.hash.as_str()) {
+                return Err(SdkError::InvalidPayload("pre_hash mismatch".to_owned()));
+            }
+        } else if record.seq != 1 {
+            return Err(SdkError::InvalidPayload("first seq must be 1".to_owned()));
+        } else if record.pre_hash.is_some() {
+            return Err(SdkError::InvalidPayload(
+                "first pre_hash must be null".to_owned(),
+            ));
+        }
+        previous = Some(record);
+    }
+    Ok(())
+}
+
+pub fn archive_events_digest<P>(records: &[ServerRecord<P>]) -> Result<String>
+where
+    P: Serialize,
+{
+    hash_canonical_json(records)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -742,10 +1023,20 @@ fn is_known_event_type(event_type: &str) -> bool {
     )
 }
 
+fn hash_canonical_json<T>(value: &T) -> Result<String>
+where
+    T: Serialize + ?Sized,
+{
+    let bytes = serde_jcs::to_vec(value).map_err(|err| SdkError::CanonicalJson(err.to_string()))?;
+    let digest = Sha3_256::digest(bytes);
+    Ok(URL_SAFE_NO_PAD.encode(digest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::identity::AgentSigner;
+    use serde_json::json;
 
     #[test]
     fn validates_room_create_without_room_id() {
@@ -761,7 +1052,7 @@ mod tests {
         );
         let envelope = signer.sign_event(event).unwrap();
 
-        validate_discourse_envelope(&envelope, false).unwrap();
+        validate_discourse_envelope(&envelope).unwrap();
         validate_room_path(&envelope, "d8ftedhpqhsusbg001tg").unwrap();
     }
 
@@ -779,7 +1070,7 @@ mod tests {
         let envelope = signer.sign_event(event).unwrap();
 
         assert!(matches!(
-            validate_discourse_envelope(&envelope, false),
+            validate_discourse_envelope(&envelope),
             Err(SdkError::MissingRoomId)
         ));
     }
@@ -854,5 +1145,135 @@ mod tests {
                 post_end_reaction_allowed: true,
             }
         ));
+    }
+
+    #[test]
+    fn validates_room_creation_payloads() {
+        let mut payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
+        payload.policy = Some(RoomPolicy {
+            max_participants: Some(2),
+            ..RoomPolicy::default()
+        });
+        validate_room_create_payload(&payload).unwrap();
+
+        let empty_topic = RoomCreatePayload::new(" ", Visibility::Public, 1000, 2000);
+        assert!(matches!(
+            validate_room_create_payload(&empty_topic),
+            Err(SdkError::InvalidPayload(_))
+        ));
+
+        let invalid_time = RoomCreatePayload::new("Research room", Visibility::Public, 2000, 1000);
+        assert!(matches!(
+            validate_room_create_payload(&invalid_time),
+            Err(SdkError::InvalidPayload(_))
+        ));
+    }
+
+    #[test]
+    fn validates_poll_payloads_and_votes() {
+        let poll = PollCreatePayload {
+            poll_id: "poll_review_order".to_owned(),
+            question: "Which review order?".to_owned(),
+            options: vec![
+                PollOption {
+                    id: "a".to_owned(),
+                    label: "Correctness first".to_owned(),
+                    description: None,
+                },
+                PollOption {
+                    id: "b".to_owned(),
+                    label: "Security first".to_owned(),
+                    description: None,
+                },
+            ],
+            min_choices: Some(1),
+            max_choices: Some(1),
+            closes_at: None,
+            references: Vec::new(),
+            extra: BTreeMap::new(),
+        };
+
+        validate_poll_create_payload(&poll).unwrap();
+        validate_poll_vote_payload(
+            &PollVotePayload {
+                event_id: "evt".to_owned(),
+                option_ids: vec!["a".to_owned()],
+            },
+            &poll,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_poll_vote_payload(
+                &PollVotePayload {
+                    event_id: "evt".to_owned(),
+                    option_ids: vec!["a".to_owned(), "b".to_owned()],
+                },
+                &poll,
+                None,
+            ),
+            Err(SdkError::InvalidPayload(_))
+        ));
+
+        let mut duplicate = poll.clone();
+        duplicate.options[1].id = "a".to_owned();
+        assert!(matches!(
+            validate_poll_create_payload(&duplicate),
+            Err(SdkError::InvalidPayload(_))
+        ));
+    }
+
+    #[test]
+    fn builds_and_verifies_server_record_chains() {
+        let signer = AgentSigner::from_seed([18; 32]);
+        let envelope1 = signer
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::ROOM_CREATE,
+                signer.agent_id(),
+                100,
+                1,
+                json!({
+                    "topic": "Research room",
+                    "visibility": "public",
+                    "start_time": 1000,
+                    "end_time": 2000
+                }),
+            ))
+            .unwrap();
+        let record1 = build_server_record("room123", 1, None, 110, envelope1).unwrap();
+
+        let envelope2 = signer
+            .sign_event(discourse_event(
+                event_type::MESSAGE_CREATE,
+                signer.agent_id(),
+                120,
+                2,
+                "room123",
+                json!({"content_type": "text/plain", "content": "hello"}),
+            ))
+            .unwrap();
+        let record2 =
+            build_server_record("room123", 2, Some(record1.hash.clone()), 130, envelope2).unwrap();
+
+        assert_eq!(
+            record1.hash,
+            server_record_hash("room123", 1, None, &record1.envelope.hash, 110).unwrap()
+        );
+        verify_server_record(&record1).unwrap();
+        verify_server_record_chain(&[record1.clone(), record2.clone()]).unwrap();
+        assert_eq!(
+            archive_events_digest(&[record1.clone(), record2.clone()])
+                .unwrap()
+                .len(),
+            43
+        );
+        assert!(verify_server_record_chain(&[record2]).is_err());
+
+        let broken = ServerRecord {
+            pre_hash: Some("bad".to_owned()),
+            ..record1
+        };
+        assert!(verify_server_record_chain(&[broken]).is_err());
     }
 }

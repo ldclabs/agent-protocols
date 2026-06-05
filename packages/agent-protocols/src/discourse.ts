@@ -1,3 +1,6 @@
+import canonicalize from "canonicalize";
+import { createHash } from "node:crypto";
+
 import { protocolError } from "./errors.js";
 import {
   AgentId,
@@ -9,7 +12,6 @@ import {
 } from "./identity.js";
 
 export const DISCOURSE_PROTOCOL = "agent-discourse/1.0";
-export const LEGACY_DISCOURSE_PROTOCOL = "adp/1.0";
 
 export const eventType = {
   ROOM_CREATE: "room.create",
@@ -56,6 +58,11 @@ export type MapOperation =
   | "replace_snapshot"
   | "mark_resolved";
 export type MapNodeStatus = "open" | "resolved" | "closed";
+export type ResolutionOutcome =
+  | "accepted"
+  | "rejected"
+  | "deferred"
+  | "superseded";
 
 export interface RoomCreatePayload {
   topic: string;
@@ -84,7 +91,7 @@ export interface RoomResponse {
   status: RoomState;
   url: string;
   seq: number;
-  pre_hash?: string;
+  pre_hash: string | null;
   hash: string;
   received_at: number;
   envelope?: Envelope<RoomCreatePayload>;
@@ -142,6 +149,48 @@ export interface MessageCreatePayload {
   content_type: string;
   content: unknown;
   references?: string[];
+}
+
+export interface ProposalCreatePayload {
+  proposal_id: string;
+  title: string;
+  body: string;
+  content_type?: string;
+  references?: string[];
+  source_event_ids?: string[];
+  extra?: Record<string, unknown>;
+}
+
+export interface PollOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export interface PollCreatePayload {
+  poll_id: string;
+  question: string;
+  options: PollOption[];
+  min_choices?: number;
+  max_choices?: number;
+  closes_at?: number;
+  references?: string[];
+  extra?: Record<string, unknown>;
+}
+
+export interface PollVotePayload {
+  event_id: string;
+  option_ids: string[];
+}
+
+export interface ResolutionCreatePayload {
+  resolution_id: string;
+  outcome: ResolutionOutcome;
+  summary: string;
+  proposal_event_id?: string;
+  poll_event_id?: string;
+  references?: string[];
+  extra?: Record<string, unknown>;
 }
 
 export interface ReactionCreatePayload {
@@ -218,10 +267,18 @@ export interface ArtifactCreatePayload {
 export interface ServerRecord<P = unknown> {
   room_id: string;
   seq: number;
-  pre_hash?: string;
+  pre_hash: string | null;
   hash: string;
   received_at: number;
   envelope: Envelope<P>;
+}
+
+export interface ServerRecordHashPayload {
+  room_id: string;
+  seq: number;
+  pre_hash: string | null;
+  envelope_hash: string;
+  received_at: number;
 }
 
 export interface ProfileResolverMetadata {
@@ -310,16 +367,10 @@ export function discourseEvent<P>(
   );
 }
 
-export function validateDiscourseEnvelope(
-  envelope: Envelope<unknown>,
-  acceptLegacyProtocol = false,
-): void {
+export function validateDiscourseEnvelope(envelope: Envelope<unknown>): void {
   verifyEnvelope(envelope);
   const protocol = envelope.event.protocol;
-  const ok =
-    protocol === DISCOURSE_PROTOCOL ||
-    (acceptLegacyProtocol && protocol === LEGACY_DISCOURSE_PROTOCOL);
-  if (!ok) {
+  if (protocol !== DISCOURSE_PROTOCOL) {
     throw protocolError(
       "invalid_event_protocol",
       `expected ${DISCOURSE_PROTOCOL}, got ${protocol}`,
@@ -351,6 +402,166 @@ export function validateRoomPath(
 
 export function eventRequiresRoomId(type: string): boolean {
   return type !== eventType.ROOM_CREATE;
+}
+
+export function validateRoomCreatePayload(payload: RoomCreatePayload): void {
+  if (payload.topic.trim() === "") {
+    throw protocolError("invalid_room", "room topic must not be empty");
+  }
+  if (payload.start_time >= payload.end_time) {
+    throw protocolError("invalid_room", "start_time must be before end_time");
+  }
+  const maxParticipants = payload.policy?.max_participants;
+  if (
+    maxParticipants !== undefined &&
+    (!Number.isInteger(maxParticipants) || maxParticipants < 1)
+  ) {
+    throw protocolError(
+      "invalid_room",
+      "max_participants must be a positive integer",
+    );
+  }
+}
+
+export function validatePollCreatePayload(payload: PollCreatePayload): void {
+  if (payload.poll_id.trim() === "" || payload.question.trim() === "") {
+    throw protocolError("invalid_poll", "poll_id and question are required");
+  }
+  if (payload.options.length < 2) {
+    throw protocolError("invalid_poll", "poll requires at least two options");
+  }
+  const optionIds = new Set<string>();
+  for (const option of payload.options) {
+    if (option.id.trim() === "" || option.label.trim() === "") {
+      throw protocolError("invalid_poll", "option id and label are required");
+    }
+    if (optionIds.has(option.id)) {
+      throw protocolError("invalid_poll", "poll option ids must be unique");
+    }
+    optionIds.add(option.id);
+  }
+  const minChoices = payload.min_choices ?? 1;
+  const maxChoices = payload.max_choices ?? 1;
+  if (minChoices < 1 || maxChoices < minChoices) {
+    throw protocolError("invalid_poll", "invalid poll choice limits");
+  }
+}
+
+export function validatePollVotePayload(
+  payload: PollVotePayload,
+  poll: PollCreatePayload,
+  nowMs?: number,
+): void {
+  if (poll.closes_at !== undefined && nowMs !== undefined && nowMs > poll.closes_at) {
+    throw protocolError("poll_closed", "poll is closed");
+  }
+  const minChoices = poll.min_choices ?? 1;
+  const maxChoices = poll.max_choices ?? 1;
+  const optionIds = new Set(poll.options.map((option) => option.id));
+  const selected = new Set(payload.option_ids);
+  if (selected.size !== payload.option_ids.length) {
+    throw protocolError("invalid_poll_vote", "duplicate poll options");
+  }
+  if (selected.size < minChoices || selected.size > maxChoices) {
+    throw protocolError("invalid_poll_vote", "invalid number of options");
+  }
+  for (const optionId of selected) {
+    if (!optionIds.has(optionId)) {
+      throw protocolError("invalid_poll_vote", "unknown poll option");
+    }
+  }
+}
+
+export function serverRecordHashPayload(
+  roomId: string,
+  seq: number,
+  preHash: string | null | undefined,
+  envelopeHash: string,
+  receivedAt: number,
+): ServerRecordHashPayload {
+  return {
+    room_id: roomId,
+    seq,
+    pre_hash: preHash ?? null,
+    envelope_hash: envelopeHash,
+    received_at: receivedAt,
+  };
+}
+
+export function serverRecordHash(
+  roomId: string,
+  seq: number,
+  preHash: string | null | undefined,
+  envelopeHash: string,
+  receivedAt: number,
+): string {
+  return hashCanonicalJson(
+    serverRecordHashPayload(roomId, seq, preHash, envelopeHash, receivedAt),
+  );
+}
+
+export function buildServerRecord<P>(
+  roomId: string,
+  seq: number,
+  preHash: string | null | undefined,
+  receivedAt: number,
+  envelope: Envelope<P>,
+): ServerRecord<P> {
+  const normalizedPreHash = preHash ?? null;
+  return {
+    room_id: roomId,
+    seq,
+    pre_hash: normalizedPreHash,
+    hash: serverRecordHash(
+      roomId,
+      seq,
+      normalizedPreHash,
+      envelope.hash,
+      receivedAt,
+    ),
+    received_at: receivedAt,
+    envelope,
+  };
+}
+
+export function verifyServerRecord(record: ServerRecord): void {
+  const expected = serverRecordHash(
+    record.room_id,
+    record.seq,
+    record.pre_hash,
+    record.envelope.hash,
+    record.received_at,
+  );
+  if (record.hash !== expected) {
+    throw protocolError(
+      "invalid_record_hash",
+      `invalid server record hash: expected ${expected}, got ${record.hash}`,
+    );
+  }
+}
+
+export function verifyServerRecordChain(records: ServerRecord[]): void {
+  let previous: ServerRecord | undefined;
+  for (const record of records) {
+    verifyServerRecord(record);
+    if (previous) {
+      if (record.seq !== previous.seq + 1) {
+        throw protocolError("invalid_record_chain", "seq must increase by 1");
+      }
+      if (record.pre_hash !== previous.hash) {
+        throw protocolError("invalid_record_chain", "pre_hash mismatch");
+      }
+    } else if (record.seq !== 1) {
+      throw protocolError("invalid_record_chain", "first seq must be 1");
+    } else if (record.pre_hash !== null) {
+      throw protocolError("invalid_record_chain", "first pre_hash must be null");
+    }
+    previous = record;
+  }
+}
+
+export function archiveEventsDigest(records: ServerRecord[]): string {
+  return hashCanonicalJson(records);
 }
 
 export function canSubmitEvent(
@@ -492,4 +703,15 @@ function isKnownEventType(type: string): boolean {
 
 function eventTypeIn(type: string, values: readonly string[]): boolean {
   return values.includes(type);
+}
+
+function hashCanonicalJson(value: unknown): string {
+  const canonical = canonicalize(value);
+  if (canonical === undefined) {
+    throw protocolError(
+      "canonical_json",
+      "value cannot be represented as canonical JSON",
+    );
+  }
+  return createHash("sha3-256").update(canonical).digest("base64url");
 }

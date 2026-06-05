@@ -61,6 +61,9 @@ pub enum SdkError {
     #[error("permission denied")]
     PermissionDenied,
 
+    #[error("invalid payload: {0}")]
+    InvalidPayload(String),
+
     #[error("invalid JWT: {0}")]
     InvalidJwt(String),
 

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from typing import Any, Literal, TypedDict
+
+import rfc8785
 
 from .errors import AgentProtocolError
 from .identity import AgentId, Envelope, Event, create_event, verify_envelope, with_room_id
 
 DISCOURSE_PROTOCOL = "agent-discourse/1.0"
-LEGACY_DISCOURSE_PROTOCOL = "adp/1.0"
 
 ROOM_CREATE = "room.create"
 ROOM_JOIN = "room.join"
@@ -74,11 +77,11 @@ def discourse_event(event_type: str, actor: AgentId, created_at: int, nonce: int
     return with_room_id(create_event(DISCOURSE_PROTOCOL, event_type, actor, created_at, nonce, payload), room_id)
 
 
-def validate_discourse_envelope(envelope: Envelope, accept_legacy_protocol: bool = False) -> None:
+def validate_discourse_envelope(envelope: Envelope) -> None:
     verify_envelope(envelope)
     event = envelope["event"]
     protocol = event["protocol"]
-    if protocol != DISCOURSE_PROTOCOL and not (accept_legacy_protocol and protocol == LEGACY_DISCOURSE_PROTOCOL):
+    if protocol != DISCOURSE_PROTOCOL:
         raise AgentProtocolError("invalid_event_protocol", f"expected {DISCOURSE_PROTOCOL}, got {protocol}")
     if event_requires_room_id(event["type"]) and "room_id" not in event:
         raise AgentProtocolError("missing_room_id", "event requires a room_id")
@@ -96,6 +99,132 @@ def validate_room_path(envelope: Envelope, path_room_id: str) -> None:
 
 def event_requires_room_id(event_type: str) -> bool:
     return event_type != ROOM_CREATE
+
+
+def validate_room_create_payload(payload: dict[str, Any]) -> None:
+    if not str(payload.get("topic", "")).strip():
+        raise AgentProtocolError("invalid_room", "room topic must not be empty")
+    if payload.get("start_time", 0) >= payload.get("end_time", 0):
+        raise AgentProtocolError("invalid_room", "start_time must be before end_time")
+    policy = payload.get("policy") or {}
+    max_participants = policy.get("max_participants")
+    if max_participants is not None and (
+        not isinstance(max_participants, int) or max_participants < 1
+    ):
+        raise AgentProtocolError("invalid_room", "max_participants must be a positive integer")
+
+
+def validate_poll_create_payload(payload: dict[str, Any]) -> None:
+    if not str(payload.get("poll_id", "")).strip() or not str(payload.get("question", "")).strip():
+        raise AgentProtocolError("invalid_poll", "poll_id and question are required")
+    options = payload.get("options", [])
+    if len(options) < 2:
+        raise AgentProtocolError("invalid_poll", "poll requires at least two options")
+    option_ids: set[str] = set()
+    for option in options:
+        option_id = str(option.get("id", ""))
+        label = str(option.get("label", ""))
+        if not option_id.strip() or not label.strip():
+            raise AgentProtocolError("invalid_poll", "option id and label are required")
+        if option_id in option_ids:
+            raise AgentProtocolError("invalid_poll", "poll option ids must be unique")
+        option_ids.add(option_id)
+    min_choices = payload.get("min_choices", 1)
+    max_choices = payload.get("max_choices", 1)
+    if min_choices < 1 or max_choices < min_choices:
+        raise AgentProtocolError("invalid_poll", "invalid poll choice limits")
+
+
+def validate_poll_vote_payload(payload: dict[str, Any], poll: dict[str, Any], now_ms: int | None = None) -> None:
+    if poll.get("closes_at") is not None and now_ms is not None and now_ms > poll["closes_at"]:
+        raise AgentProtocolError("poll_closed", "poll is closed")
+    min_choices = poll.get("min_choices", 1)
+    max_choices = poll.get("max_choices", 1)
+    option_ids = {option["id"] for option in poll.get("options", [])}
+    selected = payload.get("option_ids", [])
+    selected_set = set(selected)
+    if len(selected_set) != len(selected):
+        raise AgentProtocolError("invalid_poll_vote", "duplicate poll options")
+    if len(selected_set) < min_choices or len(selected_set) > max_choices:
+        raise AgentProtocolError("invalid_poll_vote", "invalid number of options")
+    if any(option_id not in option_ids for option_id in selected_set):
+        raise AgentProtocolError("invalid_poll_vote", "unknown poll option")
+
+
+def server_record_hash_payload(
+    room_id: str,
+    seq: int,
+    pre_hash: str | None,
+    envelope_hash: str,
+    received_at: int,
+) -> dict[str, Any]:
+    return {
+        "room_id": room_id,
+        "seq": seq,
+        "pre_hash": pre_hash,
+        "envelope_hash": envelope_hash,
+        "received_at": received_at,
+    }
+
+
+def server_record_hash(
+    room_id: str,
+    seq: int,
+    pre_hash: str | None,
+    envelope_hash: str,
+    received_at: int,
+) -> str:
+    return _hash_canonical_json(server_record_hash_payload(room_id, seq, pre_hash, envelope_hash, received_at))
+
+
+def build_server_record(
+    room_id: str,
+    seq: int,
+    pre_hash: str | None,
+    received_at: int,
+    envelope: Envelope,
+) -> dict[str, Any]:
+    return {
+        "room_id": room_id,
+        "seq": seq,
+        "pre_hash": pre_hash,
+        "hash": server_record_hash(room_id, seq, pre_hash, envelope["hash"], received_at),
+        "received_at": received_at,
+        "envelope": envelope,
+    }
+
+
+def verify_server_record(record: dict[str, Any]) -> None:
+    expected = server_record_hash(
+        record["room_id"],
+        record["seq"],
+        record.get("pre_hash"),
+        record["envelope"]["hash"],
+        record["received_at"],
+    )
+    if record["hash"] != expected:
+        raise AgentProtocolError("invalid_record_hash", f"invalid server record hash: expected {expected}, got {record['hash']}")
+
+
+def verify_server_record_chain(records: list[dict[str, Any]]) -> None:
+    previous: dict[str, Any] | None = None
+    for record in records:
+        verify_server_record(record)
+        if previous is None:
+            if record["seq"] != 1:
+                raise AgentProtocolError("invalid_record_chain", "first seq must be 1")
+            if record.get("pre_hash") is not None:
+                raise AgentProtocolError("invalid_record_chain", "first pre_hash must be null")
+        else:
+            if record["seq"] != previous["seq"] + 1:
+                raise AgentProtocolError("invalid_record_chain", "seq must increase by 1")
+            if record.get("pre_hash") != previous["hash"]:
+                raise AgentProtocolError("invalid_record_chain", "pre_hash mismatch")
+        previous = record
+
+
+def archive_events_digest(records: list[dict[str, Any]]) -> str:
+    return _hash_canonical_json(records)
 
 
 def can_submit_event(event_type: str, context: PermissionContext) -> bool:
@@ -181,3 +310,10 @@ def _observer_can_submit(event_type: str, context: PermissionContext) -> bool:
         or (context.get("observer_steering_allowed", False) and event_type == ROOM_STEER)
         or (context.get("observer_poll_vote_allowed", False) and event_type == MESSAGE_POLL_VOTE)
     )
+
+
+def _hash_canonical_json(value: Any) -> str:
+    canonical = rfc8785.dumps(value)
+    data = canonical if isinstance(canonical, bytes) else canonical.encode()
+    digest = hashlib.sha3_256(data).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()

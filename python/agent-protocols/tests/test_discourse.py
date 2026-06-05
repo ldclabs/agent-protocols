@@ -7,11 +7,19 @@ from agent_protocols.discourse import (
     ROOM_CREATE,
     ROOM_JOIN,
     ROOM_JOIN_REVIEW,
+    archive_events_digest,
+    build_server_record,
     can_accept_room_write,
     can_submit_event,
     room_create_event,
+    server_record_hash,
+    validate_poll_create_payload,
+    validate_poll_vote_payload,
     validate_discourse_envelope,
+    validate_room_create_payload,
     validate_room_path,
+    verify_server_record,
+    verify_server_record_chain,
 )
 from agent_protocols.http_client import websocket_events_url
 from agent_protocols.identity import AgentSigner, create_event
@@ -64,6 +72,76 @@ class DiscourseTests(unittest.TestCase):
         self.assertTrue(can_accept_room_write(ROOM_JOIN, "scheduled", {"join_request_approved": True}))
         self.assertFalse(can_accept_room_write(REACTION_CREATE, "ended", {"role": "participant"}))
         self.assertTrue(can_accept_room_write(REACTION_CREATE, "ended", {"role": "participant"}, post_end_reaction_allowed=True))
+
+    def test_validates_room_creation_payloads(self):
+        validate_room_create_payload(
+            {
+                "topic": "Research room",
+                "visibility": "public",
+                "start_time": 1000,
+                "end_time": 2000,
+                "policy": {"max_participants": 2},
+            }
+        )
+        with self.assertRaises(Exception):
+            validate_room_create_payload({"topic": " ", "visibility": "public", "start_time": 1000, "end_time": 2000})
+        with self.assertRaises(Exception):
+            validate_room_create_payload(
+                {"topic": "Research room", "visibility": "public", "start_time": 2000, "end_time": 1000}
+            )
+
+    def test_validates_poll_payloads_and_votes(self):
+        poll = {
+            "poll_id": "poll_review_order",
+            "question": "Which review order?",
+            "options": [{"id": "a", "label": "Correctness first"}, {"id": "b", "label": "Security first"}],
+            "min_choices": 1,
+            "max_choices": 1,
+        }
+
+        validate_poll_create_payload(poll)
+        validate_poll_vote_payload({"event_id": "evt", "option_ids": ["a"]}, poll)
+        with self.assertRaises(Exception):
+            validate_poll_vote_payload({"event_id": "evt", "option_ids": ["a", "b"]}, poll)
+        with self.assertRaises(Exception):
+            validate_poll_create_payload(
+                {
+                    **poll,
+                    "options": [{"id": "a", "label": "Correctness first"}, {"id": "a", "label": "Duplicate"}],
+                }
+            )
+
+    def test_builds_and_verifies_server_record_chains(self):
+        signer = AgentSigner.from_seed(bytes([18]) * 32)
+        envelope1 = signer.sign_event(
+            room_create_event(
+                signer.agent_id(),
+                100,
+                1,
+                {"topic": "Research room", "visibility": "public", "start_time": 1000, "end_time": 2000},
+            )
+        )
+        record1 = build_server_record("room123", 1, None, 110, envelope1)
+        event2 = create_event(
+            "agent-discourse/1.0",
+            MESSAGE_CREATE,
+            signer.agent_id(),
+            120,
+            2,
+            {"content_type": "text/plain", "content": "hello"},
+        )
+        event2["room_id"] = "room123"
+        envelope2 = signer.sign_event(event2)
+        record2 = build_server_record("room123", 2, record1["hash"], 130, envelope2)
+
+        self.assertEqual(record1["hash"], server_record_hash("room123", 1, None, envelope1["hash"], 110))
+        verify_server_record(record1)
+        verify_server_record_chain([record1, record2])
+        self.assertEqual(len(archive_events_digest([record1, record2])), 43)
+        with self.assertRaisesRegex(Exception, "first seq"):
+            verify_server_record_chain([record2])
+        with self.assertRaises(Exception):
+            verify_server_record_chain([{**record2, "pre_hash": "bad"}])
 
     def test_builds_websocket_event_stream_url(self):
         self.assertEqual(
