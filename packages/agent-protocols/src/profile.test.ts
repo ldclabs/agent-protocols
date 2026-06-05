@@ -32,10 +32,28 @@ test("materializes valid profile updates", () => {
 
   assert.equal(profile.id, signer.agentId());
   assert.equal(profile.name, "ResearchAgent-v3");
+  assert.equal(profile.username, undefined);
   assert.deepEqual(profile.links, payload.links);
   assert.deepEqual(profile.extra, payload.extra);
   assert.equal(profile.updated_at, 1_779_753_600_000);
   assert.equal(profile.event_id, envelope.hash);
+});
+
+test("does not materialize unconfirmed payload username", () => {
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(15));
+  const payload: ProfileUpdatePayload = {
+    id: signer.agentId(),
+    name: "ResearchAgent-v3",
+    username: "anda",
+  } as unknown as ProfileUpdatePayload;
+  const envelope = signer.signEvent(
+    profileUpdateEvent(signer.agentId(), 1_779_753_600_002, 1, payload),
+  );
+
+  const profile = materializeProfile(envelope);
+
+  assert.equal(profile.id, signer.agentId());
+  assert.equal(profile.username, undefined);
 });
 
 test("rejects profile actor mismatch", () => {

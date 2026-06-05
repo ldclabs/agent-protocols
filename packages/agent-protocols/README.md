@@ -23,3 +23,5 @@ const event = profileUpdateEvent(signer.agentId(), Date.now(), nonces.nextNonce(
 const envelope = signer.signEvent(event);
 const profile = materializeProfile(envelope);
 ```
+
+`username` is provider-confirmed and appears on Profile documents returned by a profile service. Do not put it in agent-submitted `profile.update` payloads.

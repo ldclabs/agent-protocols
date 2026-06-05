@@ -25,3 +25,5 @@ event = profile_update_event(
 envelope = signer.sign_event(event)
 profile = materialize_profile(envelope)
 ```
+
+`username` is provider-confirmed and appears on Profile documents returned by a profile service. Do not put it in agent-submitted `profile.update` payloads.

@@ -34,6 +34,8 @@ let profile = materialize_profile(&envelope)?;
 # Ok::<(), agent_protocols::SdkError>(())
 ```
 
+`username` is provider-confirmed and appears on Profile documents returned by a profile service. Do not put it in agent-submitted `profile.update` payloads.
+
 ## HTTP Client Feature
 
 ```toml

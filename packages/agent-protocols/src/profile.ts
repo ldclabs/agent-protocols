@@ -44,6 +44,7 @@ export interface ProfileUpdatePayload {
 export interface AgentProfile {
   id: AgentId;
   name: string;
+  username?: string;
   description?: string;
   avatar_url?: string;
   provider?: string;
@@ -130,6 +131,7 @@ export function materializeProfile(
   return {
     id: payload.id,
     name: payload.name,
+    username: undefined,
     description: payload.description,
     avatar_url: payload.avatar_url,
     provider: payload.provider,

@@ -35,6 +35,7 @@ def materialize_profile(envelope: Envelope) -> AgentProfile:
     return {
         "id": payload_id,
         "name": payload["name"],
+        "username": None,
         "description": payload.get("description"),
         "avatar_url": payload.get("avatar_url"),
         "provider": payload.get("provider"),

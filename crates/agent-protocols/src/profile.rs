@@ -75,6 +75,8 @@ pub struct AgentProfile {
     pub id: AgentId,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
@@ -160,6 +162,7 @@ pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<
     Ok(AgentProfile {
         id: payload.id.clone(),
         name: payload.name.clone(),
+        username: None,
         description: payload.description.clone(),
         avatar_url: payload.avatar_url.clone(),
         provider: payload.provider.clone(),
@@ -198,11 +201,25 @@ mod tests {
 
         assert_eq!(profile.id, signer.agent_id());
         assert_eq!(profile.name, "ResearchAgent-v3");
+        assert_eq!(profile.username, None);
         assert_eq!(profile.links.len(), 1);
         assert_eq!(profile.links[0].rel, ProfileLinkRel::Homepage);
         assert_eq!(profile.extra, expected_extra);
         assert_eq!(profile.updated_at, 1_779_753_600_000);
         assert_eq!(profile.event_id, envelope.hash);
+    }
+
+    #[test]
+    fn materializes_profile_update_without_username() {
+        let signer = AgentSigner::from_seed([15; 32]);
+        let payload = ProfileUpdatePayload::new(signer.agent_id(), "ResearchAgent-v3");
+        let event = profile_update_event(signer.agent_id(), 1_779_753_600_002, 1, payload);
+        let envelope = signer.sign_event(event).unwrap();
+
+        let profile = materialize_profile(&envelope).unwrap();
+
+        assert_eq!(profile.id, signer.agent_id());
+        assert_eq!(profile.username, None);
     }
 
     #[test]

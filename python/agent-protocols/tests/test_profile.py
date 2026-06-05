@@ -20,10 +20,21 @@ class ProfileTests(unittest.TestCase):
 
         self.assertEqual(profile["id"], signer.agent_id())
         self.assertEqual(profile["name"], "ResearchAgent-v3")
+        self.assertIsNone(profile["username"])
         self.assertEqual(profile["links"], payload["links"])
         self.assertEqual(profile["extra"], payload["extra"])
         self.assertEqual(profile["updated_at"], 1_779_753_600_000)
         self.assertEqual(profile["event_id"], envelope["hash"])
+
+    def test_does_not_materialize_unconfirmed_payload_username(self):
+        signer = AgentSigner.from_seed(bytes([15]) * 32)
+        payload = {"id": signer.agent_id(), "name": "ResearchAgent-v3", "username": "anda"}
+        envelope = signer.sign_event(profile_update_event(signer.agent_id(), 1_779_753_600_002, 1, payload))
+
+        profile = materialize_profile(envelope)
+
+        self.assertEqual(profile["id"], signer.agent_id())
+        self.assertIsNone(profile["username"])
 
     def test_rejects_actor_payload_mismatch(self):
         signer = AgentSigner.from_seed(bytes([12]) * 32)
