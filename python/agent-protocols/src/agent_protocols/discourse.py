@@ -30,6 +30,10 @@ QUESTION_CREATE = "question.create"
 ROOM_STEER = "room.steer"
 MAP_UPDATE = "map.update"
 ARTIFACT_CREATE = "artifact.create"
+SESSION_OFFER = "session.offer"
+SESSION_ANSWER = "session.answer"
+SESSION_CANDIDATE = "session.candidate"
+SESSION_CLOSE = "session.close"
 
 KNOWN_EVENT_TYPES = {
     ROOM_CREATE,
@@ -51,11 +55,16 @@ KNOWN_EVENT_TYPES = {
     ROOM_STEER,
     MAP_UPDATE,
     ARTIFACT_CREATE,
+    SESSION_OFFER,
+    SESSION_ANSWER,
+    SESSION_CANDIDATE,
+    SESSION_CLOSE,
 }
 
 RoomState = Literal["scheduled", "active", "ended", "cancelled"]
 Role = Literal["moderator", "expert", "participant", "observer"]
 JoinRequestStatus = Literal["pending", "approved", "rejected", "expired"]
+SESSION_MEDIA_KINDS = {"audio", "video", "screen", "data", "file"}
 
 
 class PermissionContext(TypedDict, total=False):
@@ -149,6 +158,36 @@ def validate_poll_vote_payload(payload: dict[str, Any], poll: dict[str, Any], no
         raise AgentProtocolError("invalid_poll_vote", "invalid number of options")
     if any(option_id not in option_ids for option_id in selected_set):
         raise AgentProtocolError("invalid_poll_vote", "unknown poll option")
+
+
+def validate_session_offer_payload(payload: dict[str, Any]) -> None:
+    _validate_session_id(payload.get("session_id"))
+    if payload.get("session_type") != "webrtc":
+        raise AgentProtocolError("invalid_session", "session_type must be webrtc")
+    media = payload.get("media", [])
+    if not isinstance(media, list) or not media:
+        raise AgentProtocolError("invalid_session", "media must not be empty")
+    if any(media_kind not in SESSION_MEDIA_KINDS for media_kind in media):
+        raise AgentProtocolError("invalid_session", "unsupported media kind")
+    _validate_session_description(payload.get("description"), "offer")
+    _validate_session_transfers(payload.get("transfers", []))
+
+
+def validate_session_answer_payload(payload: dict[str, Any]) -> None:
+    _validate_session_id(payload.get("session_id"))
+    if not str(payload.get("offer_event_id", "")).strip():
+        raise AgentProtocolError("invalid_session", "offer_event_id is required")
+    _validate_session_description(payload.get("description"), "answer")
+    _validate_session_transfers(payload.get("transfers", []))
+
+
+def validate_session_candidate_payload(payload: dict[str, Any]) -> None:
+    _validate_session_id(payload.get("session_id"))
+    if payload.get("end_of_candidates"):
+        return
+    candidate = payload.get("candidate") or {}
+    if not str(candidate.get("candidate", "")).strip():
+        raise AgentProtocolError("invalid_session", "candidate is required unless end_of_candidates is true")
 
 
 def server_record_hash_payload(
@@ -279,6 +318,10 @@ def _moderator_can_submit(event_type: str, moderator_authorized: bool) -> bool:
         ROOM_STEER,
         MAP_UPDATE,
         ARTIFACT_CREATE,
+        SESSION_OFFER,
+        SESSION_ANSWER,
+        SESSION_CANDIDATE,
+        SESSION_CLOSE,
         MESSAGE_PROPOSAL_CREATE,
         MESSAGE_POLL_CREATE,
         MESSAGE_POLL_VOTE,
@@ -297,6 +340,10 @@ def _speaker_can_submit(event_type: str, policy_allowed: bool) -> bool:
         MESSAGE_PROPOSAL_CREATE,
         MESSAGE_POLL_CREATE,
         MESSAGE_POLL_VOTE,
+        SESSION_OFFER,
+        SESSION_ANSWER,
+        SESSION_CANDIDATE,
+        SESSION_CLOSE,
         REACTION_CREATE,
         ROOM_LEAVE,
     }
@@ -310,6 +357,35 @@ def _observer_can_submit(event_type: str, context: PermissionContext) -> bool:
         or (context.get("observer_steering_allowed", False) and event_type == ROOM_STEER)
         or (context.get("observer_poll_vote_allowed", False) and event_type == MESSAGE_POLL_VOTE)
     )
+
+
+def _validate_session_id(session_id: Any) -> None:
+    if not str(session_id or "").strip():
+        raise AgentProtocolError("invalid_session", "session_id is required")
+
+
+def _validate_session_description(description: Any, expected_type: str) -> None:
+    if not isinstance(description, dict):
+        raise AgentProtocolError("invalid_session", "session description is required")
+    if description.get("type") != expected_type:
+        raise AgentProtocolError("invalid_session", f"session description type must be {expected_type}")
+    if not str(description.get("sdp", "")).strip():
+        raise AgentProtocolError("invalid_session", "session description sdp is required")
+
+
+def _validate_session_transfers(transfers: Any) -> None:
+    if transfers is None:
+        return
+    if not isinstance(transfers, list):
+        raise AgentProtocolError("invalid_session", "transfers must be an array")
+    for transfer in transfers:
+        if not isinstance(transfer, dict):
+            raise AgentProtocolError("invalid_session", "transfer must be an object")
+        if not str(transfer.get("transfer_id", "")).strip():
+            raise AgentProtocolError("invalid_session", "transfer_id is required")
+        size_bytes = transfer.get("size_bytes")
+        if size_bytes is not None and (not isinstance(size_bytes, int) or size_bytes < 0):
+            raise AgentProtocolError("invalid_session", "size_bytes must be a non-negative integer")
 
 
 def _hash_canonical_json(value: Any) -> str:

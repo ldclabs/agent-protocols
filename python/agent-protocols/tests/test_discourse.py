@@ -7,6 +7,8 @@ from agent_protocols.discourse import (
     ROOM_CREATE,
     ROOM_JOIN,
     ROOM_JOIN_REVIEW,
+    SESSION_CANDIDATE,
+    SESSION_OFFER,
     archive_events_digest,
     build_server_record,
     can_accept_room_write,
@@ -18,6 +20,9 @@ from agent_protocols.discourse import (
     validate_discourse_envelope,
     validate_room_create_payload,
     validate_room_path,
+    validate_session_answer_payload,
+    validate_session_candidate_payload,
+    validate_session_offer_payload,
     verify_server_record,
     verify_server_record_chain,
 )
@@ -63,6 +68,8 @@ class DiscourseTests(unittest.TestCase):
         self.assertFalse(can_submit_event(ROOM_JOIN_REVIEW, {"role": "participant"}))
         self.assertFalse(can_submit_event(ROOM_CANCEL, {"role": "moderator"}))
         self.assertTrue(can_submit_event(ROOM_CANCEL, {"role": "moderator", "moderator_authorized": True}))
+        self.assertTrue(can_submit_event(SESSION_OFFER, {"role": "participant"}))
+        self.assertFalse(can_submit_event(SESSION_CANDIDATE, {"role": "observer"}))
         self.assertTrue(can_submit_event(ROOM_CREATE, {}))
 
     def test_applies_state_restrictions(self):
@@ -110,6 +117,45 @@ class DiscourseTests(unittest.TestCase):
                     "options": [{"id": "a", "label": "Correctness first"}, {"id": "a", "label": "Duplicate"}],
                 }
             )
+
+    def test_validates_webrtc_session_payloads(self):
+        offer = {
+            "session_id": "sess_live_review",
+            "session_type": "webrtc",
+            "media": ["audio", "video", "file"],
+            "description": {"type": "offer", "sdp": "v=0\r\n..."},
+            "transfers": [
+                {
+                    "transfer_id": "file_1",
+                    "file_name": "trace.har",
+                    "size_bytes": 1024,
+                    "mime_type": "application/json",
+                    "content_digest": "sha256:abc",
+                }
+            ],
+        }
+
+        validate_session_offer_payload(offer)
+        validate_session_answer_payload(
+            {
+                "session_id": "sess_live_review",
+                "offer_event_id": "evt_offer",
+                "description": {"type": "answer", "sdp": "v=0\r\n..."},
+                "accepted_media": ["audio", "file"],
+            }
+        )
+        validate_session_candidate_payload(
+            {
+                "session_id": "sess_live_review",
+                "candidate": {"candidate": "candidate:1 1 udp 1 127.0.0.1 3478 typ host"},
+            }
+        )
+        validate_session_candidate_payload({"session_id": "sess_live_review", "end_of_candidates": True})
+
+        with self.assertRaisesRegex(Exception, "offer"):
+            validate_session_offer_payload({**offer, "description": {"type": "answer", "sdp": "v=0\r\n..."}})
+        with self.assertRaisesRegex(Exception, "candidate"):
+            validate_session_candidate_payload({"session_id": "sess_live_review"})
 
     def test_builds_and_verifies_server_record_chains(self):
         signer = AgentSigner.from_seed(bytes([18]) * 32)

@@ -31,6 +31,10 @@ pub mod event_type {
     pub const ROOM_STEER: &str = "room.steer";
     pub const MAP_UPDATE: &str = "map.update";
     pub const ARTIFACT_CREATE: &str = "artifact.create";
+    pub const SESSION_OFFER: &str = "session.offer";
+    pub const SESSION_ANSWER: &str = "session.answer";
+    pub const SESSION_CANDIDATE: &str = "session.candidate";
+    pub const SESSION_CLOSE: &str = "session.close";
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +110,37 @@ pub enum ResolutionOutcome {
     Rejected,
     Deferred,
     Superseded,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionType {
+    Webrtc,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMediaKind {
+    Audio,
+    Video,
+    Screen,
+    Data,
+    File,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTopology {
+    PeerToPeer,
+    Sfu,
+    TurnRelay,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionDescriptionType {
+    Offer,
+    Answer,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -509,6 +544,92 @@ pub struct ArtifactCreatePayload {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionDescription {
+    #[serde(rename = "type")]
+    pub kind: SessionDescriptionType,
+    pub sdp: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionIceCandidate {
+    pub candidate: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdp_mid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdp_mline_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_fragment: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionDataTransfer {
+    pub transfer_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SessionOfferPayload {
+    pub session_id: String,
+    pub session_type: SessionType,
+    pub media: Vec<SessionMediaKind>,
+    pub description: SessionDescription,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub to: Vec<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology: Option<SessionTopology>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transfers: Vec<SessionDataTransfer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SessionAnswerPayload {
+    pub session_id: String,
+    pub offer_event_id: String,
+    pub description: SessionDescription,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_media: Vec<SessionMediaKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transfers: Vec<SessionDataTransfer>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SessionCandidatePayload {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<SessionIceCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_of_candidates: Option<bool>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SessionClosePayload {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RoomClosePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -736,6 +857,41 @@ pub fn validate_poll_vote_payload(
     Ok(())
 }
 
+pub fn validate_session_offer_payload(payload: &SessionOfferPayload) -> Result<()> {
+    validate_session_id(&payload.session_id)?;
+    if payload.media.is_empty() {
+        return Err(SdkError::InvalidPayload(
+            "media must not be empty".to_owned(),
+        ));
+    }
+    validate_session_description(&payload.description, SessionDescriptionType::Offer)?;
+    validate_session_transfers(&payload.transfers)
+}
+
+pub fn validate_session_answer_payload(payload: &SessionAnswerPayload) -> Result<()> {
+    validate_session_id(&payload.session_id)?;
+    if payload.offer_event_id.trim().is_empty() {
+        return Err(SdkError::InvalidPayload(
+            "offer_event_id is required".to_owned(),
+        ));
+    }
+    validate_session_description(&payload.description, SessionDescriptionType::Answer)?;
+    validate_session_transfers(&payload.transfers)
+}
+
+pub fn validate_session_candidate_payload(payload: &SessionCandidatePayload) -> Result<()> {
+    validate_session_id(&payload.session_id)?;
+    if payload.end_of_candidates.unwrap_or(false) {
+        return Ok(());
+    }
+    match &payload.candidate {
+        Some(candidate) if !candidate.candidate.trim().is_empty() => Ok(()),
+        _ => Err(SdkError::InvalidPayload(
+            "candidate is required unless end_of_candidates is true".to_owned(),
+        )),
+    }
+}
+
 pub fn server_record_hash_payload(
     room_id: &str,
     seq: u64,
@@ -956,6 +1112,10 @@ fn moderator_can_submit(event_type: &str, moderator_authorized: bool) -> bool {
             | event_type::ROOM_STEER
             | event_type::MAP_UPDATE
             | event_type::ARTIFACT_CREATE
+            | event_type::SESSION_OFFER
+            | event_type::SESSION_ANSWER
+            | event_type::SESSION_CANDIDATE
+            | event_type::SESSION_CLOSE
             | event_type::MESSAGE_PROPOSAL_CREATE
             | event_type::MESSAGE_POLL_CREATE
             | event_type::MESSAGE_POLL_VOTE
@@ -978,6 +1138,10 @@ fn speaker_can_submit(event_type: &str, policy_allowed: bool) -> bool {
             | event_type::MESSAGE_PROPOSAL_CREATE
             | event_type::MESSAGE_POLL_CREATE
             | event_type::MESSAGE_POLL_VOTE
+            | event_type::SESSION_OFFER
+            | event_type::SESSION_ANSWER
+            | event_type::SESSION_CANDIDATE
+            | event_type::SESSION_CLOSE
             | event_type::REACTION_CREATE
             | event_type::ROOM_LEAVE
     ) || (policy_allowed
@@ -1020,7 +1184,53 @@ fn is_known_event_type(event_type: &str) -> bool {
             | event_type::ROOM_STEER
             | event_type::MAP_UPDATE
             | event_type::ARTIFACT_CREATE
+            | event_type::SESSION_OFFER
+            | event_type::SESSION_ANSWER
+            | event_type::SESSION_CANDIDATE
+            | event_type::SESSION_CLOSE
     )
+}
+
+fn validate_session_id(session_id: &str) -> Result<()> {
+    if session_id.trim().is_empty() {
+        Err(SdkError::InvalidPayload(
+            "session_id is required".to_owned(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_session_description(
+    description: &SessionDescription,
+    expected_type: SessionDescriptionType,
+) -> Result<()> {
+    if description.kind != expected_type {
+        return Err(SdkError::InvalidPayload(format!(
+            "session description type must be {}",
+            match expected_type {
+                SessionDescriptionType::Offer => "offer",
+                SessionDescriptionType::Answer => "answer",
+            }
+        )));
+    }
+    if description.sdp.trim().is_empty() {
+        return Err(SdkError::InvalidPayload(
+            "session description sdp is required".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_session_transfers(transfers: &[SessionDataTransfer]) -> Result<()> {
+    for transfer in transfers {
+        if transfer.transfer_id.trim().is_empty() {
+            return Err(SdkError::InvalidPayload(
+                "transfer_id is required".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn hash_canonical_json<T>(value: &T) -> Result<String>
@@ -1095,10 +1305,12 @@ mod tests {
         assert!(can_submit_event(event_type::ROOM_CANCEL, &moderator));
 
         let participant = PermissionContext::for_role(Role::Participant);
+        assert!(can_submit_event(event_type::SESSION_OFFER, &participant));
         assert!(!can_submit_event(
             event_type::ROOM_JOIN_REVIEW,
             &participant
         ));
+        assert!(!can_submit_event(event_type::SESSION_CANDIDATE, &observer));
     }
 
     #[test]
@@ -1219,6 +1431,90 @@ mod tests {
         duplicate.options[1].id = "a".to_owned();
         assert!(matches!(
             validate_poll_create_payload(&duplicate),
+            Err(SdkError::InvalidPayload(_))
+        ));
+    }
+
+    #[test]
+    fn validates_webrtc_session_payloads() {
+        let offer = SessionOfferPayload {
+            session_id: "sess_live_review".to_owned(),
+            session_type: SessionType::Webrtc,
+            media: vec![
+                SessionMediaKind::Audio,
+                SessionMediaKind::Video,
+                SessionMediaKind::File,
+            ],
+            description: SessionDescription {
+                kind: SessionDescriptionType::Offer,
+                sdp: "v=0\r\n...".to_owned(),
+            },
+            to: Vec::new(),
+            topology: Some(SessionTopology::PeerToPeer),
+            transfers: vec![SessionDataTransfer {
+                transfer_id: "file_1".to_owned(),
+                file_name: Some("trace.har".to_owned()),
+                size_bytes: Some(1024),
+                mime_type: Some("application/json".to_owned()),
+                content_digest: Some("sha256:abc".to_owned()),
+            }],
+            expires_at: None,
+            references: Vec::new(),
+            extra: BTreeMap::new(),
+        };
+        validate_session_offer_payload(&offer).unwrap();
+
+        validate_session_answer_payload(&SessionAnswerPayload {
+            session_id: "sess_live_review".to_owned(),
+            offer_event_id: "evt_offer".to_owned(),
+            description: SessionDescription {
+                kind: SessionDescriptionType::Answer,
+                sdp: "v=0\r\n...".to_owned(),
+            },
+            accepted_media: vec![SessionMediaKind::Audio, SessionMediaKind::File],
+            transfers: Vec::new(),
+            extra: BTreeMap::new(),
+        })
+        .unwrap();
+
+        validate_session_candidate_payload(&SessionCandidatePayload {
+            session_id: "sess_live_review".to_owned(),
+            candidate: Some(SessionIceCandidate {
+                candidate: "candidate:1 1 udp 1 127.0.0.1 3478 typ host".to_owned(),
+                sdp_mid: None,
+                sdp_mline_index: None,
+                username_fragment: None,
+            }),
+            target: None,
+            end_of_candidates: None,
+            extra: BTreeMap::new(),
+        })
+        .unwrap();
+
+        validate_session_candidate_payload(&SessionCandidatePayload {
+            session_id: "sess_live_review".to_owned(),
+            candidate: None,
+            target: None,
+            end_of_candidates: Some(true),
+            extra: BTreeMap::new(),
+        })
+        .unwrap();
+
+        let mut invalid_offer = offer;
+        invalid_offer.description.kind = SessionDescriptionType::Answer;
+        assert!(matches!(
+            validate_session_offer_payload(&invalid_offer),
+            Err(SdkError::InvalidPayload(_))
+        ));
+
+        assert!(matches!(
+            validate_session_candidate_payload(&SessionCandidatePayload {
+                session_id: "sess_live_review".to_owned(),
+                candidate: None,
+                target: None,
+                end_of_candidates: None,
+                extra: BTreeMap::new(),
+            }),
             Err(SdkError::InvalidPayload(_))
         ));
     }

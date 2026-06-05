@@ -15,6 +15,9 @@ import {
   validateDiscourseEnvelope,
   validateRoomCreatePayload,
   validateRoomPath,
+  validateSessionAnswerPayload,
+  validateSessionCandidatePayload,
+  validateSessionOfferPayload,
   verifyServerRecord,
   verifyServerRecordChain,
 } from "./discourse.js";
@@ -84,6 +87,14 @@ test("applies permission matrix", () => {
       moderatorAuthorized: true,
     }),
     true,
+  );
+  assert.equal(
+    canSubmitEvent(eventType.SESSION_OFFER, { role: "participant" }),
+    true,
+  );
+  assert.equal(
+    canSubmitEvent(eventType.SESSION_CANDIDATE, { role: "observer" }),
+    false,
   );
 });
 
@@ -192,6 +203,61 @@ test("validates poll payloads and votes", () => {
         ],
       }),
     /unique/,
+  );
+});
+
+test("validates WebRTC session payloads", () => {
+  const offer = {
+    session_id: "sess_live_review",
+    session_type: "webrtc" as const,
+    media: ["audio", "video", "file"] as const,
+    description: { type: "offer" as const, sdp: "v=0\r\n..." },
+    transfers: [
+      {
+        transfer_id: "file_1",
+        file_name: "trace.har",
+        size_bytes: 1024,
+        mime_type: "application/json",
+        content_digest: "sha256:abc",
+      },
+    ],
+  };
+  assert.doesNotThrow(() => validateSessionOfferPayload(offer));
+  assert.doesNotThrow(() =>
+    validateSessionAnswerPayload({
+      session_id: "sess_live_review",
+      offer_event_id: "evt_offer",
+      description: { type: "answer", sdp: "v=0\r\n..." },
+      accepted_media: ["audio", "file"],
+    }),
+  );
+  assert.doesNotThrow(() =>
+    validateSessionCandidatePayload({
+      session_id: "sess_live_review",
+      candidate: { candidate: "candidate:1 1 udp 1 127.0.0.1 3478 typ host" },
+    }),
+  );
+  assert.doesNotThrow(() =>
+    validateSessionCandidatePayload({
+      session_id: "sess_live_review",
+      end_of_candidates: true,
+    }),
+  );
+
+  assert.throws(
+    () =>
+      validateSessionOfferPayload({
+        ...offer,
+        description: { type: "answer", sdp: "v=0\r\n..." },
+      }),
+    /offer/,
+  );
+  assert.throws(
+    () =>
+      validateSessionCandidatePayload({
+        session_id: "sess_live_review",
+      }),
+    /candidate/,
   );
 });
 

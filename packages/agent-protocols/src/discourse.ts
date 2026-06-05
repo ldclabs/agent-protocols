@@ -33,6 +33,10 @@ export const eventType = {
   ROOM_STEER: "room.steer",
   MAP_UPDATE: "map.update",
   ARTIFACT_CREATE: "artifact.create",
+  SESSION_OFFER: "session.offer",
+  SESSION_ANSWER: "session.answer",
+  SESSION_CANDIDATE: "session.candidate",
+  SESSION_CLOSE: "session.close",
 } as const;
 
 export type EventType = (typeof eventType)[keyof typeof eventType];
@@ -63,6 +67,17 @@ export type ResolutionOutcome =
   | "rejected"
   | "deferred"
   | "superseded";
+export type SessionType = "webrtc";
+export type SessionMediaKind = "audio" | "video" | "screen" | "data" | "file";
+export type SessionTopology = "peer_to_peer" | "sfu" | "turn_relay";
+export type SessionDescriptionType = "offer" | "answer";
+const sessionMediaKinds = new Set<string>([
+  "audio",
+  "video",
+  "screen",
+  "data",
+  "file",
+]);
 
 export interface RoomCreatePayload {
   topic: string;
@@ -262,6 +277,62 @@ export interface ArtifactCreatePayload {
   source_event_ids?: string[];
   discussion_event_ids?: string[];
   map_event_id?: string;
+}
+
+export interface SessionDescription {
+  type: SessionDescriptionType;
+  sdp: string;
+}
+
+export interface SessionIceCandidate {
+  candidate: string;
+  sdp_mid?: string;
+  sdp_mline_index?: number;
+  username_fragment?: string;
+}
+
+export interface SessionDataTransfer {
+  transfer_id: string;
+  file_name?: string;
+  size_bytes?: number;
+  mime_type?: string;
+  content_digest?: string;
+}
+
+export interface SessionOfferPayload {
+  session_id: string;
+  session_type: SessionType;
+  media: SessionMediaKind[];
+  description: SessionDescription;
+  to?: AgentId[];
+  topology?: SessionTopology;
+  transfers?: SessionDataTransfer[];
+  expires_at?: number;
+  references?: string[];
+  extra?: Record<string, unknown>;
+}
+
+export interface SessionAnswerPayload {
+  session_id: string;
+  offer_event_id: string;
+  description: SessionDescription;
+  accepted_media?: SessionMediaKind[];
+  transfers?: SessionDataTransfer[];
+  extra?: Record<string, unknown>;
+}
+
+export interface SessionCandidatePayload {
+  session_id: string;
+  candidate?: SessionIceCandidate;
+  target?: AgentId;
+  end_of_candidates?: boolean;
+  extra?: Record<string, unknown>;
+}
+
+export interface SessionClosePayload {
+  session_id: string;
+  reason?: string;
+  references?: string[];
 }
 
 export interface ServerRecord<P = unknown> {
@@ -472,6 +543,53 @@ export function validatePollVotePayload(
   }
 }
 
+export function validateSessionOfferPayload(
+  payload: SessionOfferPayload,
+): void {
+  validateSessionId(payload.session_id);
+  if (payload.session_type !== "webrtc") {
+    throw protocolError("invalid_session", "session_type must be webrtc");
+  }
+  if (!Array.isArray(payload.media) || payload.media.length === 0) {
+    throw protocolError("invalid_session", "media must not be empty");
+  }
+  for (const media of payload.media) {
+    if (!sessionMediaKinds.has(media)) {
+      throw protocolError("invalid_session", `unsupported media kind ${media}`);
+    }
+  }
+  validateSessionDescription(payload.description, "offer");
+  validateSessionTransfers(payload.transfers ?? []);
+}
+
+export function validateSessionAnswerPayload(
+  payload: SessionAnswerPayload,
+): void {
+  validateSessionId(payload.session_id);
+  if (payload.offer_event_id.trim() === "") {
+    throw protocolError("invalid_session", "offer_event_id is required");
+  }
+  validateSessionDescription(payload.description, "answer");
+  validateSessionTransfers(payload.transfers ?? []);
+}
+
+export function validateSessionCandidatePayload(
+  payload: SessionCandidatePayload,
+): void {
+  validateSessionId(payload.session_id);
+  if (payload.end_of_candidates) return;
+  if (
+    !payload.candidate ||
+    typeof payload.candidate.candidate !== "string" ||
+    payload.candidate.candidate.trim() === ""
+  ) {
+    throw protocolError(
+      "invalid_session",
+      "candidate is required unless end_of_candidates is true",
+    );
+  }
+}
+
 export function serverRecordHashPayload(
   roomId: string,
   seq: number,
@@ -650,6 +768,10 @@ function moderatorCanSubmit(
       eventType.ROOM_STEER,
       eventType.MAP_UPDATE,
       eventType.ARTIFACT_CREATE,
+      eventType.SESSION_OFFER,
+      eventType.SESSION_ANSWER,
+      eventType.SESSION_CANDIDATE,
+      eventType.SESSION_CLOSE,
       eventType.MESSAGE_PROPOSAL_CREATE,
       eventType.MESSAGE_POLL_CREATE,
       eventType.MESSAGE_POLL_VOTE,
@@ -674,6 +796,10 @@ function speakerCanSubmit(type: string, policyAllowed: boolean): boolean {
       eventType.MESSAGE_PROPOSAL_CREATE,
       eventType.MESSAGE_POLL_CREATE,
       eventType.MESSAGE_POLL_VOTE,
+      eventType.SESSION_OFFER,
+      eventType.SESSION_ANSWER,
+      eventType.SESSION_CANDIDATE,
+      eventType.SESSION_CLOSE,
       eventType.REACTION_CREATE,
       eventType.ROOM_LEAVE,
     ]) ||
@@ -705,8 +831,60 @@ function eventTypeIn(type: string, values: readonly string[]): boolean {
   return values.includes(type);
 }
 
+function validateSessionId(sessionId: string): void {
+  if (sessionId.trim() === "") {
+    throw protocolError("invalid_session", "session_id is required");
+  }
+}
+
+function validateSessionDescription(
+  description: SessionDescription,
+  expectedType: SessionDescriptionType,
+): void {
+  if (
+    !description ||
+    typeof description.type !== "string" ||
+    typeof description.sdp !== "string"
+  ) {
+    throw protocolError("invalid_session", "session description is required");
+  }
+  if (description.type !== expectedType) {
+    throw protocolError(
+      "invalid_session",
+      `session description type must be ${expectedType}`,
+    );
+  }
+  if (description.sdp.trim() === "") {
+    throw protocolError("invalid_session", "session description sdp is required");
+  }
+}
+
+function validateSessionTransfers(transfers: SessionDataTransfer[]): void {
+  if (!Array.isArray(transfers)) {
+    throw protocolError("invalid_session", "transfers must be an array");
+  }
+  for (const transfer of transfers) {
+    if (
+      !transfer ||
+      typeof transfer.transfer_id !== "string" ||
+      transfer.transfer_id.trim() === ""
+    ) {
+      throw protocolError("invalid_session", "transfer_id is required");
+    }
+    if (
+      transfer.size_bytes !== undefined &&
+      (!Number.isInteger(transfer.size_bytes) || transfer.size_bytes < 0)
+    ) {
+      throw protocolError(
+        "invalid_session",
+        "size_bytes must be a non-negative integer",
+      );
+    }
+  }
+}
+
 function hashCanonicalJson(value: unknown): string {
-  const canonical = canonicalize(value);
+const canonical = canonicalize(value);
   if (canonical === undefined) {
     throw protocolError(
       "canonical_json",
