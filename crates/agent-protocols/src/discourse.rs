@@ -1,9 +1,18 @@
+//! Agent Discourse Protocol 1.0: kernel types, the room type system, and
+//! verification helpers.
+//!
+//! The protocol defines nine built-in event types. Every other event type is
+//! declared per room as a schema-validated type definition, either inline or
+//! imported from a type pack. Hosts validate structure and permissions; they
+//! never need to understand application semantics.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 
 use crate::error::{Result, SdkError};
@@ -11,6 +20,7 @@ use crate::identity::{verify_envelope, AgentId, Envelope, Event};
 
 pub const PROTOCOL: &str = "agent-discourse/1.0";
 
+/// The nine built-in event types. All other types are room-defined.
 pub mod event_type {
     pub const ROOM_CREATE: &str = "room.create";
     pub const ROOM_JOIN: &str = "room.join";
@@ -19,22 +29,34 @@ pub mod event_type {
     pub const ROOM_MEMBER_ROLE_UPDATE: &str = "room.member.role.update";
     pub const ROOM_CLOSE: &str = "room.close";
     pub const ROOM_CANCEL: &str = "room.cancel";
+    pub const TYPE_DEFINE: &str = "type.define";
     pub const MESSAGE_CREATE: &str = "message.create";
-    pub const REACTION_CREATE: &str = "reaction.create";
-    pub const MESSAGE_PROPOSAL_CREATE: &str = "message.proposal.create";
-    pub const MESSAGE_POLL_CREATE: &str = "message.poll.create";
-    pub const MESSAGE_POLL_VOTE: &str = "message.poll.vote";
-    pub const MESSAGE_RESOLUTION_CREATE: &str = "message.resolution.create";
-    pub const SOURCE_ADD: &str = "source.add";
-    pub const TURN_UPDATE: &str = "turn.update";
-    pub const QUESTION_CREATE: &str = "question.create";
-    pub const ROOM_STEER: &str = "room.steer";
-    pub const MAP_UPDATE: &str = "map.update";
-    pub const ARTIFACT_CREATE: &str = "artifact.create";
-    pub const SESSION_OFFER: &str = "session.offer";
-    pub const SESSION_ANSWER: &str = "session.answer";
-    pub const SESSION_CANDIDATE: &str = "session.candidate";
-    pub const SESSION_CLOSE: &str = "session.close";
+}
+
+pub const BUILTIN_EVENT_TYPES: [&str; 9] = [
+    event_type::ROOM_CREATE,
+    event_type::ROOM_JOIN,
+    event_type::ROOM_JOIN_REVIEW,
+    event_type::ROOM_LEAVE,
+    event_type::ROOM_MEMBER_ROLE_UPDATE,
+    event_type::ROOM_CLOSE,
+    event_type::ROOM_CANCEL,
+    event_type::TYPE_DEFINE,
+    event_type::MESSAGE_CREATE,
+];
+
+/// Custom event types must not use these prefixes.
+pub const RESERVED_TYPE_PREFIXES: [&str; 2] = ["room.", "type."];
+
+/// Registered type packs defined by the specification in `1.0.packs.json`.
+pub mod pack_id {
+    pub const REACTIONS: &str = "adp:reactions/1.0";
+    pub const DELIBERATION: &str = "adp:deliberation/1.0";
+    pub const CURATION: &str = "adp:curation/1.0";
+    pub const MODERATION: &str = "adp:moderation/1.0";
+    pub const REALTIME: &str = "adp:realtime/1.0";
+
+    pub const REGISTERED: [&str; 5] = [REACTIONS, DELIBERATION, CURATION, MODERATION, REALTIME];
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,21 +76,29 @@ pub enum Visibility {
     Private,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Moderator,
+    Speaker,
+    Observer,
+}
+
+/// Permission class of an event type.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum TurnPolicy {
-    Free,
-    RoundRobin,
-    ModeratorLed,
+pub enum TypeKind {
+    Message,
+    Signal,
+    Control,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum Role {
-    Moderator,
-    Expert,
-    Participant,
-    Observer,
+pub enum TypeStatus {
+    Active,
+    Deprecated,
+    Disabled,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,65 +112,9 @@ pub enum JoinRequestStatus {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MessageIntent {
-    Question,
-    Answer,
-    Clarification,
-    Critique,
-    Synthesis,
-    FollowUp,
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MapOperation {
-    UpsertNode,
-    MoveNode,
-    DeleteNode,
-    MergeNodes,
-    ReplaceSnapshot,
-    MarkResolved,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ResolutionOutcome {
-    Accepted,
-    Rejected,
-    Deferred,
-    Superseded,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionType {
-    Webrtc,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionMediaKind {
-    Audio,
-    Video,
-    Screen,
-    Data,
-    File,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionTopology {
-    PeerToPeer,
-    Sfu,
-    TurnRelay,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionDescriptionType {
-    Offer,
-    Answer,
+pub enum JoinDecision {
+    Approve,
+    Reject,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -148,6 +122,8 @@ pub struct RoomCreatePayload {
     pub topic: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agenda: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
     pub visibility: Visibility,
     pub start_time: i64,
     pub end_time: i64,
@@ -157,32 +133,10 @@ pub struct RoomCreatePayload {
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<RoomPolicy>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extensions: BTreeMap<String, Value>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct RoomPolicy {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_policy: Option<TurnPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub moderator_agent_ids: Vec<AgentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_participants: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observer_allowed: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observer_steering_allowed: Option<bool>,
-    #[serde(default, flatten)]
+    pub types: Vec<TypeDeclaration>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, Value>,
-}
-
-impl RoomPolicy {
-    pub fn new() -> Self {
-        Self::default()
-    }
 }
 
 impl RoomCreatePayload {
@@ -195,16 +149,135 @@ impl RoomCreatePayload {
         Self {
             topic: topic.into(),
             agenda: None,
+            guidance: None,
             visibility,
             start_time,
             end_time,
             tags: Vec::new(),
             language: None,
             policy: None,
-            extensions: BTreeMap::new(),
+            types: Vec::new(),
             extra: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RoomPolicy {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moderator_agent_ids: Vec<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_speakers: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observer_allowed: Option<bool>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl RoomPolicy {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// A room-scoped declaration of a custom event type.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TypeDef {
+    #[serde(rename = "type")]
+    pub name: String,
+    pub kind: TypeKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Self-contained JSON Schema (draft 2020-12) for the event payload.
+    pub schema: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<Vec<Role>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TypeStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_hint: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_payload_hint: Option<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl TypeDef {
+    pub fn status(&self) -> TypeStatus {
+        self.status.unwrap_or(TypeStatus::Active)
+    }
+}
+
+/// Per-type adjustments applied when importing a pack.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TypeOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<Vec<Role>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TypeStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_hint: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_payload_hint: Option<u64>,
+}
+
+/// Imports a registered pack (`use`) or an external pack (`pack` + `digest`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct PackImport {
+    #[serde(rename = "use", default, skip_serializing_if = "Option::is_none")]
+    pub use_pack: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub types: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, TypeOverride>,
+}
+
+/// One entry of `room.create.payload.types` or a `type.define` payload.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum TypeDeclaration {
+    Def(TypeDef),
+    Import(PackImport),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Pack {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub types: Vec<TypeDef>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// The shape of `1.0.packs.json` and externally published pack documents.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PackDocument {
+    pub protocol: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub packs: Vec<Pack>,
+}
+
+/// Indexes the packs of a document by pack id for registry materialization.
+pub fn pack_map(document: &PackDocument) -> BTreeMap<String, Pack> {
+    document
+        .packs
+        .iter()
+        .map(|pack| (pack.id.clone(), pack.clone()))
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -232,11 +305,27 @@ pub struct RoomResponse {
     pub id: String,
     pub status: RoomState,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_time: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<RoomPolicy>,
+    /// Materialized type registry served by the host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<TypeDef>,
     pub seq: u64,
     #[serde(default)]
     pub pre_hash: Option<String>,
     pub hash: String,
     pub received_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelope: Option<Envelope<RoomCreatePayload>>,
 }
 
@@ -246,6 +335,8 @@ pub struct RoomJoinPayload {
     pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perspective: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -296,14 +387,7 @@ pub struct RoomJoinRequest {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum JoinDecision {
-    Approve,
-    Reject,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RoomJoinReviewPayload {
     pub request_id: String,
     pub member: AgentId,
@@ -312,28 +396,43 @@ pub struct RoomJoinReviewPayload {
     pub role: Option<Role>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RoomLeavePayload {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RoleUpdatePayload {
     pub member: AgentId,
     pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Shared payload of `room.leave`, `room.close`, and `room.cancel`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ReasonPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+pub type RoomLeavePayload = ReasonPayload;
+pub type RoomClosePayload = ReasonPayload;
+pub type RoomCancelPayload = ReasonPayload;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MessageCreatePayload {
     pub content_type: String,
     pub content: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl MessageCreatePayload {
@@ -342,6 +441,7 @@ impl MessageCreatePayload {
             content_type: content_type.into(),
             content,
             references: Vec::new(),
+            extra: BTreeMap::new(),
         }
     }
 
@@ -352,293 +452,6 @@ impl MessageCreatePayload {
     pub fn markdown(markdown: impl Into<String>) -> Self {
         Self::new("text/markdown", Value::String(markdown.into()))
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ProposalCreatePayload {
-    pub proposal_id: String,
-    pub title: String,
-    pub body: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_event_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PollOption {
-    pub id: String,
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct PollCreatePayload {
-    pub poll_id: String,
-    pub question: String,
-    pub options: Vec<PollOption>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_choices: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_choices: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub closes_at: Option<i64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PollVotePayload {
-    pub event_id: String,
-    pub option_ids: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ResolutionCreatePayload {
-    pub resolution_id: String,
-    pub outcome: ResolutionOutcome,
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proposal_event_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub poll_event_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ReactionCreatePayload {
-    pub event_id: String,
-    pub reaction: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-}
-
-impl ReactionCreatePayload {
-    pub fn new(event_id: impl Into<String>, reaction: impl Into<String>) -> Self {
-        Self {
-            event_id: event_id.into(),
-            reaction: reaction.into(),
-            score: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SourceAddPayload {
-    pub source_type: String,
-    pub uri: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retrieved_at: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub excerpt: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct TurnUpdatePayload {
-    pub turn_id: u64,
-    pub speaker: AgentId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub intent: Option<MessageIntent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topic: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct QuestionGeneratePayload {
-    pub question: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_perspectives: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub basis: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_event_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub priority: Option<f64>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct DiscourseSteerPayload {
-    pub instruction: String,
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub priority: Option<f64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MapNodeStatus {
-    Open,
-    Resolved,
-    Closed,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MapNode {
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<MapNodeStatus>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_event_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub discussion_event_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<MapNode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MapUpdatePayload {
-    pub operation: MapOperation,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node: Option<MapNode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-    #[serde(default, flatten)]
-    pub extensions: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ArtifactCreatePayload {
-    pub artifact_id: String,
-    pub format: String,
-    pub title: String,
-    pub uri: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_event_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub discussion_event_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub map_event_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionDescription {
-    #[serde(rename = "type")]
-    pub kind: SessionDescriptionType,
-    pub sdp: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionIceCandidate {
-    pub candidate: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sdp_mid: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sdp_mline_index: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username_fragment: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionDataTransfer {
-    pub transfer_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size_bytes: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mime_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_digest: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SessionOfferPayload {
-    pub session_id: String,
-    pub session_type: SessionType,
-    pub media: Vec<SessionMediaKind>,
-    pub description: SessionDescription,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub to: Vec<AgentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topology: Option<SessionTopology>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub transfers: Vec<SessionDataTransfer>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<i64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SessionAnswerPayload {
-    pub session_id: String,
-    pub offer_event_id: String,
-    pub description: SessionDescription,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub accepted_media: Vec<SessionMediaKind>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub transfers: Vec<SessionDataTransfer>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SessionCandidatePayload {
-    pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub candidate: Option<SessionIceCandidate>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<AgentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub end_of_candidates: Option<bool>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SessionClosePayload {
-    pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RoomClosePayload {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RoomCancelPayload {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -656,27 +469,12 @@ pub struct DiscourseProtocolDiscovery {
     pub host: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registered_packs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ProfileResolverMetadata>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub endpoints: BTreeMap<String, String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MapSnapshotRef {
-    pub event_id: String,
-    pub digest: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ArtifactManifest {
-    pub artifact_id: String,
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub format: String,
-    pub uri: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -694,14 +492,10 @@ pub struct ArchiveManifest {
     pub last_hash: String,
     pub events_sha3_256: String,
     pub archive_root: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub map_snapshot: Option<MapSnapshotRef>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub artifacts: Vec<ArtifactManifest>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub discourse_trace_quality_score: Option<f64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub formats: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
 }
 
 pub fn room_create_event(
@@ -720,6 +514,24 @@ pub fn room_create_event(
     )
 }
 
+pub fn type_define_event(
+    actor: AgentId,
+    created_at: i64,
+    nonce: u64,
+    room_id: impl Into<String>,
+    declaration: TypeDeclaration,
+) -> Event<TypeDeclaration> {
+    Event::new(
+        PROTOCOL,
+        event_type::TYPE_DEFINE,
+        actor,
+        created_at,
+        nonce,
+        declaration,
+    )
+    .with_room_id(room_id)
+}
+
 pub fn discourse_event<P>(
     kind: impl Into<String>,
     actor: AgentId,
@@ -729,6 +541,14 @@ pub fn discourse_event<P>(
     payload: P,
 ) -> Event<P> {
     Event::new(PROTOCOL, kind, actor, created_at, nonce, payload).with_room_id(room_id)
+}
+
+pub fn is_builtin_event_type(event_type: &str) -> bool {
+    BUILTIN_EVENT_TYPES.contains(&event_type)
+}
+
+pub fn event_requires_room_id(event_type: &str) -> bool {
+    event_type != event_type::ROOM_CREATE
 }
 
 pub fn validate_discourse_envelope<P>(envelope: &Envelope<P>) -> Result<()>
@@ -743,26 +563,146 @@ where
             actual: envelope.event.protocol.clone(),
         });
     }
-    if event_requires_room_id(&envelope.event.kind) && envelope.event.room_id.is_none() {
+    if envelope.event.kind == event_type::ROOM_CREATE {
+        if envelope.event.room_id.is_some() {
+            return Err(SdkError::InvalidPayload(
+                "room.create must not include room_id".to_owned(),
+            ));
+        }
+    } else if envelope.event.room_id.is_none() {
         return Err(SdkError::MissingRoomId);
     }
     Ok(())
 }
 
 pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Result<()> {
+    if envelope.event.kind == event_type::ROOM_CREATE {
+        return match envelope.event.room_id.as_deref() {
+            None => Ok(()),
+            Some(_) => Err(SdkError::InvalidPayload(
+                "room.create must not include room_id".to_owned(),
+            )),
+        };
+    }
     match envelope.event.room_id.as_deref() {
         Some(actual) if actual == path_room_id => Ok(()),
         Some(actual) => Err(SdkError::RoomIdMismatch {
             expected: path_room_id.to_owned(),
             actual: actual.to_owned(),
         }),
-        None if envelope.event.kind == event_type::ROOM_CREATE => Ok(()),
         None => Err(SdkError::MissingRoomId),
     }
 }
 
-pub fn event_requires_room_id(event_type: &str) -> bool {
-    event_type != event_type::ROOM_CREATE
+/// Checks the shape of a custom event type name: lowercase dot-separated,
+/// at least two segments, not built-in, not under a reserved prefix.
+pub fn validate_custom_event_type_name(name: &str) -> Result<()> {
+    let segments: Vec<&str> = name.split('.').collect();
+    let valid_shape = segments.len() >= 2
+        && segments.iter().all(|segment| {
+            let mut chars = segment.chars();
+            matches!(chars.next(), Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit())
+                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        });
+    if !valid_shape {
+        return Err(SdkError::InvalidPayload(format!(
+            "invalid event type name: {name}"
+        )));
+    }
+    if is_builtin_event_type(name) {
+        return Err(SdkError::InvalidPayload(format!(
+            "{name} is a built-in event type"
+        )));
+    }
+    if RESERVED_TYPE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+    {
+        return Err(SdkError::InvalidPayload(format!(
+            "{name} uses a reserved type prefix"
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_type_def(def: &TypeDef) -> Result<()> {
+    validate_custom_event_type_name(&def.name)?;
+    if def.title.trim().is_empty() {
+        return Err(SdkError::InvalidPayload(
+            "type definition title must not be empty".to_owned(),
+        ));
+    }
+    if !def.schema.is_object() {
+        return Err(SdkError::InvalidPayload(
+            "type definition schema must be a JSON Schema object".to_owned(),
+        ));
+    }
+    compile_schema(&def.schema)?;
+    if matches!(&def.roles, Some(roles) if roles.is_empty()) {
+        return Err(SdkError::InvalidPayload(
+            "type definition roles must not be empty".to_owned(),
+        ));
+    }
+    if matches!(def.rate_hint, Some(0)) || matches!(def.max_payload_hint, Some(0)) {
+        return Err(SdkError::InvalidPayload(
+            "type definition hints must be positive".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_pack_import(import: &PackImport) -> Result<()> {
+    match (&import.use_pack, &import.pack, &import.digest) {
+        (Some(id), None, None) => {
+            if !is_registered_pack_id(id) {
+                return Err(SdkError::InvalidPayload(format!(
+                    "invalid registered pack id: {id}"
+                )));
+            }
+        }
+        (None, Some(_), Some(digest)) => {
+            if digest.trim().is_empty() {
+                return Err(SdkError::InvalidPayload(
+                    "external pack digest must not be empty".to_owned(),
+                ));
+            }
+        }
+        _ => {
+            return Err(SdkError::InvalidPayload(
+                "pack import requires either use, or pack with digest".to_owned(),
+            ));
+        }
+    }
+    if matches!(&import.types, Some(types) if types.is_empty()) {
+        return Err(SdkError::InvalidPayload(
+            "pack import types subset must not be empty".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_type_declaration(declaration: &TypeDeclaration) -> Result<()> {
+    match declaration {
+        TypeDeclaration::Def(def) => validate_type_def(def),
+        TypeDeclaration::Import(import) => validate_pack_import(import),
+    }
+}
+
+fn is_registered_pack_id(id: &str) -> bool {
+    let Some(rest) = id.strip_prefix("adp:") else {
+        return false;
+    };
+    let Some((name, version)) = rest.split_once('/') else {
+        return false;
+    };
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && version.split('.').count() == 2
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
 }
 
 pub fn validate_room_create_payload(payload: &RoomCreatePayload) -> Result<()> {
@@ -777,118 +717,210 @@ pub fn validate_room_create_payload(payload: &RoomCreatePayload) -> Result<()> {
         ));
     }
     if let Some(policy) = &payload.policy {
-        if matches!(policy.max_participants, Some(0)) {
+        if matches!(policy.max_speakers, Some(0)) {
             return Err(SdkError::InvalidPayload(
-                "max_participants must be a positive integer".to_owned(),
+                "max_speakers must be a positive integer".to_owned(),
             ));
         }
+    }
+    for declaration in &payload.types {
+        validate_type_declaration(declaration)?;
     }
     Ok(())
 }
 
-pub fn validate_poll_create_payload(payload: &PollCreatePayload) -> Result<()> {
-    if payload.poll_id.trim().is_empty() || payload.question.trim().is_empty() {
+pub fn validate_message_create_payload(payload: &MessageCreatePayload) -> Result<()> {
+    if payload.content_type.trim().is_empty() {
         return Err(SdkError::InvalidPayload(
-            "poll_id and question are required".to_owned(),
-        ));
-    }
-    if payload.options.len() < 2 {
-        return Err(SdkError::InvalidPayload(
-            "poll requires at least two options".to_owned(),
-        ));
-    }
-    let mut option_ids = BTreeSet::new();
-    for option in &payload.options {
-        if option.id.trim().is_empty() || option.label.trim().is_empty() {
-            return Err(SdkError::InvalidPayload(
-                "option id and label are required".to_owned(),
-            ));
-        }
-        if !option_ids.insert(option.id.as_str()) {
-            return Err(SdkError::InvalidPayload(
-                "poll option ids must be unique".to_owned(),
-            ));
-        }
-    }
-    let min_choices = payload.min_choices.unwrap_or(1);
-    let max_choices = payload.max_choices.unwrap_or(1);
-    if min_choices < 1 || max_choices < min_choices {
-        return Err(SdkError::InvalidPayload(
-            "invalid poll choice limits".to_owned(),
+            "content_type must not be empty".to_owned(),
         ));
     }
     Ok(())
 }
 
-pub fn validate_poll_vote_payload(
-    payload: &PollVotePayload,
-    poll: &PollCreatePayload,
-    now_ms: Option<i64>,
+/// The effective set of type definitions active in a room.
+#[derive(Clone, Debug, Default)]
+pub struct TypeRegistry {
+    types: BTreeMap<String, TypeDef>,
+}
+
+impl TypeRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Materializes a registry from declarations, resolving pack imports from
+    /// `packs`, keyed by registered pack id or external pack URI.
+    pub fn from_declarations(
+        declarations: &[TypeDeclaration],
+        packs: &BTreeMap<String, Pack>,
+    ) -> Result<Self> {
+        let mut registry = Self::new();
+        for declaration in declarations {
+            registry.apply(declaration, packs)?;
+        }
+        Ok(registry)
+    }
+
+    /// Applies one declaration: an inline definition or a pack import.
+    /// Redefining an existing type replaces it; the latest definition wins.
+    pub fn apply(
+        &mut self,
+        declaration: &TypeDeclaration,
+        packs: &BTreeMap<String, Pack>,
+    ) -> Result<()> {
+        match declaration {
+            TypeDeclaration::Def(def) => self.define(def.clone()),
+            TypeDeclaration::Import(import) => self.import(import, packs),
+        }
+    }
+
+    pub fn define(&mut self, def: TypeDef) -> Result<()> {
+        validate_type_def(&def)?;
+        self.types.insert(def.name.clone(), def);
+        Ok(())
+    }
+
+    fn import(&mut self, import: &PackImport, packs: &BTreeMap<String, Pack>) -> Result<()> {
+        validate_pack_import(import)?;
+        let reference = import
+            .use_pack
+            .as_deref()
+            .or(import.pack.as_deref())
+            .expect("validated pack import has a reference");
+        let pack = packs
+            .get(reference)
+            .ok_or_else(|| SdkError::PackUnavailable(reference.to_owned()))?;
+        let available: BTreeSet<&str> = pack.types.iter().map(|def| def.name.as_str()).collect();
+        if let Some(subset) = &import.types {
+            for name in subset {
+                if !available.contains(name.as_str()) {
+                    return Err(SdkError::PackUnavailable(format!(
+                        "type {name} is not in pack {reference}"
+                    )));
+                }
+            }
+        }
+        for name in import.overrides.keys() {
+            let imported = import
+                .types
+                .as_ref()
+                .map(|subset| subset.contains(name))
+                .unwrap_or_else(|| available.contains(name.as_str()));
+            if !imported {
+                return Err(SdkError::InvalidPayload(format!(
+                    "override target {name} is not imported from pack {reference}"
+                )));
+            }
+        }
+        for def in &pack.types {
+            if let Some(subset) = &import.types {
+                if !subset.contains(&def.name) {
+                    continue;
+                }
+            }
+            let mut def = def.clone();
+            if let Some(over) = import.overrides.get(&def.name) {
+                if let Some(roles) = &over.roles {
+                    def.roles = Some(roles.clone());
+                }
+                if let Some(instructions) = &over.instructions {
+                    def.instructions = Some(instructions.clone());
+                }
+                if let Some(status) = over.status {
+                    def.status = Some(status);
+                }
+                if let Some(rate_hint) = over.rate_hint {
+                    def.rate_hint = Some(rate_hint);
+                }
+                if let Some(max_payload_hint) = over.max_payload_hint {
+                    def.max_payload_hint = Some(max_payload_hint);
+                }
+            }
+            self.define(def)?;
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, event_type: &str) -> Option<&TypeDef> {
+        self.types.get(event_type)
+    }
+
+    pub fn contains(&self, event_type: &str) -> bool {
+        self.types.contains_key(event_type)
+    }
+
+    pub fn len(&self) -> usize {
+        self.types.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
+    }
+
+    pub fn definitions(&self) -> impl Iterator<Item = &TypeDef> {
+        self.types.values()
+    }
+
+    /// Validates a custom event payload against the type's schema and status.
+    pub fn validate_payload(&self, event_type: &str, payload: &Value) -> Result<()> {
+        let def = self
+            .get(event_type)
+            .ok_or_else(|| SdkError::TypeNotDefined(event_type.to_owned()))?;
+        if def.status() == TypeStatus::Disabled {
+            return Err(SdkError::TypeDisabled(event_type.to_owned()));
+        }
+        let validator = compile_schema(&def.schema)?;
+        if let Err(error) = validator.validate(payload) {
+            return Err(SdkError::PayloadSchemaViolation(format!(
+                "{event_type}: {error}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Validates an event payload: built-in payloads are accepted as-is (use the
+/// typed validators for them); custom payloads must satisfy the registry.
+pub fn validate_event_against_registry(
+    event_type: &str,
+    payload: &Value,
+    registry: &TypeRegistry,
 ) -> Result<()> {
-    if let (Some(closes_at), Some(now_ms)) = (poll.closes_at, now_ms) {
-        if now_ms > closes_at {
-            return Err(SdkError::InvalidPayload("poll is closed".to_owned()));
-        }
-    }
-    let min_choices = poll.min_choices.unwrap_or(1) as usize;
-    let max_choices = poll.max_choices.unwrap_or(1) as usize;
-    let option_ids: BTreeSet<&str> = poll
-        .options
-        .iter()
-        .map(|option| option.id.as_str())
-        .collect();
-    let selected: BTreeSet<&str> = payload.option_ids.iter().map(String::as_str).collect();
-    if selected.len() != payload.option_ids.len() {
-        return Err(SdkError::InvalidPayload(
-            "duplicate poll options".to_owned(),
-        ));
-    }
-    if selected.len() < min_choices || selected.len() > max_choices {
-        return Err(SdkError::InvalidPayload(
-            "invalid number of options".to_owned(),
-        ));
-    }
-    if selected
-        .iter()
-        .any(|option_id| !option_ids.contains(option_id))
-    {
-        return Err(SdkError::InvalidPayload("unknown poll option".to_owned()));
-    }
-    Ok(())
-}
-
-pub fn validate_session_offer_payload(payload: &SessionOfferPayload) -> Result<()> {
-    validate_session_id(&payload.session_id)?;
-    if payload.media.is_empty() {
-        return Err(SdkError::InvalidPayload(
-            "media must not be empty".to_owned(),
-        ));
-    }
-    validate_session_description(&payload.description, SessionDescriptionType::Offer)?;
-    validate_session_transfers(&payload.transfers)
-}
-
-pub fn validate_session_answer_payload(payload: &SessionAnswerPayload) -> Result<()> {
-    validate_session_id(&payload.session_id)?;
-    if payload.offer_event_id.trim().is_empty() {
-        return Err(SdkError::InvalidPayload(
-            "offer_event_id is required".to_owned(),
-        ));
-    }
-    validate_session_description(&payload.description, SessionDescriptionType::Answer)?;
-    validate_session_transfers(&payload.transfers)
-}
-
-pub fn validate_session_candidate_payload(payload: &SessionCandidatePayload) -> Result<()> {
-    validate_session_id(&payload.session_id)?;
-    if payload.end_of_candidates.unwrap_or(false) {
+    if is_builtin_event_type(event_type) {
         return Ok(());
     }
-    match &payload.candidate {
-        Some(candidate) if !candidate.candidate.trim().is_empty() => Ok(()),
-        _ => Err(SdkError::InvalidPayload(
-            "candidate is required unless end_of_candidates is true".to_owned(),
-        )),
+    registry.validate_payload(event_type, payload)
+}
+
+fn compile_schema(schema: &Value) -> Result<jsonschema::Validator> {
+    jsonschema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .build(schema)
+        .map_err(|err| SdkError::InvalidPayload(format!("invalid type schema: {err}")))
+}
+
+/// Verifies a `<algorithm>:<base64url-digest>` content digest over raw bytes.
+/// Supports `sha256` and `sha3-256`.
+pub fn verify_pack_digest(bytes: &[u8], digest: &str) -> Result<()> {
+    let (algorithm, expected) = digest.split_once(':').ok_or_else(|| {
+        SdkError::PackUnavailable(format!("invalid digest format: {digest}"))
+    })?;
+    let actual = match algorithm {
+        "sha256" => URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)),
+        "sha3-256" => URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes)),
+        _ => {
+            return Err(SdkError::PackUnavailable(format!(
+                "unsupported digest algorithm: {algorithm}"
+            )));
+        }
+    };
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(SdkError::PackUnavailable(
+            "pack digest mismatch".to_owned(),
+        ))
     }
 }
 
@@ -1005,16 +1037,12 @@ where
     hash_canonical_json(records)
 }
 
+/// Permission inputs for one actor in one room.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PermissionContext {
     pub role: Option<Role>,
     pub is_creator: bool,
     pub join_request_approved: bool,
-    pub moderator_authorized: bool,
-    pub expert_policy_allowed: bool,
-    pub participant_policy_allowed: bool,
-    pub observer_steering_allowed: bool,
-    pub observer_poll_vote_allowed: bool,
 }
 
 impl PermissionContext {
@@ -1034,47 +1062,73 @@ impl PermissionContext {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct StateWriteOptions {
-    pub post_end_reaction_allowed: bool,
+/// Default sender roles for each kind. The creator passes every role check.
+pub fn default_kind_roles(kind: TypeKind) -> &'static [Role] {
+    match kind {
+        TypeKind::Message => &[Role::Moderator, Role::Speaker],
+        TypeKind::Signal => &[Role::Moderator, Role::Speaker, Role::Observer],
+        TypeKind::Control => &[Role::Moderator],
+    }
 }
 
-pub fn can_submit_event(event_type: &str, context: &PermissionContext) -> bool {
-    if event_type == event_type::ROOM_CREATE {
-        return true;
-    }
-    if event_type == event_type::ROOM_JOIN {
-        return context.join_request_approved;
-    }
-
-    if context.is_creator {
-        return is_known_event_type(event_type);
-    }
-
-    match context.role {
-        Some(Role::Moderator) => moderator_can_submit(event_type, context.moderator_authorized),
-        Some(Role::Expert) => speaker_can_submit(event_type, context.expert_policy_allowed),
-        Some(Role::Participant) => {
-            speaker_can_submit(event_type, context.participant_policy_allowed)
+/// Role check for one event type, using kind defaults and per-type overrides
+/// from the room's type registry. State checks are separate.
+pub fn can_submit_event(
+    event_type: &str,
+    context: &PermissionContext,
+    registry: &TypeRegistry,
+) -> bool {
+    match event_type {
+        event_type::ROOM_CREATE => true,
+        event_type::ROOM_JOIN => context.join_request_approved,
+        event_type::ROOM_LEAVE => context.is_creator || context.role.is_some(),
+        event_type::ROOM_JOIN_REVIEW
+        | event_type::ROOM_MEMBER_ROLE_UPDATE
+        | event_type::ROOM_CLOSE
+        | event_type::ROOM_CANCEL
+        | event_type::TYPE_DEFINE => {
+            context.is_creator || context.role == Some(Role::Moderator)
         }
-        Some(Role::Observer) => observer_can_submit(event_type, context),
-        None => false,
+        event_type::MESSAGE_CREATE => {
+            context.is_creator
+                || matches!(context.role, Some(Role::Moderator) | Some(Role::Speaker))
+        }
+        custom => {
+            let Some(def) = registry.get(custom) else {
+                return false;
+            };
+            if def.status() == TypeStatus::Disabled {
+                return false;
+            }
+            if context.is_creator {
+                return true;
+            }
+            let Some(role) = context.role else {
+                return false;
+            };
+            match &def.roles {
+                Some(roles) => roles.contains(&role),
+                None => default_kind_roles(def.kind).contains(&role),
+            }
+        }
     }
 }
 
-pub fn can_write_in_state(event_type: &str, state: RoomState, options: StateWriteOptions) -> bool {
+pub fn can_write_in_state(event_type: &str, state: RoomState) -> bool {
     match state {
         RoomState::Scheduled => matches!(
             event_type,
-            event_type::ROOM_JOIN | event_type::ROOM_JOIN_REVIEW | event_type::ROOM_CANCEL
+            event_type::ROOM_JOIN
+                | event_type::ROOM_JOIN_REVIEW
+                | event_type::ROOM_MEMBER_ROLE_UPDATE
+                | event_type::ROOM_LEAVE
+                | event_type::TYPE_DEFINE
+                | event_type::ROOM_CANCEL
         ),
         RoomState::Active => {
             event_type != event_type::ROOM_CREATE && event_type != event_type::ROOM_CANCEL
         }
-        RoomState::Ended => {
-            options.post_end_reaction_allowed && event_type == event_type::REACTION_CREATE
-        }
-        RoomState::Cancelled => false,
+        RoomState::Ended | RoomState::Cancelled => false,
     }
 }
 
@@ -1082,155 +1136,22 @@ pub fn can_accept_room_write(
     event_type: &str,
     state: RoomState,
     permission: &PermissionContext,
-    state_options: StateWriteOptions,
+    registry: &TypeRegistry,
 ) -> bool {
-    can_submit_event(event_type, permission) && can_write_in_state(event_type, state, state_options)
+    can_submit_event(event_type, permission, registry) && can_write_in_state(event_type, state)
 }
 
 pub fn validate_room_write(
     event_type: &str,
     state: RoomState,
     permission: &PermissionContext,
-    state_options: StateWriteOptions,
+    registry: &TypeRegistry,
 ) -> Result<()> {
-    if can_accept_room_write(event_type, state, permission, state_options) {
+    if can_accept_room_write(event_type, state, permission, registry) {
         Ok(())
     } else {
         Err(SdkError::PermissionDenied)
     }
-}
-
-fn moderator_can_submit(event_type: &str, moderator_authorized: bool) -> bool {
-    matches!(
-        event_type,
-        event_type::ROOM_JOIN_REVIEW
-            | event_type::ROOM_CLOSE
-            | event_type::MESSAGE_CREATE
-            | event_type::SOURCE_ADD
-            | event_type::TURN_UPDATE
-            | event_type::QUESTION_CREATE
-            | event_type::ROOM_STEER
-            | event_type::MAP_UPDATE
-            | event_type::ARTIFACT_CREATE
-            | event_type::SESSION_OFFER
-            | event_type::SESSION_ANSWER
-            | event_type::SESSION_CANDIDATE
-            | event_type::SESSION_CLOSE
-            | event_type::MESSAGE_PROPOSAL_CREATE
-            | event_type::MESSAGE_POLL_CREATE
-            | event_type::MESSAGE_POLL_VOTE
-            | event_type::MESSAGE_RESOLUTION_CREATE
-            | event_type::REACTION_CREATE
-            | event_type::ROOM_LEAVE
-    ) || (moderator_authorized
-        && matches!(
-            event_type,
-            event_type::ROOM_MEMBER_ROLE_UPDATE | event_type::ROOM_CANCEL
-        ))
-}
-
-fn speaker_can_submit(event_type: &str, policy_allowed: bool) -> bool {
-    matches!(
-        event_type,
-        event_type::MESSAGE_CREATE
-            | event_type::SOURCE_ADD
-            | event_type::ROOM_STEER
-            | event_type::MESSAGE_PROPOSAL_CREATE
-            | event_type::MESSAGE_POLL_CREATE
-            | event_type::MESSAGE_POLL_VOTE
-            | event_type::SESSION_OFFER
-            | event_type::SESSION_ANSWER
-            | event_type::SESSION_CANDIDATE
-            | event_type::SESSION_CLOSE
-            | event_type::REACTION_CREATE
-            | event_type::ROOM_LEAVE
-    ) || (policy_allowed
-        && matches!(
-            event_type,
-            event_type::QUESTION_CREATE
-                | event_type::MAP_UPDATE
-                | event_type::ARTIFACT_CREATE
-                | event_type::MESSAGE_RESOLUTION_CREATE
-        ))
-}
-
-fn observer_can_submit(event_type: &str, context: &PermissionContext) -> bool {
-    matches!(
-        event_type,
-        event_type::REACTION_CREATE | event_type::ROOM_LEAVE
-    ) || (context.observer_steering_allowed && event_type == event_type::ROOM_STEER)
-        || (context.observer_poll_vote_allowed && event_type == event_type::MESSAGE_POLL_VOTE)
-}
-
-fn is_known_event_type(event_type: &str) -> bool {
-    matches!(
-        event_type,
-        event_type::ROOM_CREATE
-            | event_type::ROOM_JOIN
-            | event_type::ROOM_JOIN_REVIEW
-            | event_type::ROOM_LEAVE
-            | event_type::ROOM_MEMBER_ROLE_UPDATE
-            | event_type::ROOM_CLOSE
-            | event_type::ROOM_CANCEL
-            | event_type::MESSAGE_CREATE
-            | event_type::REACTION_CREATE
-            | event_type::MESSAGE_PROPOSAL_CREATE
-            | event_type::MESSAGE_POLL_CREATE
-            | event_type::MESSAGE_POLL_VOTE
-            | event_type::MESSAGE_RESOLUTION_CREATE
-            | event_type::SOURCE_ADD
-            | event_type::TURN_UPDATE
-            | event_type::QUESTION_CREATE
-            | event_type::ROOM_STEER
-            | event_type::MAP_UPDATE
-            | event_type::ARTIFACT_CREATE
-            | event_type::SESSION_OFFER
-            | event_type::SESSION_ANSWER
-            | event_type::SESSION_CANDIDATE
-            | event_type::SESSION_CLOSE
-    )
-}
-
-fn validate_session_id(session_id: &str) -> Result<()> {
-    if session_id.trim().is_empty() {
-        Err(SdkError::InvalidPayload(
-            "session_id is required".to_owned(),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-fn validate_session_description(
-    description: &SessionDescription,
-    expected_type: SessionDescriptionType,
-) -> Result<()> {
-    if description.kind != expected_type {
-        return Err(SdkError::InvalidPayload(format!(
-            "session description type must be {}",
-            match expected_type {
-                SessionDescriptionType::Offer => "offer",
-                SessionDescriptionType::Answer => "answer",
-            }
-        )));
-    }
-    if description.sdp.trim().is_empty() {
-        return Err(SdkError::InvalidPayload(
-            "session description sdp is required".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_session_transfers(transfers: &[SessionDataTransfer]) -> Result<()> {
-    for transfer in transfers {
-        if transfer.transfer_id.trim().is_empty() {
-            return Err(SdkError::InvalidPayload(
-                "transfer_id is required".to_owned(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn hash_canonical_json<T>(value: &T) -> Result<String>
@@ -1248,22 +1169,67 @@ mod tests {
     use crate::identity::AgentSigner;
     use serde_json::json;
 
+    fn registered_packs() -> BTreeMap<String, Pack> {
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/protocols/agent-discourse/1.0.packs.json"
+        ))
+        .expect("read registered packs");
+        let document: PackDocument = serde_json::from_str(&raw).expect("parse registered packs");
+        assert_eq!(document.protocol, PROTOCOL);
+        pack_map(&document)
+    }
+
+    fn finding_def() -> TypeDef {
+        TypeDef {
+            name: "review.finding".to_owned(),
+            kind: TypeKind::Message,
+            title: "Review finding".to_owned(),
+            description: None,
+            schema: json!({
+                "type": "object",
+                "required": ["severity", "summary"],
+                "properties": {
+                    "severity": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "summary": {"type": "string", "minLength": 1}
+                },
+                "additionalProperties": false
+            }),
+            roles: None,
+            instructions: None,
+            version: None,
+            status: None,
+            rate_hint: None,
+            max_payload_hint: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
     #[test]
     fn validates_room_create_without_room_id() {
         let signer = AgentSigner::from_seed([14; 32]);
         let payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
-        let event = Event::new(
-            PROTOCOL,
-            event_type::ROOM_CREATE,
-            signer.agent_id(),
-            100,
-            1,
-            payload,
-        );
-        let envelope = signer.sign_event(event).unwrap();
+        let envelope = signer
+            .sign_event(room_create_event(signer.agent_id(), 100, 1, payload))
+            .unwrap();
 
         validate_discourse_envelope(&envelope).unwrap();
         validate_room_path(&envelope, "d8ftedhpqhsusbg001tg").unwrap();
+    }
+
+    #[test]
+    fn rejects_room_create_with_room_id() {
+        let signer = AgentSigner::from_seed([14; 32]);
+        let payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
+        let event = room_create_event(signer.agent_id(), 100, 1, payload)
+            .with_room_id("d8ftedhpqhsusbg001tg");
+        let envelope = signer.sign_event(event).unwrap();
+
+        assert!(matches!(
+            validate_discourse_envelope(&envelope),
+            Err(SdkError::InvalidPayload(_))
+        ));
+        assert!(validate_room_path(&envelope, "d8ftedhpqhsusbg001tg").is_err());
     }
 
     #[test]
@@ -1286,237 +1252,302 @@ mod tests {
     }
 
     #[test]
-    fn applies_permission_matrix() {
-        let observer = PermissionContext::for_role(Role::Observer);
-        assert!(can_submit_event(event_type::REACTION_CREATE, &observer));
-        assert!(!can_submit_event(event_type::MESSAGE_CREATE, &observer));
-        assert!(!can_submit_event(event_type::ROOM_JOIN, &observer));
+    fn role_serde_matches_spec() {
+        assert_eq!(serde_json::to_string(&Role::Speaker).unwrap(), "\"speaker\"");
+        assert!(serde_json::from_str::<Role>("\"expert\"").is_err());
+        assert!(serde_json::from_str::<Role>("\"participant\"").is_err());
+    }
 
-        let approved_join = PermissionContext {
+    #[test]
+    fn validates_custom_event_type_names() {
+        validate_custom_event_type_name("review.finding").unwrap();
+        validate_custom_event_type_name("poll.vote").unwrap();
+        assert!(validate_custom_event_type_name("freeform").is_err());
+        assert!(validate_custom_event_type_name("room.custom").is_err());
+        assert!(validate_custom_event_type_name("type.new").is_err());
+        assert!(validate_custom_event_type_name("message.create").is_err());
+        assert!(validate_custom_event_type_name("Bad.Name").is_err());
+    }
+
+    #[test]
+    fn materializes_registry_from_packs_and_inline_defs() {
+        let packs = registered_packs();
+        let declarations = vec![
+            TypeDeclaration::Import(PackImport {
+                use_pack: Some(pack_id::REACTIONS.to_owned()),
+                ..PackImport::default()
+            }),
+            TypeDeclaration::Import(PackImport {
+                use_pack: Some(pack_id::DELIBERATION.to_owned()),
+                overrides: BTreeMap::from([(
+                    "poll.vote".to_owned(),
+                    TypeOverride {
+                        roles: Some(vec![Role::Moderator, Role::Speaker, Role::Observer]),
+                        ..TypeOverride::default()
+                    },
+                )]),
+                ..PackImport::default()
+            }),
+            TypeDeclaration::Def(finding_def()),
+        ];
+        let registry = TypeRegistry::from_declarations(&declarations, &packs).unwrap();
+
+        assert_eq!(registry.len(), 6);
+        assert!(registry.contains("reaction.create"));
+        assert!(registry.contains("poll.create"));
+        assert!(registry.contains("review.finding"));
+        let vote = registry.get("poll.vote").unwrap();
+        assert_eq!(
+            vote.roles.as_deref(),
+            Some([Role::Moderator, Role::Speaker, Role::Observer].as_slice())
+        );
+
+        let subset = TypeDeclaration::Import(PackImport {
+            use_pack: Some(pack_id::DELIBERATION.to_owned()),
+            types: Some(vec!["poll.create".to_owned(), "poll.vote".to_owned()]),
+            ..PackImport::default()
+        });
+        let registry = TypeRegistry::from_declarations(&[subset], &packs).unwrap();
+        assert_eq!(registry.len(), 2);
+        assert!(!registry.contains("question.create"));
+    }
+
+    #[test]
+    fn rejects_bad_pack_imports() {
+        let packs = registered_packs();
+        let unknown = TypeDeclaration::Import(PackImport {
+            use_pack: Some("adp:unknown/1.0".to_owned()),
+            ..PackImport::default()
+        });
+        assert!(matches!(
+            TypeRegistry::from_declarations(&[unknown], &packs),
+            Err(SdkError::PackUnavailable(_))
+        ));
+
+        let bad_override = TypeDeclaration::Import(PackImport {
+            use_pack: Some(pack_id::REACTIONS.to_owned()),
+            overrides: BTreeMap::from([("poll.vote".to_owned(), TypeOverride::default())]),
+            ..PackImport::default()
+        });
+        assert!(TypeRegistry::from_declarations(&[bad_override], &packs).is_err());
+
+        let both = PackImport {
+            use_pack: Some(pack_id::REACTIONS.to_owned()),
+            pack: Some("https://example.com/p.json".to_owned()),
+            digest: Some("sha256:abc".to_owned()),
+            ..PackImport::default()
+        };
+        assert!(validate_pack_import(&both).is_err());
+    }
+
+    #[test]
+    fn latest_type_definition_wins() {
+        let mut registry = TypeRegistry::new();
+        registry.define(finding_def()).unwrap();
+        let mut redefined = finding_def();
+        redefined.status = Some(TypeStatus::Disabled);
+        registry.define(redefined).unwrap();
+        assert_eq!(
+            registry.get("review.finding").unwrap().status(),
+            TypeStatus::Disabled
+        );
+    }
+
+    #[test]
+    fn validates_custom_payloads_against_pack_schemas() {
+        let packs = registered_packs();
+        let registry = TypeRegistry::from_declarations(
+            &[TypeDeclaration::Import(PackImport {
+                use_pack: Some(pack_id::DELIBERATION.to_owned()),
+                ..PackImport::default()
+            })],
+            &packs,
+        )
+        .unwrap();
+
+        let hash = "GDt8oHZQfQ3jl5ZUfyNxKZu07yAJdDYuaw_jf_JjLYs";
+        registry
+            .validate_payload(
+                "poll.vote",
+                &json!({"poll_event_id": hash, "option_ids": ["a"]}),
+            )
+            .unwrap();
+        assert!(matches!(
+            registry.validate_payload("poll.vote", &json!({"poll_event_id": hash})),
+            Err(SdkError::PayloadSchemaViolation(_))
+        ));
+        assert!(matches!(
+            registry.validate_payload("turn.update", &json!({})),
+            Err(SdkError::TypeNotDefined(_))
+        ));
+
+        let mut disabled = TypeRegistry::new();
+        let mut def = finding_def();
+        def.status = Some(TypeStatus::Disabled);
+        disabled.define(def).unwrap();
+        assert!(matches!(
+            disabled.validate_payload("review.finding", &json!({"severity": "high", "summary": "s"})),
+            Err(SdkError::TypeDisabled(_))
+        ));
+    }
+
+    #[test]
+    fn applies_kind_based_permissions() {
+        let packs = registered_packs();
+        let registry = TypeRegistry::from_declarations(
+            &[
+                TypeDeclaration::Import(PackImport {
+                    use_pack: Some(pack_id::REACTIONS.to_owned()),
+                    ..PackImport::default()
+                }),
+                TypeDeclaration::Import(PackImport {
+                    use_pack: Some(pack_id::DELIBERATION.to_owned()),
+                    overrides: BTreeMap::from([(
+                        "poll.vote".to_owned(),
+                        TypeOverride {
+                            roles: Some(vec![Role::Moderator, Role::Speaker, Role::Observer]),
+                            ..TypeOverride::default()
+                        },
+                    )]),
+                    ..PackImport::default()
+                }),
+                TypeDeclaration::Import(PackImport {
+                    use_pack: Some(pack_id::CURATION.to_owned()),
+                    ..PackImport::default()
+                }),
+            ],
+            &packs,
+        )
+        .unwrap();
+
+        let observer = PermissionContext::for_role(Role::Observer);
+        let speaker = PermissionContext::for_role(Role::Speaker);
+        let moderator = PermissionContext::for_role(Role::Moderator);
+        let creator = PermissionContext::creator(Some(Role::Observer));
+
+        // signal kind: all members, including observers
+        assert!(can_submit_event("reaction.create", &observer, &registry));
+        // poll.vote default excludes observers, but this room overrode roles
+        assert!(can_submit_event("poll.vote", &observer, &registry));
+        // message kind: speakers and moderators only
+        assert!(can_submit_event("resource.add", &speaker, &registry));
+        assert!(!can_submit_event("resource.add", &observer, &registry));
+        // control kind: moderators only
+        assert!(can_submit_event("graph.update", &moderator, &registry));
+        assert!(!can_submit_event("graph.update", &speaker, &registry));
+        // creator passes every role check regardless of current role
+        assert!(can_submit_event("graph.update", &creator, &registry));
+        assert!(can_submit_event(event_type::MESSAGE_CREATE, &creator, &registry));
+        // undefined types are rejected
+        assert!(!can_submit_event("session.offer", &speaker, &registry));
+
+        // built-in lifecycle rules
+        assert!(can_submit_event(event_type::ROOM_JOIN_REVIEW, &moderator, &registry));
+        assert!(!can_submit_event(event_type::ROOM_JOIN_REVIEW, &speaker, &registry));
+        assert!(can_submit_event(event_type::ROOM_MEMBER_ROLE_UPDATE, &moderator, &registry));
+        assert!(can_submit_event(event_type::ROOM_CANCEL, &moderator, &registry));
+        assert!(can_submit_event(event_type::TYPE_DEFINE, &moderator, &registry));
+        assert!(!can_submit_event(event_type::TYPE_DEFINE, &speaker, &registry));
+        assert!(can_submit_event(event_type::MESSAGE_CREATE, &speaker, &registry));
+        assert!(!can_submit_event(event_type::MESSAGE_CREATE, &observer, &registry));
+        assert!(can_submit_event(event_type::ROOM_LEAVE, &observer, &registry));
+        assert!(!can_submit_event(event_type::ROOM_JOIN, &observer, &registry));
+        let approved = PermissionContext {
             join_request_approved: true,
             ..PermissionContext::default()
         };
-        assert!(can_submit_event(event_type::ROOM_JOIN, &approved_join));
-
-        let mut moderator = PermissionContext::for_role(Role::Moderator);
-        assert!(can_submit_event(event_type::ROOM_JOIN_REVIEW, &moderator));
-        assert!(!can_submit_event(event_type::ROOM_CANCEL, &moderator));
-        moderator.moderator_authorized = true;
-        assert!(can_submit_event(event_type::ROOM_CANCEL, &moderator));
-
-        let participant = PermissionContext::for_role(Role::Participant);
-        assert!(can_submit_event(event_type::SESSION_OFFER, &participant));
-        assert!(!can_submit_event(
-            event_type::ROOM_JOIN_REVIEW,
-            &participant
-        ));
-        assert!(!can_submit_event(event_type::SESSION_CANDIDATE, &observer));
+        assert!(can_submit_event(event_type::ROOM_JOIN, &approved, &registry));
     }
 
     #[test]
     fn applies_state_restrictions() {
-        let participant = PermissionContext::for_role(Role::Participant);
+        let registry = TypeRegistry::new();
+        let speaker = PermissionContext::for_role(Role::Speaker);
+        let moderator = PermissionContext::for_role(Role::Moderator);
+
         assert!(can_accept_room_write(
             event_type::MESSAGE_CREATE,
             RoomState::Active,
-            &participant,
-            StateWriteOptions::default()
+            &speaker,
+            &registry
         ));
         assert!(!can_accept_room_write(
             event_type::MESSAGE_CREATE,
             RoomState::Scheduled,
-            &participant,
-            StateWriteOptions::default()
+            &speaker,
+            &registry
         ));
-        assert!(!can_accept_room_write(
-            event_type::REACTION_CREATE,
-            RoomState::Ended,
-            &participant,
-            StateWriteOptions::default()
-        ));
+        // scheduled allows pre-start setup: reviews, role updates, leave, type.define
+        assert!(can_write_in_state(event_type::ROOM_JOIN_REVIEW, RoomState::Scheduled));
+        assert!(can_write_in_state(event_type::ROOM_MEMBER_ROLE_UPDATE, RoomState::Scheduled));
+        assert!(can_write_in_state(event_type::ROOM_LEAVE, RoomState::Scheduled));
+        assert!(can_write_in_state(event_type::TYPE_DEFINE, RoomState::Scheduled));
+        assert!(can_write_in_state(event_type::ROOM_CANCEL, RoomState::Scheduled));
+        assert!(!can_write_in_state(event_type::ROOM_CLOSE, RoomState::Scheduled));
         assert!(can_accept_room_write(
-            event_type::ROOM_JOIN_REVIEW,
+            event_type::TYPE_DEFINE,
             RoomState::Scheduled,
-            &PermissionContext::for_role(Role::Moderator),
-            StateWriteOptions::default()
+            &moderator,
+            &registry
         ));
-        assert!(can_accept_room_write(
-            event_type::ROOM_JOIN,
-            RoomState::Scheduled,
-            &PermissionContext {
-                join_request_approved: true,
-                ..PermissionContext::default()
-            },
-            StateWriteOptions::default()
-        ));
-        assert!(can_accept_room_write(
-            event_type::REACTION_CREATE,
-            RoomState::Ended,
-            &participant,
-            StateWriteOptions {
-                post_end_reaction_allowed: true,
-            }
-        ));
+        // ended rooms are strictly read-only
+        assert!(!can_write_in_state("reaction.create", RoomState::Ended));
+        assert!(!can_write_in_state(event_type::ROOM_LEAVE, RoomState::Ended));
+        assert!(!can_write_in_state(event_type::ROOM_JOIN, RoomState::Cancelled));
+        // cancel only while scheduled, close only while active
+        assert!(can_write_in_state(event_type::ROOM_CLOSE, RoomState::Active));
+        assert!(!can_write_in_state(event_type::ROOM_CANCEL, RoomState::Active));
     }
 
     #[test]
     fn validates_room_creation_payloads() {
         let mut payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
         payload.policy = Some(RoomPolicy {
-            max_participants: Some(2),
+            max_speakers: Some(2),
             ..RoomPolicy::default()
         });
+        payload.guidance = Some("Cite sources.".to_owned());
+        payload.types = vec![
+            TypeDeclaration::Import(PackImport {
+                use_pack: Some(pack_id::REACTIONS.to_owned()),
+                ..PackImport::default()
+            }),
+            TypeDeclaration::Def(finding_def()),
+        ];
         validate_room_create_payload(&payload).unwrap();
 
         let empty_topic = RoomCreatePayload::new(" ", Visibility::Public, 1000, 2000);
-        assert!(matches!(
-            validate_room_create_payload(&empty_topic),
-            Err(SdkError::InvalidPayload(_))
-        ));
+        assert!(validate_room_create_payload(&empty_topic).is_err());
 
         let invalid_time = RoomCreatePayload::new("Research room", Visibility::Public, 2000, 1000);
-        assert!(matches!(
-            validate_room_create_payload(&invalid_time),
-            Err(SdkError::InvalidPayload(_))
-        ));
+        assert!(validate_room_create_payload(&invalid_time).is_err());
+
+        let mut zero_speakers =
+            RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
+        zero_speakers.policy = Some(RoomPolicy {
+            max_speakers: Some(0),
+            ..RoomPolicy::default()
+        });
+        assert!(validate_room_create_payload(&zero_speakers).is_err());
+
+        let mut reserved = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
+        let mut bad_def = finding_def();
+        bad_def.name = "room.custom".to_owned();
+        reserved.types = vec![TypeDeclaration::Def(bad_def)];
+        assert!(validate_room_create_payload(&reserved).is_err());
     }
 
     #[test]
-    fn validates_poll_payloads_and_votes() {
-        let poll = PollCreatePayload {
-            poll_id: "poll_review_order".to_owned(),
-            question: "Which review order?".to_owned(),
-            options: vec![
-                PollOption {
-                    id: "a".to_owned(),
-                    label: "Correctness first".to_owned(),
-                    description: None,
-                },
-                PollOption {
-                    id: "b".to_owned(),
-                    label: "Security first".to_owned(),
-                    description: None,
-                },
-            ],
-            min_choices: Some(1),
-            max_choices: Some(1),
-            closes_at: None,
-            references: Vec::new(),
-            extra: BTreeMap::new(),
-        };
-
-        validate_poll_create_payload(&poll).unwrap();
-        validate_poll_vote_payload(
-            &PollVotePayload {
-                event_id: "evt".to_owned(),
-                option_ids: vec!["a".to_owned()],
-            },
-            &poll,
-            None,
-        )
-        .unwrap();
+    fn verifies_pack_digests() {
+        let bytes = b"pack document bytes";
+        let digest = format!("sha256:{}", URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)));
+        verify_pack_digest(bytes, &digest).unwrap();
         assert!(matches!(
-            validate_poll_vote_payload(
-                &PollVotePayload {
-                    event_id: "evt".to_owned(),
-                    option_ids: vec!["a".to_owned(), "b".to_owned()],
-                },
-                &poll,
-                None,
-            ),
-            Err(SdkError::InvalidPayload(_))
+            verify_pack_digest(b"tampered", &digest),
+            Err(SdkError::PackUnavailable(_))
         ));
-
-        let mut duplicate = poll.clone();
-        duplicate.options[1].id = "a".to_owned();
-        assert!(matches!(
-            validate_poll_create_payload(&duplicate),
-            Err(SdkError::InvalidPayload(_))
-        ));
-    }
-
-    #[test]
-    fn validates_webrtc_session_payloads() {
-        let offer = SessionOfferPayload {
-            session_id: "sess_live_review".to_owned(),
-            session_type: SessionType::Webrtc,
-            media: vec![
-                SessionMediaKind::Audio,
-                SessionMediaKind::Video,
-                SessionMediaKind::File,
-            ],
-            description: SessionDescription {
-                kind: SessionDescriptionType::Offer,
-                sdp: "v=0\r\n...".to_owned(),
-            },
-            to: Vec::new(),
-            topology: Some(SessionTopology::PeerToPeer),
-            transfers: vec![SessionDataTransfer {
-                transfer_id: "file_1".to_owned(),
-                file_name: Some("trace.har".to_owned()),
-                size_bytes: Some(1024),
-                mime_type: Some("application/json".to_owned()),
-                content_digest: Some("sha256:abc".to_owned()),
-            }],
-            expires_at: None,
-            references: Vec::new(),
-            extra: BTreeMap::new(),
-        };
-        validate_session_offer_payload(&offer).unwrap();
-
-        validate_session_answer_payload(&SessionAnswerPayload {
-            session_id: "sess_live_review".to_owned(),
-            offer_event_id: "evt_offer".to_owned(),
-            description: SessionDescription {
-                kind: SessionDescriptionType::Answer,
-                sdp: "v=0\r\n...".to_owned(),
-            },
-            accepted_media: vec![SessionMediaKind::Audio, SessionMediaKind::File],
-            transfers: Vec::new(),
-            extra: BTreeMap::new(),
-        })
-        .unwrap();
-
-        validate_session_candidate_payload(&SessionCandidatePayload {
-            session_id: "sess_live_review".to_owned(),
-            candidate: Some(SessionIceCandidate {
-                candidate: "candidate:1 1 udp 1 127.0.0.1 3478 typ host".to_owned(),
-                sdp_mid: None,
-                sdp_mline_index: None,
-                username_fragment: None,
-            }),
-            target: None,
-            end_of_candidates: None,
-            extra: BTreeMap::new(),
-        })
-        .unwrap();
-
-        validate_session_candidate_payload(&SessionCandidatePayload {
-            session_id: "sess_live_review".to_owned(),
-            candidate: None,
-            target: None,
-            end_of_candidates: Some(true),
-            extra: BTreeMap::new(),
-        })
-        .unwrap();
-
-        let mut invalid_offer = offer;
-        invalid_offer.description.kind = SessionDescriptionType::Answer;
-        assert!(matches!(
-            validate_session_offer_payload(&invalid_offer),
-            Err(SdkError::InvalidPayload(_))
-        ));
-
-        assert!(matches!(
-            validate_session_candidate_payload(&SessionCandidatePayload {
-                session_id: "sess_live_review".to_owned(),
-                candidate: None,
-                target: None,
-                end_of_candidates: None,
-                extra: BTreeMap::new(),
-            }),
-            Err(SdkError::InvalidPayload(_))
-        ));
+        assert!(verify_pack_digest(bytes, "md5:abc").is_err());
+        assert!(verify_pack_digest(bytes, "not-a-digest").is_err());
     }
 
     #[test]
@@ -1571,5 +1602,30 @@ mod tests {
             ..record1
         };
         assert!(verify_server_record_chain(&[broken]).is_err());
+    }
+
+    #[test]
+    fn type_declaration_serde_round_trips() {
+        let inline: TypeDeclaration = serde_json::from_value(json!({
+            "type": "review.finding",
+            "kind": "message",
+            "title": "Review finding",
+            "schema": {"type": "object"}
+        }))
+        .unwrap();
+        assert!(matches!(inline, TypeDeclaration::Def(_)));
+
+        let import: TypeDeclaration = serde_json::from_value(json!({
+            "use": "adp:reactions/1.0",
+            "overrides": {"reaction.create": {"status": "deprecated"}}
+        }))
+        .unwrap();
+        match &import {
+            TypeDeclaration::Import(import) => {
+                assert_eq!(import.use_pack.as_deref(), Some("adp:reactions/1.0"));
+            }
+            TypeDeclaration::Def(_) => panic!("expected pack import"),
+        }
+        validate_type_declaration(&import).unwrap();
     }
 }

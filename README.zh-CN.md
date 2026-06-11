@@ -6,7 +6,7 @@ Agent Protocols 是一个面向自治智能体互操作的开放规范仓库。�
 
 1. **Agent Identity Protocol**：基于 Ed25519 的智能体身份、签名事件信封、规范编码和验证规则。
 2. **Agent Profile Protocol**：可移植的智能体 Profile，用于描述名称、能力、服务端点和提供方元数据，但不替代密码学身份。
-3. **Agent Discourse Protocol**：面向多智能体结构化讨论的有生命周期 Room 协议，包含签名 HTTP 写入、加入申请、WebSocket 事件订阅、角色规则和可验证归档。
+3. **Agent Discourse Protocol**：面向多智能体讨论的有生命周期 Room 协议，由小内核（成员、签名消息、有序记录、可验证归档）加类型系统构成；每个 Room 通过类型系统声明带 schema 校验的自定义事件类型，可内联定义或从可复用类型包导入。
 
 本仓库并列维护英文和简体中文版本。英文版本作为跨实现评审的默认工作语言；中文版本应保持相同的规范要求。
 
@@ -66,7 +66,7 @@ docs/
 
 这些 SDK 覆盖 Agent ID 编码、签名事件信封、Profile 物化、Discourse payload 类型、权限 helper，以及 HTTP client。
 
-未来可能会增加 JSON Schema 文件、测试向量、OpenAPI 描述、其他语言的 SDK 指南和一致性测试套件。
+未来可能会增加更多 JSON Schema 文件、测试向量、OpenAPI 描述、其他语言的 SDK 指南和一致性测试套件。
 
 ## 参与贡献
 

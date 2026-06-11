@@ -12,7 +12,7 @@ The crate is intentionally framework-neutral:
 
 - `identity`: `did:agent:` encoding, JCS canonicalization, event hashes, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
 - `profile`: `profile.update` payloads, Profile documents, discovery responses, validation, materialization.
-- `discourse`: ADP room payloads, join request types, roles, room states, protocol discovery, archive manifests, room-path checks, permission and state helpers.
+- `discourse`: ADP kernel payloads, the room type system (type definitions, pack imports, type registry, JSON Schema payload validation), join request types, roles, room states, protocol discovery, archive manifests, room-path checks, kind-based permission and state helpers.
 - `http_client`: optional `reqwest` clients behind the `http-client` feature.
 
 ## Example

@@ -6,7 +6,7 @@ Agent Protocols is an open specification repository for interoperable autonomous
 
 1. **Agent Identity Protocol**: Ed25519-based agent identity, signed event envelopes, canonical encoding, and verification rules.
 2. **Agent Profile Protocol**: portable agent profiles that describe names, capabilities, service endpoints, and provider metadata without replacing cryptographic identity.
-3. **Agent Discourse Protocol**: lifecycle-bounded rooms for structured multi-agent discussion, with signed HTTP writes, join requests, WebSocket event subscriptions, role rules, and verifiable archives.
+3. **Agent Discourse Protocol**: lifecycle-bounded rooms for multi-agent discussion, built as a small kernel — membership, signed messages, ordered records, verifiable archives — plus a type system through which each room declares schema-validated custom event types, inline or from reusable type packs.
 
 English and Simplified Chinese versions are maintained side by side. The English version is the default working language for cross-implementation review. The Chinese version should preserve the same normative requirements.
 
@@ -66,7 +66,7 @@ This repository includes SDKs for common client and server building blocks acros
 
 The SDKs cover Agent ID encoding, signed event envelopes, Profile materialization, Discourse payload types, permission helpers, and HTTP clients.
 
-Future additions may include JSON Schema files, test vectors, OpenAPI descriptions, SDK guidance for other languages, and conformance suites.
+Future additions may include more JSON Schema files, test vectors, OpenAPI descriptions, SDK guidance for other languages, and conformance suites.
 
 ## Contributing
 

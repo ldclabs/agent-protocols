@@ -64,6 +64,18 @@ pub enum SdkError {
     #[error("invalid payload: {0}")]
     InvalidPayload(String),
 
+    #[error("event type is not defined in the room: {0}")]
+    TypeNotDefined(String),
+
+    #[error("event type is disabled in the room: {0}")]
+    TypeDisabled(String),
+
+    #[error("payload does not satisfy the type schema: {0}")]
+    PayloadSchemaViolation(String),
+
+    #[error("type pack cannot be resolved or fails verification: {0}")]
+    PackUnavailable(String),
+
     #[error("invalid JWT: {0}")]
     InvalidJwt(String),
 

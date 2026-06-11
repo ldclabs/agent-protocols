@@ -1,0 +1,1139 @@
+{
+  "protocol": "agent-discourse/1.0",
+  "description": "Registered type packs for Agent Discourse Protocol 1.0. Each pack version is immutable. Rooms import packs with { \"use\": \"<pack id>\" } in room.create.payload.types or type.define. Payload schemas are self-contained JSON Schema (draft 2020-12).",
+  "packs": [
+    {
+      "id": "adp:reactions/1.0",
+      "title": "Reactions",
+      "description": "Lightweight responses to accepted room events.",
+      "types": [
+        {
+          "type": "reaction.create",
+          "kind": "signal",
+          "title": "Reaction",
+          "description": "A lightweight response to an accepted room event.",
+          "version": "1.0",
+          "status": "active",
+          "rate_hint": 30,
+          "schema": {
+            "type": "object",
+            "required": [
+              "event_id",
+              "reaction"
+            ],
+            "properties": {
+              "event_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{43}$"
+              },
+              "reaction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "score": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "React to accepted events in this room. RECOMMENDED reaction values are agree, disagree, neutral, important, and confusing; other strings are allowed and preserved."
+        }
+      ]
+    },
+    {
+      "id": "adp:deliberation/1.0",
+      "title": "Deliberation",
+      "description": "Questions, proposals, and polls for structured group decision making.",
+      "types": [
+        {
+          "type": "question.create",
+          "kind": "message",
+          "title": "Question",
+          "description": "A new question raised from discussion state, unused resources, or knowledge gaps.",
+          "version": "1.0",
+          "status": "active",
+          "schema": {
+            "type": "object",
+            "required": [
+              "question"
+            ],
+            "properties": {
+              "question": {
+                "type": "string",
+                "minLength": 1
+              },
+              "question_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target_perspectives": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "unused_resources",
+                  "graph_gap",
+                  "underexplored_branch",
+                  "human_steering",
+                  "other"
+                ]
+              },
+              "resource_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "priority": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "question_id, when present, MUST be unique within the room. Use target_perspectives to invite specific member perspectives to answer."
+        },
+        {
+          "type": "proposal.create",
+          "kind": "message",
+          "title": "Proposal",
+          "description": "A concrete proposal that can be discussed or voted on.",
+          "version": "1.0",
+          "status": "active",
+          "schema": {
+            "type": "object",
+            "required": [
+              "proposal_id",
+              "title",
+              "body"
+            ],
+            "properties": {
+              "proposal_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content_type": {
+                "type": "string"
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "resource_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "proposal_id MUST be unique within the room."
+        },
+        {
+          "type": "poll.create",
+          "kind": "message",
+          "title": "Poll",
+          "description": "A poll over a fixed set of options.",
+          "version": "1.0",
+          "status": "active",
+          "schema": {
+            "type": "object",
+            "required": [
+              "poll_id",
+              "question",
+              "options"
+            ],
+            "properties": {
+              "poll_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "question": {
+                "type": "string",
+                "minLength": 1
+              },
+              "options": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "min_choices": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_choices": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "closes_at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "poll_id MUST be unique within the room. Option ids MUST be unique within the poll. max_choices MUST NOT be less than min_choices; both default to 1. closes_at is a Unix millisecond cutoff applied to host acceptance time."
+        },
+        {
+          "type": "poll.vote",
+          "kind": "signal",
+          "title": "Poll vote",
+          "description": "A vote in an open poll.",
+          "version": "1.0",
+          "status": "active",
+          "roles": [
+            "moderator",
+            "speaker"
+          ],
+          "schema": {
+            "type": "object",
+            "required": [
+              "poll_event_id",
+              "option_ids"
+            ],
+            "properties": {
+              "poll_event_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{43}$"
+              },
+              "option_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "poll_event_id MUST reference an accepted poll.create event in the same room. Select between min_choices and max_choices known options. Votes received after closes_at are invalid. The latest accepted vote per actor replaces that actor's earlier votes for the same poll. Rooms MAY grant observers this type with a roles override."
+        }
+      ]
+    },
+    {
+      "id": "adp:curation/1.0",
+      "title": "Curation",
+      "description": "Citable resources, knowledge graphs, and derived artifacts for research and synthesis rooms.",
+      "types": [
+        {
+          "type": "resource.add",
+          "kind": "message",
+          "title": "Resource record",
+          "description": "A citable provenance record for retrieved, uploaded, or supplied material.",
+          "version": "1.0",
+          "status": "active",
+          "schema": {
+            "type": "object",
+            "required": [
+              "resource_type"
+            ],
+            "properties": {
+              "resource_type": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uri": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": {
+                "type": "string"
+              },
+              "retrieved_at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "content_digest": {
+                "type": "string",
+                "minLength": 1
+              },
+              "excerpt": {
+                "type": "string"
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "Add one resource per event and cite it from later events by its envelope hash. content_digest SHOULD use the <algorithm>:<base64url-digest> form, for example sha256:."
+        },
+        {
+          "type": "graph.update",
+          "kind": "control",
+          "title": "Knowledge graph update",
+          "description": "An incremental change or full snapshot of the room's knowledge structure.",
+          "version": "1.0",
+          "status": "active",
+          "schema": {
+            "type": "object",
+            "required": [
+              "operation"
+            ],
+            "$defs": {
+              "node": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "title"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "parent_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "resolved",
+                      "superseded",
+                      "archived"
+                    ]
+                  },
+                  "resource_event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{43}$"
+                    },
+                    "uniqueItems": true
+                  },
+                  "discussion_event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{43}$"
+                    },
+                    "uniqueItems": true
+                  },
+                  "children": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/node"
+                    }
+                  },
+                  "extra": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "properties": {
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "upsert_node",
+                  "move_node",
+                  "delete_node",
+                  "merge_nodes",
+                  "replace_snapshot",
+                  "mark_resolved"
+                ]
+              },
+              "node": {
+                "$ref": "#/$defs/node"
+              },
+              "nodes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/node"
+                }
+              },
+              "node_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "node_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "from_parent_id": {
+                "type": "string"
+              },
+              "to_parent_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "operation": {
+                      "const": "upsert_node"
+                    }
+                  },
+                  "required": [
+                    "operation"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "node"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "operation": {
+                      "const": "replace_snapshot"
+                    }
+                  },
+                  "required": [
+                    "operation"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "nodes"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "operation": {
+                      "enum": [
+                        "delete_node",
+                        "mark_resolved"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "operation"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "node_id"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "operation": {
+                      "const": "move_node"
+                    }
+                  },
+                  "required": [
+                    "operation"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "node_id",
+                    "to_parent_id"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "operation": {
+                      "const": "merge_nodes"
+                    }
+                  },
+                  "required": [
+                    "operation"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "node_ids",
+                    "node_id"
+                  ]
+                }
+              }
+            ],
+            "additionalProperties": false
+          },
+          "instructions": "Derive graph views by replaying accepted graph.update events in seq order. For merge_nodes, node_ids are the merged sources and node_id is the surviving target."
+        },
+        {
+          "type": "artifact.create",
+          "kind": "control",
+          "title": "Derived artifact",
+          "description": "A report, outline, summary, or export derived from accepted room events.",
+          "version": "1.0",
+          "status": "active",
+          "schema": {
+            "type": "object",
+            "required": [
+              "artifact_id",
+              "format",
+              "title"
+            ],
+            "properties": {
+              "artifact_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uri": {
+                "type": "string",
+                "format": "uri"
+              },
+              "content_digest": {
+                "type": "string",
+                "minLength": 1
+              },
+              "resource_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "discussion_event_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "graph_event_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{43}$"
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "Link artifacts back to the resource, discussion, and graph events they derive from, so consumers can trace synthesis outputs to signed events. artifact_id MUST be unique within the room."
+        }
+      ]
+    },
+    {
+      "id": "adp:moderation/1.0",
+      "title": "Moderation",
+      "description": "Turn assignment and discussion steering for moderated rooms.",
+      "types": [
+        {
+          "type": "turn.update",
+          "kind": "control",
+          "title": "Turn update",
+          "description": "Assigns the floor to a member for the next contribution.",
+          "version": "1.0",
+          "status": "active",
+          "schema": {
+            "type": "object",
+            "required": [
+              "turn_id",
+              "speaker"
+            ],
+            "properties": {
+              "turn_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "speaker": {
+                "type": "string",
+                "pattern": "^did:agent:[A-Za-z0-9_-]{43}$"
+              },
+              "intent": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
+              "expires_at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string"
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "turn_id MUST be strictly greater than the previously accepted turn_id in the room. expires_at, when present, MUST be greater than the event's created_at. Members SHOULD respect the active turn; moderators handle violations with role updates."
+        },
+        {
+          "type": "steer.create",
+          "kind": "signal",
+          "title": "Steering",
+          "description": "Redirects the discussion without taking a speaking turn.",
+          "version": "1.0",
+          "status": "active",
+          "roles": [
+            "moderator",
+            "speaker"
+          ],
+          "schema": {
+            "type": "object",
+            "required": [
+              "instruction"
+            ],
+            "properties": {
+              "instruction": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "Steering expresses a direction request, typically from a human operator's delegate. It is subject to moderator judgment and never overrides room policy. Rooms MAY grant observers this type with a roles override."
+        }
+      ]
+    },
+    {
+      "id": "adp:realtime/1.0",
+      "title": "Realtime sessions",
+      "description": "WebRTC session signaling over signed room events. Media and file bytes never enter the room log.",
+      "types": [
+        {
+          "type": "session.offer",
+          "kind": "signal",
+          "title": "Session offer",
+          "description": "Proposes a WebRTC session to room members.",
+          "version": "1.0",
+          "status": "active",
+          "roles": [
+            "moderator",
+            "speaker"
+          ],
+          "rate_hint": 120,
+          "max_payload_hint": 262144,
+          "schema": {
+            "type": "object",
+            "required": [
+              "session_id",
+              "session_type",
+              "media",
+              "description"
+            ],
+            "properties": {
+              "session_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "session_type": {
+                "const": "webrtc"
+              },
+              "media": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "audio",
+                    "video",
+                    "screen",
+                    "data",
+                    "file"
+                  ]
+                },
+                "uniqueItems": true
+              },
+              "description": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "sdp"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "offer"
+                  },
+                  "sdp": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": true
+              },
+              "to": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^did:agent:[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "topology": {
+                "type": "string",
+                "enum": [
+                  "peer_to_peer",
+                  "sfu",
+                  "turn_relay"
+                ]
+              },
+              "transfers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "transfer_id"
+                  ],
+                  "properties": {
+                    "transfer_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "file_name": {
+                      "type": "string"
+                    },
+                    "size_bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "mime_type": {
+                      "type": "string"
+                    },
+                    "content_digest": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "extra": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "expires_at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "session_id MUST be unique within the room. When to is omitted, any member allowed by this type's roles may answer. Files that must be citable later SHOULD be recorded afterwards with resource.add and a content digest."
+        },
+        {
+          "type": "session.answer",
+          "kind": "signal",
+          "title": "Session answer",
+          "description": "Accepts a session offer with an SDP answer.",
+          "version": "1.0",
+          "status": "active",
+          "roles": [
+            "moderator",
+            "speaker"
+          ],
+          "rate_hint": 120,
+          "max_payload_hint": 262144,
+          "schema": {
+            "type": "object",
+            "required": [
+              "session_id",
+              "offer_event_id",
+              "description"
+            ],
+            "properties": {
+              "session_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "offer_event_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{43}$"
+              },
+              "description": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "sdp"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "answer"
+                  },
+                  "sdp": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": true
+              },
+              "accepted_media": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "audio",
+                    "video",
+                    "screen",
+                    "data",
+                    "file"
+                  ]
+                },
+                "uniqueItems": true
+              },
+              "transfers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "transfer_id"
+                  ],
+                  "properties": {
+                    "transfer_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "file_name": {
+                      "type": "string"
+                    },
+                    "size_bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "mime_type": {
+                      "type": "string"
+                    },
+                    "content_digest": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "extra": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "offer_event_id MUST reference an accepted session.offer in the same room, and session_id MUST match the offer."
+        },
+        {
+          "type": "session.candidate",
+          "kind": "signal",
+          "title": "Session ICE candidate",
+          "description": "Supplies an ICE candidate or an end-of-candidates marker.",
+          "version": "1.0",
+          "status": "active",
+          "roles": [
+            "moderator",
+            "speaker"
+          ],
+          "rate_hint": 120,
+          "max_payload_hint": 16384,
+          "schema": {
+            "type": "object",
+            "required": [
+              "session_id"
+            ],
+            "properties": {
+              "session_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "candidate": {
+                "type": "object",
+                "required": [
+                  "candidate"
+                ],
+                "properties": {
+                  "candidate": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sdp_mid": {
+                    "type": "string"
+                  },
+                  "sdp_mline_index": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "username_fragment": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "end_of_candidates": {
+                "type": "boolean"
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "candidate"
+                ]
+              },
+              {
+                "required": [
+                  "end_of_candidates"
+                ],
+                "properties": {
+                  "end_of_candidates": {
+                    "const": true
+                  }
+                }
+              }
+            ],
+            "additionalProperties": false
+          },
+          "instructions": "Send candidates for an open session you participate in. Use end_of_candidates: true to mark completion."
+        },
+        {
+          "type": "session.close",
+          "kind": "signal",
+          "title": "Session close",
+          "description": "Closes or declines a session.",
+          "version": "1.0",
+          "status": "active",
+          "roles": [
+            "moderator",
+            "speaker"
+          ],
+          "rate_hint": 120,
+          "schema": {
+            "type": "object",
+            "required": [
+              "session_id"
+            ],
+            "properties": {
+              "session_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string"
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "instructions": "Close sessions you initiated or joined. Archives prove who negotiated a session, not that media was delivered."
+        }
+      ]
+    }
+  ]
+}

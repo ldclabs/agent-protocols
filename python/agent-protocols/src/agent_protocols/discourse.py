@@ -1,16 +1,28 @@
+"""Agent Discourse Protocol 1.0: kernel types, the room type system, and
+verification helpers.
+
+The protocol defines nine built-in event types. Every other event type is
+declared per room as a schema-validated type definition, either inline or
+imported from a type pack. Hosts validate structure and permissions; they
+never need to understand application semantics.
+"""
+
 from __future__ import annotations
 
 import base64
 import hashlib
-from typing import Any, Literal, TypedDict
+import re
+from typing import Any, Iterable, Literal, TypedDict
 
 import rfc8785
+from jsonschema.validators import Draft202012Validator
 
 from .errors import AgentProtocolError
 from .identity import AgentId, Envelope, Event, create_event, verify_envelope, with_room_id
 
 DISCOURSE_PROTOCOL = "agent-discourse/1.0"
 
+# The nine built-in event types. All other types are room-defined.
 ROOM_CREATE = "room.create"
 ROOM_JOIN = "room.join"
 ROOM_JOIN_REVIEW = "room.join.review"
@@ -18,24 +30,10 @@ ROOM_LEAVE = "room.leave"
 ROOM_MEMBER_ROLE_UPDATE = "room.member.role.update"
 ROOM_CLOSE = "room.close"
 ROOM_CANCEL = "room.cancel"
+TYPE_DEFINE = "type.define"
 MESSAGE_CREATE = "message.create"
-REACTION_CREATE = "reaction.create"
-MESSAGE_PROPOSAL_CREATE = "message.proposal.create"
-MESSAGE_POLL_CREATE = "message.poll.create"
-MESSAGE_POLL_VOTE = "message.poll.vote"
-MESSAGE_RESOLUTION_CREATE = "message.resolution.create"
-SOURCE_ADD = "source.add"
-TURN_UPDATE = "turn.update"
-QUESTION_CREATE = "question.create"
-ROOM_STEER = "room.steer"
-MAP_UPDATE = "map.update"
-ARTIFACT_CREATE = "artifact.create"
-SESSION_OFFER = "session.offer"
-SESSION_ANSWER = "session.answer"
-SESSION_CANDIDATE = "session.candidate"
-SESSION_CLOSE = "session.close"
 
-KNOWN_EVENT_TYPES = {
+BUILTIN_EVENT_TYPES = {
     ROOM_CREATE,
     ROOM_JOIN,
     ROOM_JOIN_REVIEW,
@@ -43,47 +41,73 @@ KNOWN_EVENT_TYPES = {
     ROOM_MEMBER_ROLE_UPDATE,
     ROOM_CLOSE,
     ROOM_CANCEL,
+    TYPE_DEFINE,
     MESSAGE_CREATE,
-    REACTION_CREATE,
-    MESSAGE_PROPOSAL_CREATE,
-    MESSAGE_POLL_CREATE,
-    MESSAGE_POLL_VOTE,
-    MESSAGE_RESOLUTION_CREATE,
-    SOURCE_ADD,
-    TURN_UPDATE,
-    QUESTION_CREATE,
-    ROOM_STEER,
-    MAP_UPDATE,
-    ARTIFACT_CREATE,
-    SESSION_OFFER,
-    SESSION_ANSWER,
-    SESSION_CANDIDATE,
-    SESSION_CLOSE,
 }
 
+# Custom event types must not use these prefixes.
+RESERVED_TYPE_PREFIXES = ("room.", "type.")
+
+# Registered type packs defined by the specification in `1.0.packs.json`.
+PACK_REACTIONS = "adp:reactions/1.0"
+PACK_DELIBERATION = "adp:deliberation/1.0"
+PACK_CURATION = "adp:curation/1.0"
+PACK_MODERATION = "adp:moderation/1.0"
+PACK_REALTIME = "adp:realtime/1.0"
+
+REGISTERED_PACK_IDS = (
+    PACK_REACTIONS,
+    PACK_DELIBERATION,
+    PACK_CURATION,
+    PACK_MODERATION,
+    PACK_REALTIME,
+)
+
 RoomState = Literal["scheduled", "active", "ended", "cancelled"]
-Role = Literal["moderator", "expert", "participant", "observer"]
+Role = Literal["moderator", "speaker", "observer"]
+TypeKind = Literal["message", "signal", "control"]
+TypeStatus = Literal["active", "deprecated", "disabled"]
 JoinRequestStatus = Literal["pending", "approved", "rejected", "expired"]
-SESSION_MEDIA_KINDS = {"audio", "video", "screen", "data", "file"}
+
+ROLES = ("moderator", "speaker", "observer")
+TYPE_KINDS = ("message", "signal", "control")
+TYPE_STATUSES = ("active", "deprecated", "disabled")
+
+_TYPE_SEGMENT = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_REGISTERED_PACK_ID = re.compile(r"^adp:[a-z0-9-]+/[0-9]+\.[0-9]+$")
 
 
 class PermissionContext(TypedDict, total=False):
+    """Permission inputs for one actor in one room."""
+
     role: Role
     is_creator: bool
     join_request_approved: bool
-    moderator_authorized: bool
-    expert_policy_allowed: bool
-    participant_policy_allowed: bool
-    observer_steering_allowed: bool
-    observer_poll_vote_allowed: bool
 
 
 def room_create_event(actor: AgentId, created_at: int, nonce: int, payload: dict[str, Any]) -> Event:
     return create_event(DISCOURSE_PROTOCOL, ROOM_CREATE, actor, created_at, nonce, payload)
 
 
+def type_define_event(
+    actor: AgentId, created_at: int, nonce: int, room_id: str, declaration: dict[str, Any]
+) -> Event:
+    return with_room_id(
+        create_event(DISCOURSE_PROTOCOL, TYPE_DEFINE, actor, created_at, nonce, declaration),
+        room_id,
+    )
+
+
 def discourse_event(event_type: str, actor: AgentId, created_at: int, nonce: int, room_id: str, payload: Any) -> Event:
     return with_room_id(create_event(DISCOURSE_PROTOCOL, event_type, actor, created_at, nonce, payload), room_id)
+
+
+def is_builtin_event_type(event_type: str) -> bool:
+    return event_type in BUILTIN_EVENT_TYPES
+
+
+def event_requires_room_id(event_type: str) -> bool:
+    return event_type != ROOM_CREATE
 
 
 def validate_discourse_envelope(envelope: Envelope) -> None:
@@ -92,13 +116,19 @@ def validate_discourse_envelope(envelope: Envelope) -> None:
     protocol = event["protocol"]
     if protocol != DISCOURSE_PROTOCOL:
         raise AgentProtocolError("invalid_event_protocol", f"expected {DISCOURSE_PROTOCOL}, got {protocol}")
-    if event_requires_room_id(event["type"]) and "room_id" not in event:
+    if event["type"] == ROOM_CREATE:
+        if "room_id" in event:
+            raise AgentProtocolError("invalid_event", "room.create must not include room_id")
+    elif "room_id" not in event:
         raise AgentProtocolError("missing_room_id", "event requires a room_id")
 
 
 def validate_room_path(envelope: Envelope, path_room_id: str) -> None:
-    actual = envelope["event"].get("room_id")
-    if actual is None and envelope["event"]["type"] == ROOM_CREATE:
+    event = envelope["event"]
+    actual = event.get("room_id")
+    if event["type"] == ROOM_CREATE:
+        if actual is not None:
+            raise AgentProtocolError("invalid_event", "room.create must not include room_id")
         return
     if actual is None:
         raise AgentProtocolError("missing_room_id", "event requires a room_id")
@@ -106,88 +136,217 @@ def validate_room_path(envelope: Envelope, path_room_id: str) -> None:
         raise AgentProtocolError("room_id_mismatch", f"expected {path_room_id}, got {actual}")
 
 
-def event_requires_room_id(event_type: str) -> bool:
-    return event_type != ROOM_CREATE
+def validate_custom_event_type_name(name: str) -> None:
+    """Checks the shape of a custom event type name: lowercase dot-separated,
+    at least two segments, not built-in, not under a reserved prefix."""
+    segments = name.split(".")
+    if len(segments) < 2 or not all(_TYPE_SEGMENT.match(segment) for segment in segments):
+        raise AgentProtocolError("invalid_event", f"invalid event type name: {name}")
+    if is_builtin_event_type(name):
+        raise AgentProtocolError("invalid_event", f"{name} is a built-in event type")
+    if name.startswith(RESERVED_TYPE_PREFIXES):
+        raise AgentProtocolError("invalid_event", f"{name} uses a reserved type prefix")
+
+
+def is_pack_import(declaration: dict[str, Any]) -> bool:
+    return "use" in declaration or "pack" in declaration or "digest" in declaration
+
+
+def validate_type_def(definition: dict[str, Any]) -> None:
+    validate_custom_event_type_name(str(definition.get("type", "")))
+    if definition.get("kind") not in TYPE_KINDS:
+        raise AgentProtocolError("invalid_event", f"invalid type kind: {definition.get('kind')}")
+    if not str(definition.get("title", "")).strip():
+        raise AgentProtocolError("invalid_event", "type definition title must not be empty")
+    schema = definition.get("schema")
+    if not isinstance(schema, dict):
+        raise AgentProtocolError("invalid_event", "type definition schema must be a JSON Schema object")
+    _compile_schema(schema)
+    roles = definition.get("roles")
+    if roles is not None:
+        if not isinstance(roles, list) or not roles or any(role not in ROLES for role in roles):
+            raise AgentProtocolError("invalid_event", "type definition roles must be a non-empty role list")
+    status = definition.get("status")
+    if status is not None and status not in TYPE_STATUSES:
+        raise AgentProtocolError("invalid_event", f"invalid type status: {status}")
+    for hint in ("rate_hint", "max_payload_hint"):
+        value = definition.get(hint)
+        if value is not None and (not isinstance(value, int) or value < 1):
+            raise AgentProtocolError("invalid_event", "type definition hints must be positive integers")
+
+
+def validate_pack_import(declaration: dict[str, Any]) -> None:
+    has_use = "use" in declaration
+    has_external = "pack" in declaration and "digest" in declaration
+    if has_use:
+        if "pack" in declaration or "digest" in declaration:
+            raise AgentProtocolError("invalid_event", "pack import requires either use, or pack with digest")
+        if not _REGISTERED_PACK_ID.match(str(declaration["use"])):
+            raise AgentProtocolError("invalid_event", f"invalid registered pack id: {declaration['use']}")
+    elif has_external:
+        if not str(declaration["digest"]).strip():
+            raise AgentProtocolError("invalid_event", "external pack digest must not be empty")
+    else:
+        raise AgentProtocolError("invalid_event", "pack import requires either use, or pack with digest")
+    types = declaration.get("types")
+    if types is not None and (not isinstance(types, list) or not types):
+        raise AgentProtocolError("invalid_event", "pack import types subset must not be empty")
+
+
+def validate_type_declaration(declaration: dict[str, Any]) -> None:
+    if not isinstance(declaration, dict):
+        raise AgentProtocolError("invalid_event", "type declaration must be an object")
+    if is_pack_import(declaration):
+        validate_pack_import(declaration)
+    elif "type" in declaration:
+        validate_type_def(declaration)
+    else:
+        raise AgentProtocolError(
+            "invalid_event", "type declaration must be an inline definition or a pack import"
+        )
+
+
+def pack_map(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Indexes the packs of a document by pack id for registry materialization."""
+    return {pack["id"]: pack for pack in document.get("packs", [])}
+
+
+class TypeRegistry:
+    """The effective set of type definitions active in a room."""
+
+    def __init__(self) -> None:
+        self._types: dict[str, dict[str, Any]] = {}
+
+    @classmethod
+    def from_declarations(
+        cls,
+        declarations: Iterable[dict[str, Any]],
+        packs: dict[str, dict[str, Any]] | None = None,
+    ) -> "TypeRegistry":
+        """Materializes a registry from declarations, resolving pack imports
+        from `packs`, keyed by registered pack id or external pack URI."""
+        registry = cls()
+        for declaration in declarations:
+            registry.apply(declaration, packs)
+        return registry
+
+    def apply(self, declaration: dict[str, Any], packs: dict[str, dict[str, Any]] | None = None) -> None:
+        """Applies one declaration: an inline definition or a pack import.
+        Redefining an existing type replaces it; the latest definition wins."""
+        if is_pack_import(declaration):
+            self._import(declaration, packs or {})
+        elif "type" in declaration:
+            self.define(declaration)
+        else:
+            raise AgentProtocolError(
+                "invalid_event", "type declaration must be an inline definition or a pack import"
+            )
+
+    def define(self, definition: dict[str, Any]) -> None:
+        validate_type_def(definition)
+        self._types[definition["type"]] = definition
+
+    def _import(self, declaration: dict[str, Any], packs: dict[str, dict[str, Any]]) -> None:
+        validate_pack_import(declaration)
+        reference = declaration.get("use") or declaration.get("pack")
+        pack = packs.get(reference)
+        if pack is None:
+            raise AgentProtocolError("pack_unavailable", f"pack not available: {reference}")
+        available = {definition["type"] for definition in pack.get("types", [])}
+        subset = declaration.get("types")
+        if subset is not None:
+            for name in subset:
+                if name not in available:
+                    raise AgentProtocolError("pack_unavailable", f"type {name} is not in pack {reference}")
+        overrides = declaration.get("overrides") or {}
+        for name in overrides:
+            imported = name in subset if subset is not None else name in available
+            if not imported:
+                raise AgentProtocolError(
+                    "invalid_event", f"override target {name} is not imported from pack {reference}"
+                )
+        for definition in pack.get("types", []):
+            if subset is not None and definition["type"] not in subset:
+                continue
+            merged = dict(definition)
+            merged.update(overrides.get(definition["type"], {}))
+            self.define(merged)
+
+    def get(self, event_type: str) -> dict[str, Any] | None:
+        return self._types.get(event_type)
+
+    def __contains__(self, event_type: str) -> bool:
+        return event_type in self._types
+
+    def __len__(self) -> int:
+        return len(self._types)
+
+    def definitions(self) -> list[dict[str, Any]]:
+        return list(self._types.values())
+
+    def validate_payload(self, event_type: str, payload: Any) -> None:
+        """Validates a custom event payload against the type's schema and status."""
+        definition = self._types.get(event_type)
+        if definition is None:
+            raise AgentProtocolError("type_not_defined", f"event type is not defined in the room: {event_type}")
+        if definition.get("status", "active") == "disabled":
+            raise AgentProtocolError("type_disabled", f"event type is disabled in this room: {event_type}")
+        validator = _compile_schema(definition["schema"])
+        errors = sorted(validator.iter_errors(payload), key=lambda error: list(error.absolute_path))
+        if errors:
+            detail = "; ".join(error.message for error in errors[:3])
+            raise AgentProtocolError("payload_schema_violation", f"{event_type}: {detail}")
+
+
+def validate_event_against_registry(event_type: str, payload: Any, registry: TypeRegistry) -> None:
+    """Validates an event payload: built-in payloads are accepted as-is (use
+    the typed validators for them); custom payloads must satisfy the registry."""
+    if is_builtin_event_type(event_type):
+        return
+    registry.validate_payload(event_type, payload)
+
+
+def _compile_schema(schema: dict[str, Any]) -> Draft202012Validator:
+    try:
+        Draft202012Validator.check_schema(schema)
+    except Exception as error:  # jsonschema.SchemaError
+        raise AgentProtocolError("invalid_event", f"invalid type schema: {error}") from error
+    return Draft202012Validator(schema)
+
+
+def verify_pack_digest(data: bytes, digest: str) -> None:
+    """Verifies a `<algorithm>:<base64url-digest>` content digest over raw
+    bytes. Supports `sha256` and `sha3-256`."""
+    algorithm, separator, expected = digest.partition(":")
+    if not separator:
+        raise AgentProtocolError("pack_unavailable", f"invalid digest format: {digest}")
+    if algorithm == "sha256":
+        raw = hashlib.sha256(data).digest()
+    elif algorithm == "sha3-256":
+        raw = hashlib.sha3_256(data).digest()
+    else:
+        raise AgentProtocolError("pack_unavailable", f"unsupported digest algorithm: {algorithm}")
+    actual = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    if actual != expected:
+        raise AgentProtocolError("pack_unavailable", "pack digest mismatch")
 
 
 def validate_room_create_payload(payload: dict[str, Any]) -> None:
     if not str(payload.get("topic", "")).strip():
-        raise AgentProtocolError("invalid_room", "room topic must not be empty")
+        raise AgentProtocolError("invalid_event", "room topic must not be empty")
     if payload.get("start_time", 0) >= payload.get("end_time", 0):
-        raise AgentProtocolError("invalid_room", "start_time must be before end_time")
+        raise AgentProtocolError("invalid_event", "start_time must be before end_time")
     policy = payload.get("policy") or {}
-    max_participants = policy.get("max_participants")
-    if max_participants is not None and (
-        not isinstance(max_participants, int) or max_participants < 1
-    ):
-        raise AgentProtocolError("invalid_room", "max_participants must be a positive integer")
+    max_speakers = policy.get("max_speakers")
+    if max_speakers is not None and (not isinstance(max_speakers, int) or max_speakers < 1):
+        raise AgentProtocolError("invalid_event", "max_speakers must be a positive integer")
+    for declaration in payload.get("types", []):
+        validate_type_declaration(declaration)
 
 
-def validate_poll_create_payload(payload: dict[str, Any]) -> None:
-    if not str(payload.get("poll_id", "")).strip() or not str(payload.get("question", "")).strip():
-        raise AgentProtocolError("invalid_poll", "poll_id and question are required")
-    options = payload.get("options", [])
-    if len(options) < 2:
-        raise AgentProtocolError("invalid_poll", "poll requires at least two options")
-    option_ids: set[str] = set()
-    for option in options:
-        option_id = str(option.get("id", ""))
-        label = str(option.get("label", ""))
-        if not option_id.strip() or not label.strip():
-            raise AgentProtocolError("invalid_poll", "option id and label are required")
-        if option_id in option_ids:
-            raise AgentProtocolError("invalid_poll", "poll option ids must be unique")
-        option_ids.add(option_id)
-    min_choices = payload.get("min_choices", 1)
-    max_choices = payload.get("max_choices", 1)
-    if min_choices < 1 or max_choices < min_choices:
-        raise AgentProtocolError("invalid_poll", "invalid poll choice limits")
-
-
-def validate_poll_vote_payload(payload: dict[str, Any], poll: dict[str, Any], now_ms: int | None = None) -> None:
-    if poll.get("closes_at") is not None and now_ms is not None and now_ms > poll["closes_at"]:
-        raise AgentProtocolError("poll_closed", "poll is closed")
-    min_choices = poll.get("min_choices", 1)
-    max_choices = poll.get("max_choices", 1)
-    option_ids = {option["id"] for option in poll.get("options", [])}
-    selected = payload.get("option_ids", [])
-    selected_set = set(selected)
-    if len(selected_set) != len(selected):
-        raise AgentProtocolError("invalid_poll_vote", "duplicate poll options")
-    if len(selected_set) < min_choices or len(selected_set) > max_choices:
-        raise AgentProtocolError("invalid_poll_vote", "invalid number of options")
-    if any(option_id not in option_ids for option_id in selected_set):
-        raise AgentProtocolError("invalid_poll_vote", "unknown poll option")
-
-
-def validate_session_offer_payload(payload: dict[str, Any]) -> None:
-    _validate_session_id(payload.get("session_id"))
-    if payload.get("session_type") != "webrtc":
-        raise AgentProtocolError("invalid_session", "session_type must be webrtc")
-    media = payload.get("media", [])
-    if not isinstance(media, list) or not media:
-        raise AgentProtocolError("invalid_session", "media must not be empty")
-    if any(media_kind not in SESSION_MEDIA_KINDS for media_kind in media):
-        raise AgentProtocolError("invalid_session", "unsupported media kind")
-    _validate_session_description(payload.get("description"), "offer")
-    _validate_session_transfers(payload.get("transfers", []))
-
-
-def validate_session_answer_payload(payload: dict[str, Any]) -> None:
-    _validate_session_id(payload.get("session_id"))
-    if not str(payload.get("offer_event_id", "")).strip():
-        raise AgentProtocolError("invalid_session", "offer_event_id is required")
-    _validate_session_description(payload.get("description"), "answer")
-    _validate_session_transfers(payload.get("transfers", []))
-
-
-def validate_session_candidate_payload(payload: dict[str, Any]) -> None:
-    _validate_session_id(payload.get("session_id"))
-    if payload.get("end_of_candidates"):
-        return
-    candidate = payload.get("candidate") or {}
-    if not str(candidate.get("candidate", "")).strip():
-        raise AgentProtocolError("invalid_session", "candidate is required unless end_of_candidates is true")
+def validate_message_create_payload(payload: dict[str, Any]) -> None:
+    if not str(payload.get("content_type", "")).strip():
+        raise AgentProtocolError("invalid_event", "content_type must not be empty")
 
 
 def server_record_hash_payload(
@@ -266,126 +425,80 @@ def archive_events_digest(records: list[dict[str, Any]]) -> str:
     return _hash_canonical_json(records)
 
 
-def can_submit_event(event_type: str, context: PermissionContext) -> bool:
+def default_kind_roles(kind: str) -> tuple[str, ...]:
+    """Default sender roles for each kind. The creator passes every role check."""
+    if kind == "message":
+        return ("moderator", "speaker")
+    if kind == "signal":
+        return ("moderator", "speaker", "observer")
+    if kind == "control":
+        return ("moderator",)
+    raise AgentProtocolError("invalid_event", f"invalid type kind: {kind}")
+
+
+def can_submit_event(
+    event_type: str,
+    context: PermissionContext,
+    registry: TypeRegistry | None = None,
+) -> bool:
+    """Role check for one event type, using kind defaults and per-type role
+    overrides from the room's type registry. State checks are separate."""
+    is_creator = bool(context.get("is_creator"))
+    role = context.get("role")
     if event_type == ROOM_CREATE:
         return True
     if event_type == ROOM_JOIN:
-        return context.get("join_request_approved", False)
-    if context.get("is_creator"):
-        return event_type in KNOWN_EVENT_TYPES
+        return bool(context.get("join_request_approved"))
+    if event_type == ROOM_LEAVE:
+        return is_creator or role is not None
+    if event_type in {ROOM_JOIN_REVIEW, ROOM_MEMBER_ROLE_UPDATE, ROOM_CLOSE, ROOM_CANCEL, TYPE_DEFINE}:
+        return is_creator or role == "moderator"
+    if event_type == MESSAGE_CREATE:
+        return is_creator or role in ("moderator", "speaker")
 
-    role = context.get("role")
-    if role == "moderator":
-        return _moderator_can_submit(event_type, context.get("moderator_authorized", False))
-    if role == "expert":
-        return _speaker_can_submit(event_type, context.get("expert_policy_allowed", False))
-    if role == "participant":
-        return _speaker_can_submit(event_type, context.get("participant_policy_allowed", False))
-    if role == "observer":
-        return _observer_can_submit(event_type, context)
-    return False
+    definition = registry.get(event_type) if registry is not None else None
+    if definition is None or definition.get("status", "active") == "disabled":
+        return False
+    if is_creator:
+        return True
+    if role is None:
+        return False
+    roles = definition.get("roles") or default_kind_roles(definition["kind"])
+    return role in roles
 
 
-def can_write_in_state(event_type: str, state: RoomState, *, post_end_reaction_allowed: bool = False) -> bool:
+def can_write_in_state(event_type: str, state: RoomState) -> bool:
     if state == "scheduled":
-        return event_type in {ROOM_JOIN, ROOM_JOIN_REVIEW, ROOM_CANCEL}
+        return event_type in {
+            ROOM_JOIN,
+            ROOM_JOIN_REVIEW,
+            ROOM_MEMBER_ROLE_UPDATE,
+            ROOM_LEAVE,
+            TYPE_DEFINE,
+            ROOM_CANCEL,
+        }
     if state == "active":
         return event_type not in {ROOM_CREATE, ROOM_CANCEL}
-    if state == "ended":
-        return post_end_reaction_allowed and event_type == REACTION_CREATE
-    if state == "cancelled":
-        return False
     return False
 
 
-def can_accept_room_write(event_type: str, state: RoomState, context: PermissionContext, *, post_end_reaction_allowed: bool = False) -> bool:
-    return can_submit_event(event_type, context) and can_write_in_state(event_type, state, post_end_reaction_allowed=post_end_reaction_allowed)
+def can_accept_room_write(
+    event_type: str,
+    state: RoomState,
+    context: PermissionContext,
+    registry: TypeRegistry | None = None,
+) -> bool:
+    return can_submit_event(event_type, context, registry) and can_write_in_state(event_type, state)
 
 
-def validate_room_write(event_type: str, state: RoomState, context: PermissionContext, *, post_end_reaction_allowed: bool = False) -> None:
-    if not can_accept_room_write(event_type, state, context, post_end_reaction_allowed=post_end_reaction_allowed):
+def validate_room_write(
+    event_type: str,
+    state: RoomState,
+    context: PermissionContext,
+    registry: TypeRegistry | None = None,
+) -> None:
+    if not can_accept_room_write(event_type, state, context, registry):
         raise AgentProtocolError("permission_denied", "actor lacks permission or state is not writable")
-
-
-def _moderator_can_submit(event_type: str, moderator_authorized: bool) -> bool:
-    allowed = {
-        ROOM_JOIN_REVIEW,
-        ROOM_CLOSE,
-        MESSAGE_CREATE,
-        SOURCE_ADD,
-        TURN_UPDATE,
-        QUESTION_CREATE,
-        ROOM_STEER,
-        MAP_UPDATE,
-        ARTIFACT_CREATE,
-        SESSION_OFFER,
-        SESSION_ANSWER,
-        SESSION_CANDIDATE,
-        SESSION_CLOSE,
-        MESSAGE_PROPOSAL_CREATE,
-        MESSAGE_POLL_CREATE,
-        MESSAGE_POLL_VOTE,
-        MESSAGE_RESOLUTION_CREATE,
-        REACTION_CREATE,
-        ROOM_LEAVE,
-    }
-    return event_type in allowed or (moderator_authorized and event_type in {ROOM_MEMBER_ROLE_UPDATE, ROOM_CANCEL})
-
-
-def _speaker_can_submit(event_type: str, policy_allowed: bool) -> bool:
-    allowed = {
-        MESSAGE_CREATE,
-        SOURCE_ADD,
-        ROOM_STEER,
-        MESSAGE_PROPOSAL_CREATE,
-        MESSAGE_POLL_CREATE,
-        MESSAGE_POLL_VOTE,
-        SESSION_OFFER,
-        SESSION_ANSWER,
-        SESSION_CANDIDATE,
-        SESSION_CLOSE,
-        REACTION_CREATE,
-        ROOM_LEAVE,
-    }
-    policy_events = {QUESTION_CREATE, MAP_UPDATE, ARTIFACT_CREATE, MESSAGE_RESOLUTION_CREATE}
-    return event_type in allowed or (policy_allowed and event_type in policy_events)
-
-
-def _observer_can_submit(event_type: str, context: PermissionContext) -> bool:
-    return (
-        event_type in {REACTION_CREATE, ROOM_LEAVE}
-        or (context.get("observer_steering_allowed", False) and event_type == ROOM_STEER)
-        or (context.get("observer_poll_vote_allowed", False) and event_type == MESSAGE_POLL_VOTE)
-    )
-
-
-def _validate_session_id(session_id: Any) -> None:
-    if not str(session_id or "").strip():
-        raise AgentProtocolError("invalid_session", "session_id is required")
-
-
-def _validate_session_description(description: Any, expected_type: str) -> None:
-    if not isinstance(description, dict):
-        raise AgentProtocolError("invalid_session", "session description is required")
-    if description.get("type") != expected_type:
-        raise AgentProtocolError("invalid_session", f"session description type must be {expected_type}")
-    if not str(description.get("sdp", "")).strip():
-        raise AgentProtocolError("invalid_session", "session description sdp is required")
-
-
-def _validate_session_transfers(transfers: Any) -> None:
-    if transfers is None:
-        return
-    if not isinstance(transfers, list):
-        raise AgentProtocolError("invalid_session", "transfers must be an array")
-    for transfer in transfers:
-        if not isinstance(transfer, dict):
-            raise AgentProtocolError("invalid_session", "transfer must be an object")
-        if not str(transfer.get("transfer_id", "")).strip():
-            raise AgentProtocolError("invalid_session", "transfer_id is required")
-        size_bytes = transfer.get("size_bytes")
-        if size_bytes is not None and (not isinstance(size_bytes, int) or size_bytes < 0):
-            raise AgentProtocolError("invalid_session", "size_bytes must be a non-negative integer")
 
 
 def _hash_canonical_json(value: Any) -> str:

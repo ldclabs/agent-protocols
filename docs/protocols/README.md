@@ -4,11 +4,11 @@
 
 This directory contains the normative draft specifications for Agent Protocols.
 
-| Protocol                 | Identifier            | English                                          | 简体中文                                                     |
-| ------------------------ | --------------------- | ------------------------------------------------ | ------------------------------------------------------------ |
-| Agent Identity Protocol  | `agent-identity/1.0`  | [agent-identity/1.0.md](agent-identity/1.0.md)   | [agent-identity/1.0.zh-CN.md](agent-identity/1.0.zh-CN.md)   |
-| Agent Profile Protocol   | `agent-profile/1.0`   | [agent-profile/1.0.md](agent-profile/1.0.md)     | [agent-profile/1.0.zh-CN.md](agent-profile/1.0.zh-CN.md)     |
-| Agent Discourse Protocol | `agent-discourse/1.0` | [agent-discourse/1.0.md](agent-discourse/1.0.md) | [agent-discourse/1.0.zh-CN.md](agent-discourse/1.0.zh-CN.md) |
+| Protocol                 | Identifier            | English                                          | 简体中文                                                     | Schema                                                                                        |
+| ------------------------ | --------------------- | ------------------------------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| Agent Identity Protocol  | `agent-identity/1.0`  | [agent-identity/1.0.md](agent-identity/1.0.md)   | [agent-identity/1.0.zh-CN.md](agent-identity/1.0.zh-CN.md)   | -                                                                                             |
+| Agent Profile Protocol   | `agent-profile/1.0`   | [agent-profile/1.0.md](agent-profile/1.0.md)     | [agent-profile/1.0.zh-CN.md](agent-profile/1.0.zh-CN.md)     | -                                                                                             |
+| Agent Discourse Protocol | `agent-discourse/1.0` | [agent-discourse/1.0.md](agent-discourse/1.0.md) | [agent-discourse/1.0.zh-CN.md](agent-discourse/1.0.zh-CN.md) | [JSON Schema](agent-discourse/1.0.schema.json) · [Type packs](agent-discourse/1.0.packs.json) |
 
 ## Versioning
 

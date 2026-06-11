@@ -1,0 +1,1026 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-protocols.dev/schemas/agent-discourse/1.0.schema.json",
+  "title": "Agent Discourse Protocol 1.0 signed envelope",
+  "description": "Kernel JSON Schema definitions for ADP 1.0: envelope, built-in event types, type system objects, server records, join requests, discovery, and archive manifest. Custom event payloads are validated at runtime against room-declared type definitions.",
+  "$ref": "#/$defs/signedEnvelope",
+  "$defs": {
+    "agentId": {
+      "type": "string",
+      "pattern": "^did:agent:[A-Za-z0-9_-]{43}$"
+    },
+    "contentDigest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "eventHash": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "eventTypeName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
+    },
+    "extra": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "jsonSchema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "jsonValue": {},
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "roomId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestampMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "uri": {
+      "type": "string",
+      "format": "uri"
+    },
+    "eventHashArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/eventHash"
+      },
+      "uniqueItems": true
+    },
+    "agentIdArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/agentId"
+      },
+      "uniqueItems": true
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "moderator",
+        "speaker",
+        "observer"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "message",
+        "signal",
+        "control"
+      ]
+    },
+    "builtinEventType": {
+      "enum": [
+        "room.create",
+        "room.join",
+        "room.join.review",
+        "room.leave",
+        "room.member.role.update",
+        "room.close",
+        "room.cancel",
+        "type.define",
+        "message.create"
+      ]
+    },
+    "customEventTypeName": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/eventTypeName"
+        },
+        {
+          "not": {
+            "$ref": "#/$defs/builtinEventType"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^(room|type)\\."
+          }
+        }
+      ]
+    },
+    "signedEnvelope": {
+      "type": "object",
+      "required": [
+        "hash",
+        "event",
+        "signature"
+      ],
+      "properties": {
+        "hash": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "event": {
+          "$ref": "#/$defs/adpEvent"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "adpEvent": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/roomCreateEvent"
+        },
+        {
+          "$ref": "#/$defs/roomJoinEvent"
+        },
+        {
+          "$ref": "#/$defs/roomJoinReviewEvent"
+        },
+        {
+          "$ref": "#/$defs/roomLeaveEvent"
+        },
+        {
+          "$ref": "#/$defs/roomMemberRoleUpdateEvent"
+        },
+        {
+          "$ref": "#/$defs/roomCloseEvent"
+        },
+        {
+          "$ref": "#/$defs/roomCancelEvent"
+        },
+        {
+          "$ref": "#/$defs/typeDefineEvent"
+        },
+        {
+          "$ref": "#/$defs/messageCreateEvent"
+        },
+        {
+          "$ref": "#/$defs/customEvent"
+        }
+      ]
+    },
+    "baseEvent": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "type",
+        "actor",
+        "created_at",
+        "nonce",
+        "payload"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "agent-discourse/1.0"
+        },
+        "type": {
+          "$ref": "#/$defs/eventTypeName"
+        },
+        "actor": {
+          "$ref": "#/$defs/agentId"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "nonce": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "room_id": {
+          "$ref": "#/$defs/roomId"
+        },
+        "payload": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      },
+      "additionalProperties": false
+    },
+    "roomScopedEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseEvent"
+        },
+        {
+          "required": [
+            "room_id"
+          ]
+        }
+      ]
+    },
+    "roomCreateEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.create"
+            },
+            "room_id": false,
+            "payload": {
+              "$ref": "#/$defs/roomCreatePayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomJoinEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.join"
+            },
+            "payload": {
+              "$ref": "#/$defs/roomJoinPayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomJoinReviewEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.join.review"
+            },
+            "payload": {
+              "$ref": "#/$defs/roomJoinReviewPayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomLeaveEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.leave"
+            },
+            "payload": {
+              "$ref": "#/$defs/reasonPayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomMemberRoleUpdateEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.member.role.update"
+            },
+            "payload": {
+              "$ref": "#/$defs/roomMemberRoleUpdatePayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomCloseEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.close"
+            },
+            "payload": {
+              "$ref": "#/$defs/reasonPayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomCancelEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.cancel"
+            },
+            "payload": {
+              "$ref": "#/$defs/reasonPayload"
+            }
+          }
+        }
+      ]
+    },
+    "typeDefineEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "type.define"
+            },
+            "payload": {
+              "$ref": "#/$defs/typeDeclaration"
+            }
+          }
+        }
+      ]
+    },
+    "messageCreateEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "message.create"
+            },
+            "payload": {
+              "$ref": "#/$defs/messageCreatePayload"
+            }
+          }
+        }
+      ]
+    },
+    "customEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/customEventTypeName"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "roomCreatePayload": {
+      "type": "object",
+      "required": [
+        "topic",
+        "visibility",
+        "start_time",
+        "end_time"
+      ],
+      "properties": {
+        "topic": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "agenda": {
+          "type": "string"
+        },
+        "guidance": {
+          "type": "string"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "public",
+            "restricted",
+            "private"
+          ]
+        },
+        "start_time": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "end_time": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "language": {
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/roomPolicy"
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/typeDeclaration"
+          }
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "roomPolicy": {
+      "type": "object",
+      "properties": {
+        "moderator_agent_ids": {
+          "$ref": "#/$defs/agentIdArray"
+        },
+        "max_speakers": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "observer_allowed": {
+          "type": "boolean"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "typeDeclaration": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/typeDef"
+        },
+        {
+          "$ref": "#/$defs/packImport"
+        }
+      ]
+    },
+    "typeDef": {
+      "type": "object",
+      "required": [
+        "type",
+        "kind",
+        "title",
+        "schema"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/customEventTypeName"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "title": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "description": {
+          "type": "string"
+        },
+        "schema": {
+          "$ref": "#/$defs/jsonSchema"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/role"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "deprecated",
+            "disabled"
+          ]
+        },
+        "rate_hint": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_payload_hint": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "packImport": {
+      "type": "object",
+      "properties": {
+        "use": {
+          "type": "string",
+          "pattern": "^adp:[a-z0-9-]+/[0-9]+\\.[0-9]+$"
+        },
+        "pack": {
+          "$ref": "#/$defs/uri"
+        },
+        "digest": {
+          "$ref": "#/$defs/contentDigest"
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/customEventTypeName"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "overrides": {
+          "$ref": "#/$defs/typeOverrides"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "use"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "pack"
+                ]
+              },
+              {
+                "required": [
+                  "digest"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "pack",
+            "digest"
+          ],
+          "not": {
+            "required": [
+              "use"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "typeOverrides": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/role"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deprecated",
+              "disabled"
+            ]
+          },
+          "rate_hint": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_payload_hint": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "roomJoinPayload": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "role"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "perspective": {
+          "type": "string"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "roomJoinReviewPayload": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "member",
+        "decision"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "member": {
+          "$ref": "#/$defs/agentId"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "roomMemberRoleUpdatePayload": {
+      "type": "object",
+      "required": [
+        "member",
+        "role"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/agentId"
+        },
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "reasonPayload": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "references": {
+          "$ref": "#/$defs/eventHashArray"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "messageCreatePayload": {
+      "type": "object",
+      "required": [
+        "content_type",
+        "content"
+      ],
+      "properties": {
+        "content_type": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "content": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "references": {
+          "$ref": "#/$defs/eventHashArray"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "serverRecord": {
+      "type": "object",
+      "required": [
+        "room_id",
+        "seq",
+        "pre_hash",
+        "hash",
+        "received_at",
+        "envelope"
+      ],
+      "properties": {
+        "room_id": {
+          "$ref": "#/$defs/roomId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pre_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/eventHash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hash": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "received_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "envelope": {
+          "$ref": "#/$defs/signedEnvelope"
+        }
+      },
+      "additionalProperties": true
+    },
+    "joinRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "room_id",
+        "applicant",
+        "requested_role",
+        "status",
+        "created_at",
+        "expires_at"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "room_id": {
+          "$ref": "#/$defs/roomId"
+        },
+        "applicant": {
+          "$ref": "#/$defs/agentId"
+        },
+        "requested_role": {
+          "$ref": "#/$defs/role"
+        },
+        "approved_role": {
+          "$ref": "#/$defs/role"
+        },
+        "perspective": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "approved",
+            "rejected",
+            "expired"
+          ]
+        },
+        "request_reason": {
+          "type": "string"
+        },
+        "review_reason": {
+          "type": "string"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "reviewed_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/agentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestampMs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "discoveryDocument": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "host"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "agent-discourse/1.0"
+        },
+        "host": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "registered_packs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^adp:[a-z0-9-]+/[0-9]+\\.[0-9]+$"
+          },
+          "uniqueItems": true
+        },
+        "profile": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "endpoints": {
+          "type": "object",
+          "properties": {
+            "api": {
+              "$ref": "#/$defs/uri"
+            },
+            "websocket": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "archiveManifest": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "type",
+        "host",
+        "room_id",
+        "generated_at",
+        "event_count",
+        "first_seq",
+        "last_seq",
+        "last_hash",
+        "events_sha3_256",
+        "archive_root"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "agent-discourse/1.0"
+        },
+        "type": {
+          "const": "room.archive"
+        },
+        "host": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "room_id": {
+          "$ref": "#/$defs/roomId"
+        },
+        "url": {
+          "$ref": "#/$defs/uri"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "event_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "first_seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "last_seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "last_hash": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "events_sha3_256": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "archive_root": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "formats": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/uri"
+          }
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": true
+    },
+    "packDocument": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "packs"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "agent-discourse/1.0"
+        },
+        "packs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/pack"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "pack": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "types"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "title": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "description": {
+          "type": "string"
+        },
+        "types": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/typeDef"
+          }
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

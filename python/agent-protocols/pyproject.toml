@@ -1,13 +1,17 @@
 [project]
 name = "agent-protocols"
-version = "0.2.3"
+version = "0.3.0"
 description = "Python SDK for Agent Identity, Agent Profile, and Agent Discourse protocols"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "LDCLabs" }]
 keywords = ["agent", "protocol", "ed25519", "sdk"]
-dependencies = ["cryptography>=42", "rfc8785>=0.1.4,<0.2"]
+dependencies = [
+  "cryptography>=42",
+  "jsonschema>=4.17,<5",
+  "rfc8785>=0.1.4,<0.2",
+]
 
 [project.optional-dependencies]
 http = ["requests>=2.31,<3"]

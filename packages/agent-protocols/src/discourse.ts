@@ -1,3 +1,13 @@
+/**
+ * Agent Discourse Protocol 1.0: kernel types, the room type system, and
+ * verification helpers.
+ *
+ * The protocol defines nine built-in event types. Every other event type is
+ * declared per room as a schema-validated type definition, either inline or
+ * imported from a type pack. Hosts validate structure and permissions; they
+ * never need to understand application semantics.
+ */
+import { Validator, type Schema } from "@cfworker/json-schema";
 import canonicalize from "canonicalize";
 import { createHash } from "node:crypto";
 
@@ -13,6 +23,7 @@ import {
 
 export const DISCOURSE_PROTOCOL = "agent-discourse/1.0";
 
+/** The nine built-in event types. All other types are room-defined. */
 export const eventType = {
   ROOM_CREATE: "room.create",
   ROOM_JOIN: "room.join",
@@ -21,90 +32,130 @@ export const eventType = {
   ROOM_MEMBER_ROLE_UPDATE: "room.member.role.update",
   ROOM_CLOSE: "room.close",
   ROOM_CANCEL: "room.cancel",
+  TYPE_DEFINE: "type.define",
   MESSAGE_CREATE: "message.create",
-  REACTION_CREATE: "reaction.create",
-  MESSAGE_PROPOSAL_CREATE: "message.proposal.create",
-  MESSAGE_POLL_CREATE: "message.poll.create",
-  MESSAGE_POLL_VOTE: "message.poll.vote",
-  MESSAGE_RESOLUTION_CREATE: "message.resolution.create",
-  SOURCE_ADD: "source.add",
-  TURN_UPDATE: "turn.update",
-  QUESTION_CREATE: "question.create",
-  ROOM_STEER: "room.steer",
-  MAP_UPDATE: "map.update",
-  ARTIFACT_CREATE: "artifact.create",
-  SESSION_OFFER: "session.offer",
-  SESSION_ANSWER: "session.answer",
-  SESSION_CANDIDATE: "session.candidate",
-  SESSION_CLOSE: "session.close",
 } as const;
 
-export type EventType = (typeof eventType)[keyof typeof eventType];
+export type BuiltinEventType = (typeof eventType)[keyof typeof eventType];
+
+export const BUILTIN_EVENT_TYPES: readonly string[] = Object.values(eventType);
+
+/** Custom event types must not use these prefixes. */
+export const RESERVED_TYPE_PREFIXES = ["room.", "type."] as const;
+
+/** Registered type packs defined by the specification in `1.0.packs.json`. */
+export const packId = {
+  REACTIONS: "adp:reactions/1.0",
+  DELIBERATION: "adp:deliberation/1.0",
+  CURATION: "adp:curation/1.0",
+  MODERATION: "adp:moderation/1.0",
+  REALTIME: "adp:realtime/1.0",
+} as const;
+
+export const REGISTERED_PACK_IDS: readonly string[] = Object.values(packId);
+
 export type RoomState = "scheduled" | "active" | "ended" | "cancelled";
 export type Visibility = "public" | "restricted" | "private";
-export type TurnPolicy = "free" | "round_robin" | "moderator_led";
-export type Role = "moderator" | "expert" | "participant" | "observer";
+export type Role = "moderator" | "speaker" | "observer";
+/** Permission class of an event type. */
+export type TypeKind = "message" | "signal" | "control";
+export type TypeStatus = "active" | "deprecated" | "disabled";
 export type JoinRequestStatus = "pending" | "approved" | "rejected" | "expired";
 export type JoinDecision = "approve" | "reject";
-export type MessageIntent =
-  | "question"
-  | "answer"
-  | "clarification"
-  | "critique"
-  | "synthesis"
-  | "follow_up"
-  | "other";
-export type MapOperation =
-  | "upsert_node"
-  | "move_node"
-  | "delete_node"
-  | "merge_nodes"
-  | "replace_snapshot"
-  | "mark_resolved";
-export type MapNodeStatus = "open" | "resolved" | "closed";
-export type ResolutionOutcome =
-  | "accepted"
-  | "rejected"
-  | "deferred"
-  | "superseded";
-export type SessionType = "webrtc";
-export type SessionMediaKind = "audio" | "video" | "screen" | "data" | "file";
-export type SessionTopology = "peer_to_peer" | "sfu" | "turn_relay";
-export type SessionDescriptionType = "offer" | "answer";
-const sessionMediaKinds = new Set<string>([
-  "audio",
-  "video",
-  "screen",
-  "data",
-  "file",
-]);
 
 export interface RoomCreatePayload {
   topic: string;
   agenda?: string;
+  guidance?: string;
   visibility: Visibility;
   start_time: number;
   end_time: number;
   tags?: string[];
   language?: string;
   policy?: RoomPolicy;
-  extensions?: Record<string, unknown>;
+  types?: TypeDeclaration[];
   extra?: Record<string, unknown>;
 }
 
 export interface RoomPolicy {
-  turn_policy?: TurnPolicy;
   moderator_agent_ids?: AgentId[];
-  max_participants?: number;
+  max_speakers?: number;
   observer_allowed?: boolean;
-  observer_steering_allowed?: boolean;
-  [key: string]: unknown;
+  extra?: Record<string, unknown>;
+}
+
+/** A room-scoped declaration of a custom event type. */
+export interface TypeDef {
+  type: string;
+  kind: TypeKind;
+  title: string;
+  description?: string;
+  /** Self-contained JSON Schema (draft 2020-12) for the event payload. */
+  schema: Record<string, unknown>;
+  roles?: Role[];
+  instructions?: string;
+  version?: string;
+  status?: TypeStatus;
+  rate_hint?: number;
+  max_payload_hint?: number;
+  extra?: Record<string, unknown>;
+}
+
+/** Per-type adjustments applied when importing a pack. */
+export interface TypeOverride {
+  roles?: Role[];
+  instructions?: string;
+  status?: TypeStatus;
+  rate_hint?: number;
+  max_payload_hint?: number;
+}
+
+/** Imports a registered pack (`use`) or an external pack (`pack` + `digest`). */
+export interface PackImport {
+  use?: string;
+  pack?: string;
+  digest?: string;
+  types?: string[];
+  overrides?: Record<string, TypeOverride>;
+}
+
+/** One entry of `room.create.payload.types` or a `type.define` payload. */
+export type TypeDeclaration = TypeDef | PackImport;
+
+export interface Pack {
+  id: string;
+  title: string;
+  description?: string;
+  types: TypeDef[];
+  extra?: Record<string, unknown>;
+}
+
+/** The shape of `1.0.packs.json` and externally published pack documents. */
+export interface PackDocument {
+  protocol: string;
+  description?: string;
+  packs: Pack[];
+}
+
+/** Indexes the packs of a document by pack id for registry materialization. */
+export function packMap(document: PackDocument): Record<string, Pack> {
+  const packs: Record<string, Pack> = {};
+  for (const pack of document.packs) packs[pack.id] = pack;
+  return packs;
 }
 
 export interface RoomResponse {
   id: string;
   status: RoomState;
   url: string;
+  topic?: string;
+  guidance?: string;
+  visibility?: Visibility;
+  start_time?: number;
+  end_time?: number;
+  policy?: RoomPolicy;
+  /** Materialized type registry served by the host. */
+  types?: TypeDef[];
   seq: number;
   pre_hash: string | null;
   hash: string;
@@ -116,6 +167,7 @@ export interface RoomJoinPayload {
   request_id: string;
   role: Role;
   perspective?: string;
+  extra?: Record<string, unknown>;
 }
 
 export interface RoomJoinRequestPayload {
@@ -136,8 +188,8 @@ export interface RoomJoinRequest {
   request_reason?: string;
   review_reason?: string;
   created_at: number;
-  reviewed_by?: AgentId;
-  reviewed_at?: number;
+  reviewed_by?: AgentId | null;
+  reviewed_at?: number | null;
   expires_at?: number;
   extra?: Record<string, unknown>;
 }
@@ -148,191 +200,32 @@ export interface RoomJoinReviewPayload {
   decision: JoinDecision;
   role?: Role;
   reason?: string;
-}
-
-export interface RoomLeavePayload {
-  reason?: string;
+  extra?: Record<string, unknown>;
 }
 
 export interface RoleUpdatePayload {
   member: AgentId;
   role: Role;
   reason?: string;
+  extra?: Record<string, unknown>;
 }
+
+/** Shared payload of `room.leave`, `room.close`, and `room.cancel`. */
+export interface ReasonPayload {
+  reason?: string;
+  references?: string[];
+  extra?: Record<string, unknown>;
+}
+
+export type RoomLeavePayload = ReasonPayload;
+export type RoomClosePayload = ReasonPayload;
+export type RoomCancelPayload = ReasonPayload;
 
 export interface MessageCreatePayload {
   content_type: string;
   content: unknown;
   references?: string[];
-}
-
-export interface ProposalCreatePayload {
-  proposal_id: string;
-  title: string;
-  body: string;
-  content_type?: string;
-  references?: string[];
-  source_event_ids?: string[];
   extra?: Record<string, unknown>;
-}
-
-export interface PollOption {
-  id: string;
-  label: string;
-  description?: string;
-}
-
-export interface PollCreatePayload {
-  poll_id: string;
-  question: string;
-  options: PollOption[];
-  min_choices?: number;
-  max_choices?: number;
-  closes_at?: number;
-  references?: string[];
-  extra?: Record<string, unknown>;
-}
-
-export interface PollVotePayload {
-  event_id: string;
-  option_ids: string[];
-}
-
-export interface ResolutionCreatePayload {
-  resolution_id: string;
-  outcome: ResolutionOutcome;
-  summary: string;
-  proposal_event_id?: string;
-  poll_event_id?: string;
-  references?: string[];
-  extra?: Record<string, unknown>;
-}
-
-export interface ReactionCreatePayload {
-  event_id: string;
-  reaction: string;
-  score?: number;
-}
-
-export interface SourceAddPayload {
-  source_type: string;
-  uri: string;
-  title?: string;
-  retrieved_at?: number;
-  content_digest?: string;
-  excerpt?: string;
-  extra?: Record<string, unknown>;
-}
-
-export interface TurnUpdatePayload {
-  turn_id: number;
-  speaker: AgentId;
-  intent?: MessageIntent;
-  topic?: string;
-  expires_at?: number;
-  reason?: string;
-}
-
-export interface QuestionGeneratePayload {
-  question: string;
-  target_perspectives?: string[];
-  basis?: string;
-  source_event_ids?: string[];
-  references?: string[];
-  priority?: number;
-}
-
-export interface DiscourseSteerPayload {
-  instruction: string;
-  target: string;
-  priority?: number;
-  references?: string[];
-}
-
-export interface MapNode {
-  id: string;
-  parent_id?: string;
-  title: string;
-  summary?: string;
-  status?: MapNodeStatus;
-  source_event_ids?: string[];
-  discussion_event_ids?: string[];
-  children?: MapNode[];
-  extra?: Record<string, unknown>;
-}
-
-export interface MapUpdatePayload {
-  operation: MapOperation;
-  node?: MapNode;
-  extra?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-export interface ArtifactCreatePayload {
-  artifact_id: string;
-  format: string;
-  title: string;
-  uri: string;
-  content_digest?: string;
-  source_event_ids?: string[];
-  discussion_event_ids?: string[];
-  map_event_id?: string;
-}
-
-export interface SessionDescription {
-  type: SessionDescriptionType;
-  sdp: string;
-}
-
-export interface SessionIceCandidate {
-  candidate: string;
-  sdp_mid?: string;
-  sdp_mline_index?: number;
-  username_fragment?: string;
-}
-
-export interface SessionDataTransfer {
-  transfer_id: string;
-  file_name?: string;
-  size_bytes?: number;
-  mime_type?: string;
-  content_digest?: string;
-}
-
-export interface SessionOfferPayload {
-  session_id: string;
-  session_type: SessionType;
-  media: SessionMediaKind[];
-  description: SessionDescription;
-  to?: AgentId[];
-  topology?: SessionTopology;
-  transfers?: SessionDataTransfer[];
-  expires_at?: number;
-  references?: string[];
-  extra?: Record<string, unknown>;
-}
-
-export interface SessionAnswerPayload {
-  session_id: string;
-  offer_event_id: string;
-  description: SessionDescription;
-  accepted_media?: SessionMediaKind[];
-  transfers?: SessionDataTransfer[];
-  extra?: Record<string, unknown>;
-}
-
-export interface SessionCandidatePayload {
-  session_id: string;
-  candidate?: SessionIceCandidate;
-  target?: AgentId;
-  end_of_candidates?: boolean;
-  extra?: Record<string, unknown>;
-}
-
-export interface SessionClosePayload {
-  session_id: string;
-  reason?: string;
-  references?: string[];
 }
 
 export interface ServerRecord<P = unknown> {
@@ -362,16 +255,9 @@ export interface DiscourseProtocolDiscovery {
   protocol: string;
   host: string;
   features?: string[];
+  registered_packs?: string[];
   profile?: ProfileResolverMetadata;
   endpoints?: Record<string, string>;
-}
-
-export interface ArtifactManifest {
-  artifact_id: string;
-  type: string;
-  format: string;
-  uri: string;
-  content_digest?: string;
 }
 
 export interface ArchiveManifest {
@@ -387,25 +273,15 @@ export interface ArchiveManifest {
   last_hash: string;
   events_sha3_256: string;
   archive_root: string;
-  map_snapshot?: { event_id: string; digest: string };
-  artifacts?: ArtifactManifest[];
-  discourse_trace_quality_score?: number;
   formats?: Record<string, string>;
+  extra?: Record<string, unknown>;
 }
 
+/** Permission inputs for one actor in one room. */
 export interface PermissionContext {
   role?: Role;
   isCreator?: boolean;
   joinRequestApproved?: boolean;
-  moderatorAuthorized?: boolean;
-  expertPolicyAllowed?: boolean;
-  participantPolicyAllowed?: boolean;
-  observerSteeringAllowed?: boolean;
-  observerPollVoteAllowed?: boolean;
-}
-
-export interface StateWriteOptions {
-  postEndReactionAllowed?: boolean;
 }
 
 export function roomCreateEvent(
@@ -424,6 +300,26 @@ export function roomCreateEvent(
   );
 }
 
+export function typeDefineEvent(
+  actor: AgentId,
+  createdAt: number,
+  nonce: number,
+  roomId: string,
+  declaration: TypeDeclaration,
+): Event<TypeDeclaration> {
+  return withRoomId(
+    createEvent(
+      DISCOURSE_PROTOCOL,
+      eventType.TYPE_DEFINE,
+      actor,
+      createdAt,
+      nonce,
+      declaration,
+    ),
+    roomId,
+  );
+}
+
 export function discourseEvent<P>(
   type: string,
   actor: AgentId,
@@ -438,6 +334,14 @@ export function discourseEvent<P>(
   );
 }
 
+export function isBuiltinEventType(type: string): boolean {
+  return BUILTIN_EVENT_TYPES.includes(type);
+}
+
+export function eventRequiresRoomId(type: string): boolean {
+  return type !== eventType.ROOM_CREATE;
+}
+
 export function validateDiscourseEnvelope(envelope: Envelope<unknown>): void {
   verifyEnvelope(envelope);
   const protocol = envelope.event.protocol;
@@ -447,10 +351,14 @@ export function validateDiscourseEnvelope(envelope: Envelope<unknown>): void {
       `expected ${DISCOURSE_PROTOCOL}, got ${protocol}`,
     );
   }
-  if (
-    eventRequiresRoomId(envelope.event.type) &&
-    envelope.event.room_id === undefined
-  ) {
+  if (envelope.event.type === eventType.ROOM_CREATE) {
+    if (envelope.event.room_id !== undefined) {
+      throw protocolError(
+        "invalid_event",
+        "room.create must not include room_id",
+      );
+    }
+  } else if (envelope.event.room_id === undefined) {
     throw protocolError("missing_room_id", "event requires a room_id");
   }
 }
@@ -460,8 +368,15 @@ export function validateRoomPath(
   pathRoomId: string,
 ): void {
   const actual = envelope.event.room_id;
-  if (actual === undefined && envelope.event.type === eventType.ROOM_CREATE)
+  if (envelope.event.type === eventType.ROOM_CREATE) {
+    if (actual !== undefined) {
+      throw protocolError(
+        "invalid_event",
+        "room.create must not include room_id",
+      );
+    }
     return;
+  }
   if (actual === undefined)
     throw protocolError("missing_room_id", "event requires a room_id");
   if (actual !== pathRoomId)
@@ -471,122 +386,323 @@ export function validateRoomPath(
     );
 }
 
-export function eventRequiresRoomId(type: string): boolean {
-  return type !== eventType.ROOM_CREATE;
+/**
+ * Checks the shape of a custom event type name: lowercase dot-separated, at
+ * least two segments, not built-in, not under a reserved prefix.
+ */
+export function validateCustomEventTypeName(name: string): void {
+  const segments = name.split(".");
+  const validShape =
+    segments.length >= 2 &&
+    segments.every((segment) => /^[a-z0-9][a-z0-9_-]*$/.test(segment));
+  if (!validShape) {
+    throw protocolError("invalid_event", `invalid event type name: ${name}`);
+  }
+  if (isBuiltinEventType(name)) {
+    throw protocolError("invalid_event", `${name} is a built-in event type`);
+  }
+  if (RESERVED_TYPE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+    throw protocolError("invalid_event", `${name} uses a reserved type prefix`);
+  }
+}
+
+export function isPackImport(
+  declaration: TypeDeclaration,
+): declaration is PackImport {
+  return (
+    typeof declaration === "object" &&
+    declaration !== null &&
+    ("use" in declaration || "pack" in declaration || "digest" in declaration)
+  );
+}
+
+export function isTypeDef(declaration: TypeDeclaration): declaration is TypeDef {
+  return (
+    typeof declaration === "object" &&
+    declaration !== null &&
+    !isPackImport(declaration) &&
+    "type" in declaration
+  );
+}
+
+export function validateTypeDef(def: TypeDef): void {
+  validateCustomEventTypeName(def.type);
+  if (!["message", "signal", "control"].includes(def.kind)) {
+    throw protocolError("invalid_event", `invalid type kind: ${def.kind}`);
+  }
+  if (typeof def.title !== "string" || def.title.trim() === "") {
+    throw protocolError(
+      "invalid_event",
+      "type definition title must not be empty",
+    );
+  }
+  if (
+    typeof def.schema !== "object" ||
+    def.schema === null ||
+    Array.isArray(def.schema)
+  ) {
+    throw protocolError(
+      "invalid_event",
+      "type definition schema must be a JSON Schema object",
+    );
+  }
+  compileSchema(def.schema);
+  if (def.roles !== undefined && def.roles.length === 0) {
+    throw protocolError(
+      "invalid_event",
+      "type definition roles must not be empty",
+    );
+  }
+  for (const hint of [def.rate_hint, def.max_payload_hint]) {
+    if (hint !== undefined && (!Number.isInteger(hint) || hint < 1)) {
+      throw protocolError(
+        "invalid_event",
+        "type definition hints must be positive integers",
+      );
+    }
+  }
+}
+
+export function validatePackImport(declaration: PackImport): void {
+  const hasUse = declaration.use !== undefined;
+  const hasExternal =
+    declaration.pack !== undefined && declaration.digest !== undefined;
+  if (hasUse) {
+    if (declaration.pack !== undefined || declaration.digest !== undefined) {
+      throw protocolError(
+        "invalid_event",
+        "pack import requires either use, or pack with digest",
+      );
+    }
+    if (!isRegisteredPackId(declaration.use as string)) {
+      throw protocolError(
+        "invalid_event",
+        `invalid registered pack id: ${declaration.use}`,
+      );
+    }
+  } else if (hasExternal) {
+    if ((declaration.digest as string).trim() === "") {
+      throw protocolError(
+        "invalid_event",
+        "external pack digest must not be empty",
+      );
+    }
+  } else {
+    throw protocolError(
+      "invalid_event",
+      "pack import requires either use, or pack with digest",
+    );
+  }
+  if (declaration.types !== undefined && declaration.types.length === 0) {
+    throw protocolError(
+      "invalid_event",
+      "pack import types subset must not be empty",
+    );
+  }
+}
+
+export function validateTypeDeclaration(declaration: TypeDeclaration): void {
+  if (isPackImport(declaration)) {
+    validatePackImport(declaration);
+  } else if (isTypeDef(declaration)) {
+    validateTypeDef(declaration);
+  } else {
+    throw protocolError(
+      "invalid_event",
+      "type declaration must be an inline definition or a pack import",
+    );
+  }
+}
+
+function isRegisteredPackId(id: string): boolean {
+  return /^adp:[a-z0-9-]+\/[0-9]+\.[0-9]+$/.test(id);
 }
 
 export function validateRoomCreatePayload(payload: RoomCreatePayload): void {
   if (payload.topic.trim() === "") {
-    throw protocolError("invalid_room", "room topic must not be empty");
+    throw protocolError("invalid_event", "room topic must not be empty");
   }
   if (payload.start_time >= payload.end_time) {
-    throw protocolError("invalid_room", "start_time must be before end_time");
+    throw protocolError("invalid_event", "start_time must be before end_time");
   }
-  const maxParticipants = payload.policy?.max_participants;
+  const maxSpeakers = payload.policy?.max_speakers;
   if (
-    maxParticipants !== undefined &&
-    (!Number.isInteger(maxParticipants) || maxParticipants < 1)
+    maxSpeakers !== undefined &&
+    (!Number.isInteger(maxSpeakers) || maxSpeakers < 1)
   ) {
     throw protocolError(
-      "invalid_room",
-      "max_participants must be a positive integer",
+      "invalid_event",
+      "max_speakers must be a positive integer",
     );
   }
-}
-
-export function validatePollCreatePayload(payload: PollCreatePayload): void {
-  if (payload.poll_id.trim() === "" || payload.question.trim() === "") {
-    throw protocolError("invalid_poll", "poll_id and question are required");
-  }
-  if (payload.options.length < 2) {
-    throw protocolError("invalid_poll", "poll requires at least two options");
-  }
-  const optionIds = new Set<string>();
-  for (const option of payload.options) {
-    if (option.id.trim() === "" || option.label.trim() === "") {
-      throw protocolError("invalid_poll", "option id and label are required");
-    }
-    if (optionIds.has(option.id)) {
-      throw protocolError("invalid_poll", "poll option ids must be unique");
-    }
-    optionIds.add(option.id);
-  }
-  const minChoices = payload.min_choices ?? 1;
-  const maxChoices = payload.max_choices ?? 1;
-  if (minChoices < 1 || maxChoices < minChoices) {
-    throw protocolError("invalid_poll", "invalid poll choice limits");
+  for (const declaration of payload.types ?? []) {
+    validateTypeDeclaration(declaration);
   }
 }
 
-export function validatePollVotePayload(
-  payload: PollVotePayload,
-  poll: PollCreatePayload,
-  nowMs?: number,
+export function validateMessageCreatePayload(
+  payload: MessageCreatePayload,
 ): void {
-  if (poll.closes_at !== undefined && nowMs !== undefined && nowMs > poll.closes_at) {
-    throw protocolError("poll_closed", "poll is closed");
-  }
-  const minChoices = poll.min_choices ?? 1;
-  const maxChoices = poll.max_choices ?? 1;
-  const optionIds = new Set(poll.options.map((option) => option.id));
-  const selected = new Set(payload.option_ids);
-  if (selected.size !== payload.option_ids.length) {
-    throw protocolError("invalid_poll_vote", "duplicate poll options");
-  }
-  if (selected.size < minChoices || selected.size > maxChoices) {
-    throw protocolError("invalid_poll_vote", "invalid number of options");
-  }
-  for (const optionId of selected) {
-    if (!optionIds.has(optionId)) {
-      throw protocolError("invalid_poll_vote", "unknown poll option");
-    }
+  if (payload.content_type.trim() === "") {
+    throw protocolError("invalid_event", "content_type must not be empty");
   }
 }
 
-export function validateSessionOfferPayload(
-  payload: SessionOfferPayload,
-): void {
-  validateSessionId(payload.session_id);
-  if (payload.session_type !== "webrtc") {
-    throw protocolError("invalid_session", "session_type must be webrtc");
+/** The effective set of type definitions active in a room. */
+export class TypeRegistry {
+  private readonly types = new Map<string, TypeDef>();
+
+  /**
+   * Materializes a registry from declarations, resolving pack imports from
+   * `packs`, keyed by registered pack id or external pack URI.
+   */
+  static fromDeclarations(
+    declarations: TypeDeclaration[],
+    packs: Record<string, Pack> = {},
+  ): TypeRegistry {
+    const registry = new TypeRegistry();
+    for (const declaration of declarations) {
+      registry.apply(declaration, packs);
+    }
+    return registry;
   }
-  if (!Array.isArray(payload.media) || payload.media.length === 0) {
-    throw protocolError("invalid_session", "media must not be empty");
-  }
-  for (const media of payload.media) {
-    if (!sessionMediaKinds.has(media)) {
-      throw protocolError("invalid_session", `unsupported media kind ${media}`);
+
+  /**
+   * Applies one declaration: an inline definition or a pack import.
+   * Redefining an existing type replaces it; the latest definition wins.
+   */
+  apply(declaration: TypeDeclaration, packs: Record<string, Pack> = {}): void {
+    if (isPackImport(declaration)) {
+      this.import(declaration, packs);
+    } else if (isTypeDef(declaration)) {
+      this.define(declaration);
+    } else {
+      throw protocolError(
+        "invalid_event",
+        "type declaration must be an inline definition or a pack import",
+      );
     }
   }
-  validateSessionDescription(payload.description, "offer");
-  validateSessionTransfers(payload.transfers ?? []);
-}
 
-export function validateSessionAnswerPayload(
-  payload: SessionAnswerPayload,
-): void {
-  validateSessionId(payload.session_id);
-  if (payload.offer_event_id.trim() === "") {
-    throw protocolError("invalid_session", "offer_event_id is required");
+  define(def: TypeDef): void {
+    validateTypeDef(def);
+    this.types.set(def.type, def);
   }
-  validateSessionDescription(payload.description, "answer");
-  validateSessionTransfers(payload.transfers ?? []);
+
+  private import(declaration: PackImport, packs: Record<string, Pack>): void {
+    validatePackImport(declaration);
+    const reference = declaration.use ?? (declaration.pack as string);
+    const pack = packs[reference];
+    if (!pack) {
+      throw protocolError("pack_unavailable", `pack not available: ${reference}`);
+    }
+    const available = new Set(pack.types.map((def) => def.type));
+    for (const name of declaration.types ?? []) {
+      if (!available.has(name)) {
+        throw protocolError(
+          "pack_unavailable",
+          `type ${name} is not in pack ${reference}`,
+        );
+      }
+    }
+    const subset =
+      declaration.types !== undefined ? new Set(declaration.types) : undefined;
+    for (const name of Object.keys(declaration.overrides ?? {})) {
+      const imported = subset ? subset.has(name) : available.has(name);
+      if (!imported) {
+        throw protocolError(
+          "invalid_event",
+          `override target ${name} is not imported from pack ${reference}`,
+        );
+      }
+    }
+    for (const def of pack.types) {
+      if (subset && !subset.has(def.type)) continue;
+      const override = declaration.overrides?.[def.type];
+      this.define(override ? { ...def, ...override } : { ...def });
+    }
+  }
+
+  get(type: string): TypeDef | undefined {
+    return this.types.get(type);
+  }
+
+  has(type: string): boolean {
+    return this.types.has(type);
+  }
+
+  get size(): number {
+    return this.types.size;
+  }
+
+  definitions(): TypeDef[] {
+    return [...this.types.values()];
+  }
+
+  /** Validates a custom event payload against the type's schema and status. */
+  validatePayload(type: string, payload: unknown): void {
+    const def = this.types.get(type);
+    if (!def) {
+      throw protocolError("type_not_defined", type);
+    }
+    if ((def.status ?? "active") === "disabled") {
+      throw protocolError("type_disabled", type);
+    }
+    const validator = compileSchema(def.schema);
+    const result = validator.validate(payload);
+    if (!result.valid) {
+      const detail = result.errors
+        .slice(0, 3)
+        .map((error) => error.error)
+        .join("; ");
+      throw protocolError("payload_schema_violation", `${type}: ${detail}`);
+    }
+  }
 }
 
-export function validateSessionCandidatePayload(
-  payload: SessionCandidatePayload,
+/**
+ * Validates an event payload: built-in payloads are accepted as-is (use the
+ * typed validators for them); custom payloads must satisfy the registry.
+ */
+export function validateEventAgainstRegistry(
+  type: string,
+  payload: unknown,
+  registry: TypeRegistry,
 ): void {
-  validateSessionId(payload.session_id);
-  if (payload.end_of_candidates) return;
-  if (
-    !payload.candidate ||
-    typeof payload.candidate.candidate !== "string" ||
-    payload.candidate.candidate.trim() === ""
-  ) {
+  if (isBuiltinEventType(type)) return;
+  registry.validatePayload(type, payload);
+}
+
+function compileSchema(schema: Record<string, unknown>): Validator {
+  try {
+    return new Validator(schema as Schema, "2020-12", false);
+  } catch (error) {
+    throw protocolError("invalid_event", `invalid type schema: ${error}`);
+  }
+}
+
+/**
+ * Verifies a `<algorithm>:<base64url-digest>` content digest over raw bytes.
+ * Supports `sha256` and `sha3-256`.
+ */
+export function verifyPackDigest(bytes: Uint8Array, digest: string): void {
+  const separator = digest.indexOf(":");
+  if (separator < 0) {
+    throw protocolError("pack_unavailable", `invalid digest format: ${digest}`);
+  }
+  const algorithm = digest.slice(0, separator);
+  const expected = digest.slice(separator + 1);
+  if (algorithm !== "sha256" && algorithm !== "sha3-256") {
     throw protocolError(
-      "invalid_session",
-      "candidate is required unless end_of_candidates is true",
+      "pack_unavailable",
+      `unsupported digest algorithm: ${algorithm}`,
     );
+  }
+  const actual = createHash(algorithm)
+    .update(bytes)
+    .digest("base64url");
+  if (actual !== expected) {
+    throw protocolError("pack_unavailable", "pack digest mismatch");
   }
 }
 
@@ -682,47 +798,71 @@ export function archiveEventsDigest(records: ServerRecord[]): string {
   return hashCanonicalJson(records);
 }
 
-export function canSubmitEvent(
-  type: string,
-  context: PermissionContext,
-): boolean {
-  if (type === eventType.ROOM_CREATE) return true;
-  if (type === eventType.ROOM_JOIN) return Boolean(context.joinRequestApproved);
-  if (context.isCreator) return isKnownEventType(type);
-
-  switch (context.role) {
-    case "moderator":
-      return moderatorCanSubmit(type, context.moderatorAuthorized ?? false);
-    case "expert":
-      return speakerCanSubmit(type, context.expertPolicyAllowed ?? false);
-    case "participant":
-      return speakerCanSubmit(type, context.participantPolicyAllowed ?? false);
-    case "observer":
-      return observerCanSubmit(type, context);
-    default:
-      return false;
+/** Default sender roles for each kind. The creator passes every role check. */
+export function defaultKindRoles(kind: TypeKind): readonly Role[] {
+  switch (kind) {
+    case "message":
+      return ["moderator", "speaker"];
+    case "signal":
+      return ["moderator", "speaker", "observer"];
+    case "control":
+      return ["moderator"];
   }
 }
 
-export function canWriteInState(
+/**
+ * Role check for one event type, using kind defaults and per-type overrides
+ * from the room's type registry. State checks are separate.
+ */
+export function canSubmitEvent(
   type: string,
-  state: RoomState,
-  options: StateWriteOptions = {},
+  context: PermissionContext,
+  registry: TypeRegistry = new TypeRegistry(),
 ): boolean {
+  switch (type) {
+    case eventType.ROOM_CREATE:
+      return true;
+    case eventType.ROOM_JOIN:
+      return Boolean(context.joinRequestApproved);
+    case eventType.ROOM_LEAVE:
+      return Boolean(context.isCreator) || context.role !== undefined;
+    case eventType.ROOM_JOIN_REVIEW:
+    case eventType.ROOM_MEMBER_ROLE_UPDATE:
+    case eventType.ROOM_CLOSE:
+    case eventType.ROOM_CANCEL:
+    case eventType.TYPE_DEFINE:
+      return Boolean(context.isCreator) || context.role === "moderator";
+    case eventType.MESSAGE_CREATE:
+      return (
+        Boolean(context.isCreator) ||
+        context.role === "moderator" ||
+        context.role === "speaker"
+      );
+    default: {
+      const def = registry.get(type);
+      if (!def || (def.status ?? "active") === "disabled") return false;
+      if (context.isCreator) return true;
+      if (context.role === undefined) return false;
+      const roles = def.roles ?? defaultKindRoles(def.kind);
+      return roles.includes(context.role);
+    }
+  }
+}
+
+export function canWriteInState(type: string, state: RoomState): boolean {
   switch (state) {
     case "scheduled":
-      return eventTypeIn(type, [
-        eventType.ROOM_JOIN,
-        eventType.ROOM_JOIN_REVIEW,
-        eventType.ROOM_CANCEL,
-      ]);
+      return (
+        type === eventType.ROOM_JOIN ||
+        type === eventType.ROOM_JOIN_REVIEW ||
+        type === eventType.ROOM_MEMBER_ROLE_UPDATE ||
+        type === eventType.ROOM_LEAVE ||
+        type === eventType.TYPE_DEFINE ||
+        type === eventType.ROOM_CANCEL
+      );
     case "active":
       return type !== eventType.ROOM_CREATE && type !== eventType.ROOM_CANCEL;
     case "ended":
-      return (
-        Boolean(options.postEndReactionAllowed) &&
-        type === eventType.REACTION_CREATE
-      );
     case "cancelled":
       return false;
   }
@@ -732,20 +872,18 @@ export function canAcceptRoomWrite(
   type: string,
   state: RoomState,
   permission: PermissionContext,
-  options: StateWriteOptions = {},
+  registry: TypeRegistry = new TypeRegistry(),
 ): boolean {
-  return (
-    canSubmitEvent(type, permission) && canWriteInState(type, state, options)
-  );
+  return canSubmitEvent(type, permission, registry) && canWriteInState(type, state);
 }
 
 export function validateRoomWrite(
   type: string,
   state: RoomState,
   permission: PermissionContext,
-  options: StateWriteOptions = {},
+  registry: TypeRegistry = new TypeRegistry(),
 ): void {
-  if (!canAcceptRoomWrite(type, state, permission, options)) {
+  if (!canAcceptRoomWrite(type, state, permission, registry)) {
     throw protocolError(
       "permission_denied",
       "actor lacks permission or state is not writable",
@@ -753,138 +891,8 @@ export function validateRoomWrite(
   }
 }
 
-function moderatorCanSubmit(
-  type: string,
-  moderatorAuthorized: boolean,
-): boolean {
-  return (
-    eventTypeIn(type, [
-      eventType.ROOM_JOIN_REVIEW,
-      eventType.ROOM_CLOSE,
-      eventType.MESSAGE_CREATE,
-      eventType.SOURCE_ADD,
-      eventType.TURN_UPDATE,
-      eventType.QUESTION_CREATE,
-      eventType.ROOM_STEER,
-      eventType.MAP_UPDATE,
-      eventType.ARTIFACT_CREATE,
-      eventType.SESSION_OFFER,
-      eventType.SESSION_ANSWER,
-      eventType.SESSION_CANDIDATE,
-      eventType.SESSION_CLOSE,
-      eventType.MESSAGE_PROPOSAL_CREATE,
-      eventType.MESSAGE_POLL_CREATE,
-      eventType.MESSAGE_POLL_VOTE,
-      eventType.MESSAGE_RESOLUTION_CREATE,
-      eventType.REACTION_CREATE,
-      eventType.ROOM_LEAVE,
-    ]) ||
-    (moderatorAuthorized &&
-      eventTypeIn(type, [
-        eventType.ROOM_MEMBER_ROLE_UPDATE,
-        eventType.ROOM_CANCEL,
-      ]))
-  );
-}
-
-function speakerCanSubmit(type: string, policyAllowed: boolean): boolean {
-  return (
-    eventTypeIn(type, [
-      eventType.MESSAGE_CREATE,
-      eventType.SOURCE_ADD,
-      eventType.ROOM_STEER,
-      eventType.MESSAGE_PROPOSAL_CREATE,
-      eventType.MESSAGE_POLL_CREATE,
-      eventType.MESSAGE_POLL_VOTE,
-      eventType.SESSION_OFFER,
-      eventType.SESSION_ANSWER,
-      eventType.SESSION_CANDIDATE,
-      eventType.SESSION_CLOSE,
-      eventType.REACTION_CREATE,
-      eventType.ROOM_LEAVE,
-    ]) ||
-    (policyAllowed &&
-      eventTypeIn(type, [
-        eventType.QUESTION_CREATE,
-        eventType.MAP_UPDATE,
-        eventType.ARTIFACT_CREATE,
-        eventType.MESSAGE_RESOLUTION_CREATE,
-      ]))
-  );
-}
-
-function observerCanSubmit(type: string, context: PermissionContext): boolean {
-  return (
-    eventTypeIn(type, [eventType.REACTION_CREATE, eventType.ROOM_LEAVE]) ||
-    (Boolean(context.observerSteeringAllowed) &&
-      type === eventType.ROOM_STEER) ||
-    (Boolean(context.observerPollVoteAllowed) &&
-      type === eventType.MESSAGE_POLL_VOTE)
-  );
-}
-
-function isKnownEventType(type: string): boolean {
-  return eventTypeIn(type, Object.values(eventType));
-}
-
-function eventTypeIn(type: string, values: readonly string[]): boolean {
-  return values.includes(type);
-}
-
-function validateSessionId(sessionId: string): void {
-  if (sessionId.trim() === "") {
-    throw protocolError("invalid_session", "session_id is required");
-  }
-}
-
-function validateSessionDescription(
-  description: SessionDescription,
-  expectedType: SessionDescriptionType,
-): void {
-  if (
-    !description ||
-    typeof description.type !== "string" ||
-    typeof description.sdp !== "string"
-  ) {
-    throw protocolError("invalid_session", "session description is required");
-  }
-  if (description.type !== expectedType) {
-    throw protocolError(
-      "invalid_session",
-      `session description type must be ${expectedType}`,
-    );
-  }
-  if (description.sdp.trim() === "") {
-    throw protocolError("invalid_session", "session description sdp is required");
-  }
-}
-
-function validateSessionTransfers(transfers: SessionDataTransfer[]): void {
-  if (!Array.isArray(transfers)) {
-    throw protocolError("invalid_session", "transfers must be an array");
-  }
-  for (const transfer of transfers) {
-    if (
-      !transfer ||
-      typeof transfer.transfer_id !== "string" ||
-      transfer.transfer_id.trim() === ""
-    ) {
-      throw protocolError("invalid_session", "transfer_id is required");
-    }
-    if (
-      transfer.size_bytes !== undefined &&
-      (!Number.isInteger(transfer.size_bytes) || transfer.size_bytes < 0)
-    ) {
-      throw protocolError(
-        "invalid_session",
-        "size_bytes must be a non-negative integer",
-      );
-    }
-  }
-}
-
 function hashCanonicalJson(value: unknown): string {
-const canonical = canonicalize(value);
+  const canonical = canonicalize(value);
   if (canonical === undefined) {
     throw protocolError(
       "canonical_json",
