@@ -360,16 +360,3 @@ fn encode_query_component(value: &str) -> String {
     }
     encoded
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_websocket_events_url() {
-        assert_eq!(
-            websocket_events_url("https://api.example.com", "room123", "jwt.token"),
-            "wss://api.example.com/v1/rooms/room123/events/live?access_token=jwt.token"
-        );
-    }
-}

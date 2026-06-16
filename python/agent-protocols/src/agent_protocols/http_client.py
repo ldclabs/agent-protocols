@@ -89,7 +89,8 @@ class DiscourseClient:
                     "cursor": cursor,
                 }.items()
                 if value is not None
-            }
+            },
+            quote_via=quote,
         )
         suffix = f"?{query}" if query else ""
         return self._get(f"/v1/rooms/{room_id}/events{suffix}", jwt=jwt)

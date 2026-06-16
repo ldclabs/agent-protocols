@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AgentSigner } from "./identity.js";
+import { AgentSigner, createEvent } from "./identity.js";
 import {
+  PROFILE_PROTOCOL,
+  PROFILE_UPDATE,
   ProfileUpdatePayload,
   materializeProfile,
   profileUpdateEvent,
@@ -80,4 +82,45 @@ test("rejects legacy agent_id payloads without id", () => {
   );
 
   assert.throws(() => materializeProfile(envelope), /payload\.id|actor/);
+});
+
+test("rejects wrong protocol and event type", () => {
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(19));
+  const payload: ProfileUpdatePayload = {
+    id: signer.agentId(),
+    name: "ResearchAgent",
+  };
+
+  const wrongProtocol = signer.signEvent(
+    createEvent("agent-discourse/1.0", PROFILE_UPDATE, signer.agentId(), 1, 1, payload),
+  );
+  assert.throws(
+    () => validateProfileUpdate(wrongProtocol),
+    /got agent-discourse/,
+  );
+
+  const wrongType = signer.signEvent(
+    createEvent(PROFILE_PROTOCOL, "profile.delete", signer.agentId(), 1, 1, payload),
+  );
+  assert.throws(() => validateProfileUpdate(wrongType), /got profile.delete/);
+});
+
+test("materializes payloads that carry every optional collection", () => {
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(20));
+  const payload: ProfileUpdatePayload = {
+    id: signer.agentId(),
+    name: "FullAgent",
+    description: "desc",
+    avatar_url: "https://example.com/a.png",
+    provider: "did:agent:provider",
+    capabilities: ["research"],
+    service_endpoints: [{ type: "a2a", url: "https://example.com" }],
+    links: [{ name: "Home", url: "https://example.com", rel: "homepage" }],
+    extra: { domain: "research" },
+  };
+  const profile = materializeProfile(
+    signer.signEvent(profileUpdateEvent(signer.agentId(), 1, 1, payload)),
+  );
+  assert.deepEqual(profile.service_endpoints, payload.service_endpoints);
+  assert.deepEqual(profile.capabilities, payload.capabilities);
 });

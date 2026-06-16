@@ -257,4 +257,40 @@ mod tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn rejects_wrong_protocol_and_type() {
+        let signer = AgentSigner::from_seed([19; 32]);
+        let payload = ProfileUpdatePayload::new(signer.agent_id(), "ResearchAgent");
+
+        let wrong_protocol = signer
+            .sign_event(crate::identity::Event::new(
+                "agent-discourse/1.0",
+                PROFILE_UPDATE,
+                signer.agent_id(),
+                1_779_753_600_000,
+                1,
+                payload.clone(),
+            ))
+            .unwrap();
+        assert!(matches!(
+            validate_profile_update(&wrong_protocol),
+            Err(SdkError::InvalidEventProtocol { .. })
+        ));
+
+        let wrong_type = signer
+            .sign_event(crate::identity::Event::new(
+                PROTOCOL,
+                "profile.delete",
+                signer.agent_id(),
+                1_779_753_600_000,
+                1,
+                payload,
+            ))
+            .unwrap();
+        assert!(matches!(
+            validate_profile_update(&wrong_type),
+            Err(SdkError::InvalidEventType { .. })
+        ));
+    }
 }

@@ -134,7 +134,8 @@ impl AgentSigner {
     {
         let event_hash = event_hash_bytes(&event)?;
         let hash = URL_SAFE_NO_PAD.encode(&event_hash);
-        let signature = sign_event_hash(&self.signing_key, &event_hash)?;
+        let signature = sign_event_hash(&self.signing_key, &event_hash)
+            .expect("event hashes are always 32 bytes");
         Ok(Envelope {
             hash,
             event,
@@ -153,8 +154,10 @@ impl AgentSigner {
             typ: "JWT".to_owned(),
             kid: agent_id,
         };
-        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
-        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?);
+        let header =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("JWT header is JSON-safe"));
+        let payload =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).expect("JWT claims are JSON-safe"));
         let signing_input = format!("{header}.{payload}");
         let signature = self.signing_key.sign(signing_input.as_bytes());
         Ok(format!(
@@ -242,7 +245,8 @@ pub fn sign_event<P>(signing_key: &SigningKey, event: &Event<P>) -> Result<Strin
 where
     P: Serialize,
 {
-    sign_event_hash(signing_key, &event_hash_bytes(event)?)
+    let event_hash = event_hash_bytes(event)?;
+    Ok(sign_event_hash(signing_key, &event_hash).expect("event hashes are always 32 bytes"))
 }
 
 pub fn sign_event_hash(signing_key: &SigningKey, event_hash: &[u8]) -> Result<String> {
@@ -409,10 +413,7 @@ impl ClientNonceManager {
     pub fn next_nonce(&mut self) -> Result<u64> {
         let nonce = self.next_nonce;
         validate_nonce(nonce)?;
-        self.next_nonce = self
-            .next_nonce
-            .checked_add(1)
-            .ok_or_else(|| SdkError::InvalidNonce("nonce counter overflow".to_owned()))?;
+        self.next_nonce += 1;
         Ok(nonce)
     }
 
@@ -587,10 +588,10 @@ pub fn verify_request_jwt(token: &str, context: &RequestAuthContext) -> Result<R
 }
 
 pub fn unix_ms() -> i64 {
-    SystemTime::now()
+    let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or(0)
+        .unwrap_or_default();
+    duration.as_millis().min(i64::MAX as u128) as i64
 }
 
 pub fn unix_secs() -> i64 {
@@ -599,9 +600,21 @@ pub fn unix_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use serde::ser;
     use serde_json::json;
 
     use super::*;
+
+    struct FailingPayload;
+
+    impl Serialize for FailingPayload {
+        fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(ser::Error::custom("payload cannot be serialized"))
+        }
+    }
 
     #[test]
     fn signs_and_verifies_event_envelope() {
@@ -662,6 +675,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_canonical_event_payloads() {
+        let signer = AgentSigner::from_seed([52; 32]);
+        let event = Event::new(
+            "agent-profile/1.0",
+            "profile.update",
+            signer.agent_id(),
+            1000,
+            1,
+            FailingPayload,
+        );
+        assert!(matches!(
+            canonical_event_bytes(&event),
+            Err(SdkError::CanonicalJson(_))
+        ));
+        assert!(matches!(
+            event_hash(&event),
+            Err(SdkError::CanonicalJson(_))
+        ));
+        let envelope = Envelope {
+            hash: "h".to_owned(),
+            event,
+            signature: "s".to_owned(),
+        };
+        assert!(matches!(
+            verify_event_hash(&envelope),
+            Err(SdkError::CanonicalJson(_))
+        ));
+        assert!(matches!(
+            verify_signature(&envelope),
+            Err(SdkError::CanonicalJson(_))
+        ));
+        assert!(matches!(
+            verify_envelope(&envelope),
+            Err(SdkError::CanonicalJson(_))
+        ));
+    }
+
+    #[test]
     fn rejects_nonce_reuse() {
         let signer = AgentSigner::from_seed([9; 32]);
         let options = LiveWriteOptions {
@@ -696,7 +747,17 @@ mod tests {
         manager.observe_max_nonce(5);
 
         assert_eq!(manager.peek(), 6);
+        manager.observe_max_nonce(4);
+        assert_eq!(manager.peek(), 6);
         assert_eq!(manager.next_nonce().unwrap(), 6);
+
+        let mut invalid = ClientNonceManager {
+            next_nonce: MAX_SAFE_NONCE + 1,
+        };
+        assert!(matches!(
+            invalid.next_nonce(),
+            Err(SdkError::InvalidNonce(_))
+        ));
     }
 
     #[test]
@@ -756,6 +817,378 @@ mod tests {
         assert!(matches!(
             verify_request_jwt(&token, &context),
             Err(SdkError::InvalidJwtClaim("exp/iat"))
+        ));
+    }
+
+    #[test]
+    fn agent_id_string_conversions() {
+        let signer = AgentSigner::from_seed([20; 32]);
+        let agent_id = signer.agent_id();
+        let text = agent_id.to_string();
+
+        assert_eq!(agent_id.as_str(), text);
+        assert!(format!("{agent_id:?}").starts_with("AgentId("));
+        assert_eq!(AgentId::try_from(text.clone()).unwrap(), agent_id);
+        assert_eq!(text.parse::<AgentId>().unwrap(), agent_id);
+        assert!(matches!(
+            "not-a-did".parse::<AgentId>(),
+            Err(SdkError::InvalidAgentIdPrefix)
+        ));
+        assert!(matches!(
+            AgentId("not-a-did".to_owned()).public_key_bytes(),
+            Err(SdkError::InvalidAgentIdPrefix)
+        ));
+        assert!(AgentId(format!("{AGENT_ID_PREFIX}%"))
+            .public_key_bytes()
+            .is_err());
+        let short = AgentId(format!(
+            "{}{}",
+            AGENT_ID_PREFIX,
+            URL_SAFE_NO_PAD.encode([1_u8; 31])
+        ));
+        assert!(matches!(
+            short.public_key_bytes(),
+            Err(SdkError::InvalidPublicKeyLength(31))
+        ));
+        assert!(short.verifying_key().is_err());
+        assert!(format!("{}%", AGENT_ID_PREFIX).parse::<AgentId>().is_err());
+    }
+
+    #[test]
+    fn agent_signer_exposes_keys_and_generates() {
+        let signer = AgentSigner::from_seed([21; 32]);
+        assert_eq!(
+            signer.verifying_key().to_bytes(),
+            signer.agent_id().public_key_bytes().unwrap()
+        );
+
+        let generated = AgentSigner::generate();
+        let event = Event::new(
+            "agent-profile/1.0",
+            "profile.update",
+            generated.agent_id(),
+            1000,
+            1,
+            json!({"name": "Generated"}),
+        );
+        verify_envelope(&generated.sign_event(event).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn sign_request_jwt_rejects_foreign_claims() {
+        let signer = AgentSigner::from_seed([22; 32]);
+        let other = AgentSigner::from_seed([23; 32]);
+        let claims = RequestJwtClaims {
+            iss: other.agent_id(),
+            sub: other.agent_id(),
+            aud: "https://api.example.com".to_owned(),
+            iat: 100,
+            exp: 400,
+        };
+        assert!(matches!(
+            signer.sign_request_jwt(&claims),
+            Err(SdkError::InvalidJwtClaim("iss/sub"))
+        ));
+    }
+
+    #[test]
+    fn free_sign_event_matches_signer() {
+        let seed = [24; 32];
+        let signer = AgentSigner::from_seed(seed);
+        let signing_key = SigningKey::from_bytes(&seed);
+        let event = Event::new(
+            "agent-profile/1.0",
+            "profile.update",
+            signer.agent_id(),
+            1000,
+            1,
+            json!({"name": "Agent"}),
+        );
+
+        let signature = sign_event(&signing_key, &event).unwrap();
+        assert_eq!(signer.sign_event(event).unwrap().signature, signature);
+    }
+
+    #[test]
+    fn rejects_event_hash_with_wrong_length() {
+        let signing_key = SigningKey::from_bytes(&[25; 32]);
+        assert!(matches!(
+            sign_event_hash(&signing_key, &[0_u8; 10]),
+            Err(SdkError::InvalidEventHashLength(10))
+        ));
+        assert!(matches!(
+            verify_event_hash_signature(&signing_key.verifying_key(), &[0_u8; 10], "AAAA"),
+            Err(SdkError::InvalidSignatureLength(_))
+        ));
+        let signature = URL_SAFE_NO_PAD.encode([0_u8; 64]);
+        assert!(matches!(
+            verify_event_hash_signature(&signing_key.verifying_key(), &[0_u8; 10], &signature),
+            Err(SdkError::InvalidEventHashLength(10))
+        ));
+    }
+
+    #[test]
+    fn verify_timestamp_rejects_drift_and_negative_window() {
+        verify_timestamp(1000, 1200, 1000).unwrap();
+        assert!(matches!(
+            verify_timestamp(0, 1_000_000, 1000),
+            Err(SdkError::TimestampOutOfWindow)
+        ));
+        assert!(matches!(
+            verify_timestamp(100, 100, -1),
+            Err(SdkError::TimestampOutOfWindow)
+        ));
+    }
+
+    #[test]
+    fn verify_live_envelope_propagates_envelope_and_timestamp_errors() {
+        let signer = AgentSigner::from_seed([53; 32]);
+        let event = Event::new(
+            "agent-profile/1.0",
+            "profile.update",
+            signer.agent_id(),
+            1000,
+            1,
+            json!({"name": "ResearchAgent"}),
+        );
+        let mut envelope = signer.sign_event(event).unwrap();
+        let mut store = MemoryNonceStore::new();
+        let options = LiveWriteOptions {
+            now_ms: 1000,
+            window_ms: 1000,
+            nonce_ttl_ms: 1000,
+        };
+
+        envelope.signature = "invalid".to_owned();
+        assert!(verify_live_envelope(&envelope, &options, &mut store).is_err());
+
+        let event = Event::new(
+            "agent-profile/1.0",
+            "profile.update",
+            signer.agent_id(),
+            0,
+            2,
+            json!({"name": "ResearchAgent"}),
+        );
+        let envelope = signer.sign_event(event).unwrap();
+        let expired_options = LiveWriteOptions {
+            now_ms: 3000,
+            ..options
+        };
+        assert!(matches!(
+            verify_live_envelope(&envelope, &expired_options, &mut store),
+            Err(SdkError::TimestampOutOfWindow)
+        ));
+    }
+
+    #[test]
+    fn memory_nonce_store_rejects_negative_ttl_and_expires() {
+        let actor = AgentSigner::from_seed([26; 32]).agent_id();
+        let mut store = MemoryNonceStore::new();
+        assert!(matches!(
+            store.check_and_update(&actor, 1, 1000, -1),
+            Err(SdkError::InvalidNonce(_))
+        ));
+
+        store.check_and_update(&actor, 4, 1000, 1000).unwrap();
+        // a strictly greater nonce is accepted while the record is still live
+        assert_eq!(store.check_and_update(&actor, 5, 1100, 1000).unwrap(), 5);
+        assert_eq!(store.max_nonce(&actor, 1500), Some(5));
+        // record has expired by now_ms past expires_at
+        assert_eq!(store.max_nonce(&actor, 5000), None);
+        assert_eq!(store.max_nonce(&actor, 1500), Some(5));
+        // a fresh actor has no record at all
+        let stranger = AgentSigner::from_seed([27; 32]).agent_id();
+        assert_eq!(store.max_nonce(&stranger, 1500), None);
+    }
+
+    #[test]
+    fn client_nonce_manager_with_next_and_header() {
+        assert!(ClientNonceManager::with_next(0).is_err());
+        let mut manager = ClientNonceManager::with_next(5).unwrap();
+        assert_eq!(manager.peek(), 5);
+
+        manager.observe_max_nonce_header("10").unwrap();
+        assert_eq!(manager.peek(), 11);
+        assert!(matches!(
+            manager.observe_max_nonce_header("not-a-number"),
+            Err(SdkError::InvalidNonce(_))
+        ));
+        assert!(matches!(
+            manager.observe_max_nonce_header("9007199254740992"),
+            Err(SdkError::InvalidNonce(_))
+        ));
+    }
+
+    #[test]
+    fn default_options_and_context_use_real_clock() {
+        let options = LiveWriteOptions::default();
+        assert_eq!(options.window_ms, DEFAULT_LIVE_WRITE_WINDOW_MS);
+        assert_eq!(options.nonce_ttl_ms, DEFAULT_NONCE_TTL_MS);
+        assert!(options.now_ms > 0);
+
+        let context = RequestAuthContext::new("https://api.example.com");
+        assert_eq!(context.audience, "https://api.example.com");
+        assert_eq!(context.max_ttl_secs, DEFAULT_REQUEST_JWT_TTL_SECS);
+        assert_eq!(context.now_secs, unix_secs());
+        assert!(unix_ms() >= context.now_secs * 1000);
+    }
+
+    fn encode_token(header: Value, claims: Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
+        let claims = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
+        let signature = URL_SAFE_NO_PAD.encode([0_u8; 64]);
+        format!("{header}.{claims}.{signature}")
+    }
+
+    #[test]
+    fn verify_request_jwt_rejects_malformed_tokens() {
+        let signer = AgentSigner::from_seed([28; 32]);
+        let agent_id = signer.agent_id();
+        let other = AgentSigner::from_seed([29; 32]).agent_id();
+        let context = RequestAuthContext {
+            audience: "https://api.example.com".to_owned(),
+            now_secs: 200,
+            max_ttl_secs: 300,
+        };
+        let valid_claims = json!({
+            "iss": agent_id,
+            "sub": agent_id,
+            "aud": "https://api.example.com",
+            "iat": 100,
+            "exp": 400,
+        });
+
+        assert!(matches!(
+            verify_request_jwt("only.two", &context),
+            Err(SdkError::InvalidJwt(_))
+        ));
+        assert!(verify_request_jwt("%.e30.AAAA", &context).is_err());
+        let invalid_header = format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(b"not-json"),
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&valid_claims).unwrap()),
+            URL_SAFE_NO_PAD.encode([0_u8; 64])
+        );
+        assert!(verify_request_jwt(&invalid_header, &context).is_err());
+        let header = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({"alg": "EdDSA", "typ": "JWT", "kid": agent_id})).unwrap(),
+        );
+        let claims = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&valid_claims).unwrap());
+        assert!(verify_request_jwt(&format!("{header}.%.AAAA"), &context).is_err());
+        assert!(verify_request_jwt(&format!("{header}.{claims}.%"), &context).is_err());
+        assert!(matches!(
+            verify_request_jwt(&format!("{header}.{claims}.AAAA"), &context),
+            Err(SdkError::InvalidSignatureLength(_))
+        ));
+        assert!(verify_request_jwt(
+            &format!("{header}.{claims}.{}", URL_SAFE_NO_PAD.encode([0_u8; 64])),
+            &context
+        )
+        .is_err());
+        let invalid_key = AgentId::from_public_key(&[255_u8; 32]);
+        assert!(verify_request_jwt(
+            &encode_token(
+                json!({"alg": "EdDSA", "typ": "JWT", "kid": invalid_key}),
+                json!({
+                    "iss": invalid_key,
+                    "sub": invalid_key,
+                    "aud": "https://api.example.com",
+                    "iat": 100,
+                    "exp": 400,
+                }),
+            ),
+            &context,
+        )
+        .is_err());
+        assert!(matches!(
+            verify_request_jwt(
+                &encode_token(
+                    json!({"alg": "HS256", "typ": "JWT", "kid": agent_id}),
+                    valid_claims.clone(),
+                ),
+                &context,
+            ),
+            Err(SdkError::InvalidJwtClaim("alg"))
+        ));
+        assert!(matches!(
+            verify_request_jwt(
+                &encode_token(
+                    json!({"alg": "EdDSA", "typ": "JWS", "kid": agent_id}),
+                    valid_claims.clone(),
+                ),
+                &context,
+            ),
+            Err(SdkError::InvalidJwtClaim("typ"))
+        ));
+        assert!(matches!(
+            verify_request_jwt(
+                &encode_token(
+                    json!({"alg": "EdDSA", "typ": "JWT", "kid": other}),
+                    valid_claims,
+                ),
+                &context,
+            ),
+            Err(SdkError::InvalidJwtClaim("kid/iss/sub"))
+        ));
+    }
+
+    #[test]
+    fn verify_request_jwt_enforces_audience_and_window() {
+        let signer = AgentSigner::from_seed([30; 32]);
+
+        let wrong_audience = signer
+            .sign_request_jwt(&RequestJwtClaims::new(
+                signer.agent_id(),
+                RequestBinding::new("https://api.example.com"),
+                100,
+                300,
+            ))
+            .unwrap();
+        let context = RequestAuthContext {
+            audience: "https://other.example.com".to_owned(),
+            now_secs: 200,
+            max_ttl_secs: 300,
+        };
+        assert!(matches!(
+            verify_request_jwt(&wrong_audience, &context),
+            Err(SdkError::InvalidJwtClaim("aud"))
+        ));
+
+        let expired = signer
+            .sign_request_jwt(&RequestJwtClaims::new(
+                signer.agent_id(),
+                RequestBinding::new("https://api.example.com"),
+                1000,
+                300,
+            ))
+            .unwrap();
+        let later = RequestAuthContext {
+            audience: "https://api.example.com".to_owned(),
+            now_secs: 5000,
+            max_ttl_secs: 300,
+        };
+        assert!(matches!(
+            verify_request_jwt(&expired, &later),
+            Err(SdkError::InvalidJwtClaim("iat/exp"))
+        ));
+
+        let long_ttl = signer
+            .sign_request_jwt(&RequestJwtClaims::new(
+                signer.agent_id(),
+                RequestBinding::new("https://api.example.com"),
+                100,
+                400,
+            ))
+            .unwrap();
+        let strict = RequestAuthContext {
+            audience: "https://api.example.com".to_owned(),
+            now_secs: 200,
+            max_ttl_secs: 300,
+        };
+        assert!(matches!(
+            verify_request_jwt(&long_ttl, &strict),
+            Err(SdkError::InvalidJwtClaim("ttl"))
         ));
     }
 }

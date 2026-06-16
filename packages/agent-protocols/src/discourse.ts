@@ -291,14 +291,7 @@ export function roomCreateEvent(
   nonce: number,
   payload: RoomCreatePayload,
 ): Event<RoomCreatePayload> {
-  return createEvent(
-    DISCOURSE_PROTOCOL,
-    eventType.ROOM_CREATE,
-    actor,
-    createdAt,
-    nonce,
-    payload,
-  );
+  return createEvent(DISCOURSE_PROTOCOL, eventType.ROOM_CREATE, actor, createdAt, nonce, payload);
 }
 
 export function typeDefineEvent(

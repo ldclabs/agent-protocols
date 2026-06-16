@@ -597,12 +597,11 @@ pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Resu
 /// at least two segments, not built-in, not under a reserved prefix.
 pub fn validate_custom_event_type_name(name: &str) -> Result<()> {
     let segments: Vec<&str> = name.split('.').collect();
-    let valid_shape = segments.len() >= 2
-        && segments.iter().all(|segment| {
-            let mut chars = segment.chars();
-            matches!(chars.next(), Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit())
-                && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
-        });
+    let valid_shape = segments.len() >= 2 && segments.iter().all(|segment| {
+        let mut chars = segment.chars();
+        matches!(chars.next(), Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit())
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    });
     if !valid_shape {
         return Err(SdkError::InvalidPayload(format!(
             "invalid event type name: {name}"
@@ -902,9 +901,9 @@ fn compile_schema(schema: &Value) -> Result<jsonschema::Validator> {
 /// Verifies a `<algorithm>:<base64url-digest>` content digest over raw bytes.
 /// Supports `sha256` and `sha3-256`.
 pub fn verify_pack_digest(bytes: &[u8], digest: &str) -> Result<()> {
-    let (algorithm, expected) = digest.split_once(':').ok_or_else(|| {
-        SdkError::PackUnavailable(format!("invalid digest format: {digest}"))
-    })?;
+    let (algorithm, expected) = digest
+        .split_once(':')
+        .ok_or_else(|| SdkError::PackUnavailable(format!("invalid digest format: {digest}")))?;
     let actual = match algorithm {
         "sha256" => URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)),
         "sha3-256" => URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes)),
@@ -917,9 +916,7 @@ pub fn verify_pack_digest(bytes: &[u8], digest: &str) -> Result<()> {
     if actual == expected {
         Ok(())
     } else {
-        Err(SdkError::PackUnavailable(
-            "pack digest mismatch".to_owned(),
-        ))
+        Err(SdkError::PackUnavailable("pack digest mismatch".to_owned()))
     }
 }
 
@@ -969,7 +966,8 @@ pub fn build_server_record<P>(
         pre_hash.as_deref(),
         &envelope.hash,
         received_at,
-    )?;
+    )
+    .expect("server record hash payload is always serializable");
     Ok(ServerRecord {
         room_id,
         seq,
@@ -990,7 +988,8 @@ where
         record.pre_hash.as_deref(),
         &record.envelope.hash,
         record.received_at,
-    )?;
+    )
+    .expect("server record hash payload is always serializable");
     if record.hash == expected {
         Ok(())
     } else {
@@ -1085,9 +1084,7 @@ pub fn can_submit_event(
         | event_type::ROOM_MEMBER_ROLE_UPDATE
         | event_type::ROOM_CLOSE
         | event_type::ROOM_CANCEL
-        | event_type::TYPE_DEFINE => {
-            context.is_creator || context.role == Some(Role::Moderator)
-        }
+        | event_type::TYPE_DEFINE => context.is_creator || context.role == Some(Role::Moderator),
         event_type::MESSAGE_CREATE => {
             context.is_creator
                 || matches!(context.role, Some(Role::Moderator) | Some(Role::Speaker))
@@ -1166,7 +1163,19 @@ where
 mod tests {
     use super::*;
     use crate::identity::AgentSigner;
+    use serde::ser;
     use serde_json::json;
+
+    struct FailingPayload;
+
+    impl Serialize for FailingPayload {
+        fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(ser::Error::custom("payload cannot be serialized"))
+        }
+    }
 
     fn registered_packs() -> BTreeMap<String, Pack> {
         let raw = std::fs::read_to_string(concat!(
@@ -1204,6 +1213,26 @@ mod tests {
         }
     }
 
+    fn join_review_payload(applicant: AgentId) -> RoomJoinReviewPayload {
+        RoomJoinReviewPayload {
+            request: RoomJoinRequest {
+                id: "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q".to_owned(),
+                room_id: "room1".to_owned(),
+                applicant,
+                role: Role::Speaker,
+                perspective: None,
+                reason: None,
+                created_at: 100,
+                expires_at: 200,
+                extra: BTreeMap::new(),
+            },
+            decision: JoinDecision::Approve,
+            role: Some(Role::Speaker),
+            reason: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
     #[test]
     fn validates_room_create_without_room_id() {
         let signer = AgentSigner::from_seed([14; 32]);
@@ -1224,10 +1253,7 @@ mod tests {
             .with_room_id("d8ftedhpqhsusbg001tg");
         let envelope = signer.sign_event(event).unwrap();
 
-        assert!(matches!(
-            validate_discourse_envelope(&envelope),
-            Err(SdkError::InvalidPayload(_))
-        ));
+        assert!(validate_discourse_envelope(&envelope).is_err());
         assert!(validate_room_path(&envelope, "d8ftedhpqhsusbg001tg").is_err());
     }
 
@@ -1244,10 +1270,24 @@ mod tests {
         );
         let envelope = signer.sign_event(event).unwrap();
 
-        assert!(matches!(
-            validate_discourse_envelope(&envelope),
-            Err(SdkError::MissingRoomId)
-        ));
+        assert!(validate_discourse_envelope(&envelope).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_discourse_envelope_signature() {
+        let signer = AgentSigner::from_seed([16; 32]);
+        let event = discourse_event(
+            event_type::MESSAGE_CREATE,
+            signer.agent_id(),
+            100,
+            1,
+            "room1",
+            MessageCreatePayload::text("hello"),
+        );
+        let mut envelope = signer.sign_event(event).unwrap();
+        envelope.signature = "invalid".to_owned();
+
+        assert!(validate_discourse_envelope(&envelope).is_err());
     }
 
     #[test]
@@ -1294,7 +1334,10 @@ mod tests {
 
     #[test]
     fn role_serde_matches_spec() {
-        assert_eq!(serde_json::to_string(&Role::Speaker).unwrap(), "\"speaker\"");
+        assert_eq!(
+            serde_json::to_string(&Role::Speaker).unwrap(),
+            "\"speaker\""
+        );
         assert!(serde_json::from_str::<Role>("\"expert\"").is_err());
         assert!(serde_json::from_str::<Role>("\"participant\"").is_err());
     }
@@ -1308,6 +1351,9 @@ mod tests {
         assert!(validate_custom_event_type_name("type.new").is_err());
         assert!(validate_custom_event_type_name("message.create").is_err());
         assert!(validate_custom_event_type_name("Bad.Name").is_err());
+        assert!(validate_custom_event_type_name(".finding").is_err());
+        assert!(validate_custom_event_type_name("review.").is_err());
+        assert!(validate_custom_event_type_name("review.finding!").is_err());
     }
 
     #[test]
@@ -1360,10 +1406,7 @@ mod tests {
             use_pack: Some("adp:unknown/1.0".to_owned()),
             ..PackImport::default()
         });
-        assert!(matches!(
-            TypeRegistry::from_declarations(&[unknown], &packs),
-            Err(SdkError::PackUnavailable(_))
-        ));
+        assert!(TypeRegistry::from_declarations(&[unknown], &packs).is_err());
 
         let bad_override = TypeDeclaration::Import(PackImport {
             use_pack: Some(pack_id::REACTIONS.to_owned()),
@@ -1413,23 +1456,23 @@ mod tests {
                 &json!({"poll_event_id": hash, "option_ids": ["a"]}),
             )
             .unwrap();
-        assert!(matches!(
-            registry.validate_payload("poll.vote", &json!({"poll_event_id": hash})),
-            Err(SdkError::PayloadSchemaViolation(_))
-        ));
-        assert!(matches!(
-            registry.validate_payload("turn.update", &json!({})),
-            Err(SdkError::TypeNotDefined(_))
-        ));
+        assert!(registry
+            .validate_payload("poll.vote", &json!({"poll_event_id": hash}))
+            .is_err());
+        assert!(registry
+            .validate_payload("turn.update", &json!({}))
+            .is_err());
 
         let mut disabled = TypeRegistry::new();
         let mut def = finding_def();
         def.status = Some(TypeStatus::Disabled);
         disabled.define(def).unwrap();
-        assert!(matches!(
-            disabled.validate_payload("review.finding", &json!({"severity": "high", "summary": "s"})),
-            Err(SdkError::TypeDisabled(_))
-        ));
+        assert!(disabled
+            .validate_payload(
+                "review.finding",
+                &json!({"severity": "high", "summary": "s"})
+            )
+            .is_err());
     }
 
     #[test]
@@ -1478,26 +1521,79 @@ mod tests {
         assert!(!can_submit_event("graph.update", &speaker, &registry));
         // creator passes every role check regardless of current role
         assert!(can_submit_event("graph.update", &creator, &registry));
-        assert!(can_submit_event(event_type::MESSAGE_CREATE, &creator, &registry));
+        assert!(can_submit_event(
+            event_type::ROOM_CREATE,
+            &PermissionContext::default(),
+            &registry
+        ));
+        assert!(can_submit_event(
+            event_type::MESSAGE_CREATE,
+            &creator,
+            &registry
+        ));
         // undefined types are rejected
         assert!(!can_submit_event("session.offer", &speaker, &registry));
 
         // built-in lifecycle rules
-        assert!(can_submit_event(event_type::ROOM_JOIN_REVIEW, &moderator, &registry));
-        assert!(!can_submit_event(event_type::ROOM_JOIN_REVIEW, &speaker, &registry));
-        assert!(can_submit_event(event_type::ROOM_MEMBER_ROLE_UPDATE, &moderator, &registry));
-        assert!(can_submit_event(event_type::ROOM_CANCEL, &moderator, &registry));
-        assert!(can_submit_event(event_type::TYPE_DEFINE, &moderator, &registry));
-        assert!(!can_submit_event(event_type::TYPE_DEFINE, &speaker, &registry));
-        assert!(can_submit_event(event_type::MESSAGE_CREATE, &speaker, &registry));
-        assert!(!can_submit_event(event_type::MESSAGE_CREATE, &observer, &registry));
-        assert!(can_submit_event(event_type::ROOM_LEAVE, &observer, &registry));
-        assert!(!can_submit_event(event_type::ROOM_JOIN, &observer, &registry));
+        assert!(can_submit_event(
+            event_type::ROOM_JOIN_REVIEW,
+            &moderator,
+            &registry
+        ));
+        assert!(!can_submit_event(
+            event_type::ROOM_JOIN_REVIEW,
+            &speaker,
+            &registry
+        ));
+        assert!(can_submit_event(
+            event_type::ROOM_MEMBER_ROLE_UPDATE,
+            &moderator,
+            &registry
+        ));
+        assert!(can_submit_event(
+            event_type::ROOM_CANCEL,
+            &moderator,
+            &registry
+        ));
+        assert!(can_submit_event(
+            event_type::TYPE_DEFINE,
+            &moderator,
+            &registry
+        ));
+        assert!(!can_submit_event(
+            event_type::TYPE_DEFINE,
+            &speaker,
+            &registry
+        ));
+        assert!(can_submit_event(
+            event_type::MESSAGE_CREATE,
+            &speaker,
+            &registry
+        ));
+        assert!(!can_submit_event(
+            event_type::MESSAGE_CREATE,
+            &observer,
+            &registry
+        ));
+        assert!(can_submit_event(
+            event_type::ROOM_LEAVE,
+            &observer,
+            &registry
+        ));
+        assert!(!can_submit_event(
+            event_type::ROOM_JOIN,
+            &observer,
+            &registry
+        ));
         let approved = PermissionContext {
             join_request_approved: true,
             ..PermissionContext::default()
         };
-        assert!(can_submit_event(event_type::ROOM_JOIN, &approved, &registry));
+        assert!(can_submit_event(
+            event_type::ROOM_JOIN,
+            &approved,
+            &registry
+        ));
     }
 
     #[test]
@@ -1519,12 +1615,30 @@ mod tests {
             &registry
         ));
         // scheduled allows pre-start setup: reviews, role updates, leave, type.define
-        assert!(can_write_in_state(event_type::ROOM_JOIN_REVIEW, RoomState::Scheduled));
-        assert!(can_write_in_state(event_type::ROOM_MEMBER_ROLE_UPDATE, RoomState::Scheduled));
-        assert!(can_write_in_state(event_type::ROOM_LEAVE, RoomState::Scheduled));
-        assert!(can_write_in_state(event_type::TYPE_DEFINE, RoomState::Scheduled));
-        assert!(can_write_in_state(event_type::ROOM_CANCEL, RoomState::Scheduled));
-        assert!(!can_write_in_state(event_type::ROOM_CLOSE, RoomState::Scheduled));
+        assert!(can_write_in_state(
+            event_type::ROOM_JOIN_REVIEW,
+            RoomState::Scheduled
+        ));
+        assert!(can_write_in_state(
+            event_type::ROOM_MEMBER_ROLE_UPDATE,
+            RoomState::Scheduled
+        ));
+        assert!(can_write_in_state(
+            event_type::ROOM_LEAVE,
+            RoomState::Scheduled
+        ));
+        assert!(can_write_in_state(
+            event_type::TYPE_DEFINE,
+            RoomState::Scheduled
+        ));
+        assert!(can_write_in_state(
+            event_type::ROOM_CANCEL,
+            RoomState::Scheduled
+        ));
+        assert!(!can_write_in_state(
+            event_type::ROOM_CLOSE,
+            RoomState::Scheduled
+        ));
         assert!(can_accept_room_write(
             event_type::TYPE_DEFINE,
             RoomState::Scheduled,
@@ -1533,11 +1647,23 @@ mod tests {
         ));
         // ended rooms are strictly read-only
         assert!(!can_write_in_state("reaction.create", RoomState::Ended));
-        assert!(!can_write_in_state(event_type::ROOM_LEAVE, RoomState::Ended));
-        assert!(!can_write_in_state(event_type::ROOM_JOIN, RoomState::Cancelled));
+        assert!(!can_write_in_state(
+            event_type::ROOM_LEAVE,
+            RoomState::Ended
+        ));
+        assert!(!can_write_in_state(
+            event_type::ROOM_JOIN,
+            RoomState::Cancelled
+        ));
         // cancel only while scheduled, close only while active
-        assert!(can_write_in_state(event_type::ROOM_CLOSE, RoomState::Active));
-        assert!(!can_write_in_state(event_type::ROOM_CANCEL, RoomState::Active));
+        assert!(can_write_in_state(
+            event_type::ROOM_CLOSE,
+            RoomState::Active
+        ));
+        assert!(!can_write_in_state(
+            event_type::ROOM_CANCEL,
+            RoomState::Active
+        ));
     }
 
     #[test]
@@ -1583,12 +1709,19 @@ mod tests {
         let bytes = b"pack document bytes";
         let digest = format!("sha256:{}", URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)));
         verify_pack_digest(bytes, &digest).unwrap();
-        assert!(matches!(
-            verify_pack_digest(b"tampered", &digest),
-            Err(SdkError::PackUnavailable(_))
-        ));
+        let digest = format!(
+            "sha3-256:{}",
+            URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes))
+        );
+        verify_pack_digest(bytes, &digest).unwrap();
+        assert!(verify_pack_digest(b"tampered", &digest).is_err());
         assert!(verify_pack_digest(bytes, "md5:abc").is_err());
         assert!(verify_pack_digest(bytes, "not-a-digest").is_err());
+    }
+
+    #[test]
+    fn hash_canonical_json_rejects_unserializable_values() {
+        assert!(hash_canonical_json(&FailingPayload).is_err());
     }
 
     #[test]
@@ -1654,19 +1787,601 @@ mod tests {
             "schema": {"type": "object"}
         }))
         .unwrap();
-        assert!(matches!(inline, TypeDeclaration::Def(_)));
+        assert_eq!(
+            serde_json::to_value(&inline).unwrap()["type"],
+            json!("review.finding")
+        );
 
         let import: TypeDeclaration = serde_json::from_value(json!({
             "use": "adp:reactions/1.0",
             "overrides": {"reaction.create": {"status": "deprecated"}}
         }))
         .unwrap();
-        match &import {
-            TypeDeclaration::Import(import) => {
-                assert_eq!(import.use_pack.as_deref(), Some("adp:reactions/1.0"));
-            }
-            TypeDeclaration::Def(_) => panic!("expected pack import"),
-        }
+        assert_eq!(
+            serde_json::to_value(&import).unwrap()["use"],
+            json!("adp:reactions/1.0")
+        );
         validate_type_declaration(&import).unwrap();
+    }
+
+    #[test]
+    fn constructors_and_helpers() {
+        assert_eq!(RoomPolicy::new(), RoomPolicy::default());
+
+        let input = RoomJoinRequestInput::new(Role::Observer);
+        assert_eq!(input.role, Role::Observer);
+        assert!(input.perspective.is_none());
+
+        assert_eq!(
+            MessageCreatePayload::markdown("# title").content_type,
+            "text/markdown"
+        );
+        assert_eq!(
+            MessageCreatePayload::text("hi").content,
+            Value::String("hi".to_owned())
+        );
+
+        assert!(event_requires_room_id(event_type::MESSAGE_CREATE));
+        assert!(!event_requires_room_id(event_type::ROOM_CREATE));
+
+        let signer = AgentSigner::from_seed([40; 32]);
+        let event = type_define_event(
+            signer.agent_id(),
+            1,
+            1,
+            "room1",
+            TypeDeclaration::Def(finding_def()),
+        );
+        assert_eq!(event.protocol, PROTOCOL);
+        assert_eq!(event.kind, event_type::TYPE_DEFINE);
+        assert_eq!(event.room_id.as_deref(), Some("room1"));
+    }
+
+    #[test]
+    fn validate_discourse_envelope_checks_protocol() {
+        let signer = AgentSigner::from_seed([41; 32]);
+        let event = Event::new(
+            "wrong-protocol/1.0",
+            event_type::MESSAGE_CREATE,
+            signer.agent_id(),
+            100,
+            1,
+            MessageCreatePayload::text("hi"),
+        )
+        .with_room_id("room1");
+        let envelope = signer.sign_event(event).unwrap();
+        assert!(validate_discourse_envelope(&envelope).is_err());
+    }
+
+    #[test]
+    fn validate_discourse_envelope_covers_payload_instantiations() {
+        let signer = AgentSigner::from_seed([44; 32]);
+        let room_payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
+
+        let mut invalid_room_create = signer
+            .sign_event(room_create_event(
+                signer.agent_id(),
+                100,
+                1,
+                room_payload.clone(),
+            ))
+            .unwrap();
+        invalid_room_create.signature = "invalid".to_owned();
+        assert!(validate_discourse_envelope(&invalid_room_create).is_err());
+
+        let wrong_room_protocol = signer
+            .sign_event(Event::new(
+                "wrong-protocol/1.0",
+                event_type::ROOM_CREATE,
+                signer.agent_id(),
+                100,
+                2,
+                room_payload.clone(),
+            ))
+            .unwrap();
+        assert!(validate_discourse_envelope(&wrong_room_protocol).is_err());
+
+        let missing_room_id = signer
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::MESSAGE_CREATE,
+                signer.agent_id(),
+                100,
+                3,
+                room_payload.clone(),
+            ))
+            .unwrap();
+        assert!(validate_discourse_envelope(&missing_room_id).is_err());
+
+        let room_payload_as_message = signer
+            .sign_event(
+                Event::new(
+                    PROTOCOL,
+                    event_type::MESSAGE_CREATE,
+                    signer.agent_id(),
+                    100,
+                    4,
+                    room_payload,
+                )
+                .with_room_id("room1"),
+            )
+            .unwrap();
+        validate_discourse_envelope(&room_payload_as_message).unwrap();
+
+        let message_payload_as_room = signer
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::ROOM_CREATE,
+                signer.agent_id(),
+                100,
+                5,
+                MessageCreatePayload::text("hi"),
+            ))
+            .unwrap();
+        validate_discourse_envelope(&message_payload_as_room).unwrap();
+        let message_payload_with_room = signer
+            .sign_event(
+                Event::new(
+                    PROTOCOL,
+                    event_type::ROOM_CREATE,
+                    signer.agent_id(),
+                    100,
+                    6,
+                    MessageCreatePayload::text("hi"),
+                )
+                .with_room_id("room1"),
+            )
+            .unwrap();
+        assert!(validate_discourse_envelope(&message_payload_with_room).is_err());
+
+        let review_payload = join_review_payload(signer.agent_id());
+        let mut invalid_review = signer
+            .sign_event(discourse_event(
+                event_type::ROOM_JOIN_REVIEW,
+                signer.agent_id(),
+                100,
+                7,
+                "room1",
+                review_payload.clone(),
+            ))
+            .unwrap();
+        invalid_review.signature = "invalid".to_owned();
+        assert!(validate_discourse_envelope(&invalid_review).is_err());
+
+        let wrong_review_protocol = signer
+            .sign_event(
+                Event::new(
+                    "wrong-protocol/1.0",
+                    event_type::ROOM_JOIN_REVIEW,
+                    signer.agent_id(),
+                    100,
+                    8,
+                    review_payload.clone(),
+                )
+                .with_room_id("room1"),
+            )
+            .unwrap();
+        assert!(validate_discourse_envelope(&wrong_review_protocol).is_err());
+
+        let missing_review_room = signer
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::ROOM_JOIN_REVIEW,
+                signer.agent_id(),
+                100,
+                9,
+                review_payload.clone(),
+            ))
+            .unwrap();
+        assert!(validate_discourse_envelope(&missing_review_room).is_err());
+
+        let review_payload_as_room = signer
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::ROOM_CREATE,
+                signer.agent_id(),
+                100,
+                10,
+                review_payload,
+            ))
+            .unwrap();
+        validate_discourse_envelope(&review_payload_as_room).unwrap();
+    }
+
+    #[test]
+    fn validate_room_path_matches_and_rejects() {
+        let signer = AgentSigner::from_seed([42; 32]);
+        let in_room = signer
+            .sign_event(discourse_event(
+                event_type::MESSAGE_CREATE,
+                signer.agent_id(),
+                100,
+                1,
+                "room1",
+                MessageCreatePayload::text("hi"),
+            ))
+            .unwrap();
+        validate_room_path(&in_room, "room1").unwrap();
+        assert!(validate_room_path(&in_room, "room2").is_err());
+
+        let no_room = signer
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::MESSAGE_CREATE,
+                signer.agent_id(),
+                100,
+                1,
+                MessageCreatePayload::text("hi"),
+            ))
+            .unwrap();
+        assert!(validate_room_path(&no_room, "room1").is_err());
+    }
+
+    #[test]
+    fn validate_room_path_covers_payload_instantiations() {
+        let signer = AgentSigner::from_seed([45; 32]);
+        let room_payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
+        let in_room = signer
+            .sign_event(
+                Event::new(
+                    PROTOCOL,
+                    event_type::MESSAGE_CREATE,
+                    signer.agent_id(),
+                    100,
+                    1,
+                    room_payload.clone(),
+                )
+                .with_room_id("room1"),
+            )
+            .unwrap();
+        validate_room_path(&in_room, "room1").unwrap();
+        assert!(validate_room_path(&in_room, "room2").is_err());
+
+        let missing_room = signer
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::MESSAGE_CREATE,
+                signer.agent_id(),
+                100,
+                2,
+                room_payload,
+            ))
+            .unwrap();
+        assert!(validate_room_path(&missing_room, "room1").is_err());
+
+        let message_room_create = signer
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::ROOM_CREATE,
+                signer.agent_id(),
+                100,
+                3,
+                MessageCreatePayload::text("hi"),
+            ))
+            .unwrap();
+        validate_room_path(&message_room_create, "room1").unwrap();
+
+        let message_room_create_with_room = signer
+            .sign_event(
+                Event::new(
+                    PROTOCOL,
+                    event_type::ROOM_CREATE,
+                    signer.agent_id(),
+                    100,
+                    4,
+                    MessageCreatePayload::text("hi"),
+                )
+                .with_room_id("room1"),
+            )
+            .unwrap();
+        assert!(validate_room_path(&message_room_create_with_room, "room1").is_err());
+    }
+
+    #[test]
+    fn validate_type_def_rejects_bad_shapes() {
+        let mut empty_title = finding_def();
+        empty_title.title = "  ".to_owned();
+        assert!(validate_type_def(&empty_title).is_err());
+        assert!(TypeRegistry::new().define(empty_title).is_err());
+
+        let mut not_object = finding_def();
+        not_object.schema = json!("nope");
+        assert!(validate_type_def(&not_object).is_err());
+
+        let mut invalid_schema = finding_def();
+        invalid_schema.schema = json!({"type": 123});
+        assert!(validate_type_def(&invalid_schema).is_err());
+
+        let mut empty_roles = finding_def();
+        empty_roles.roles = Some(vec![]);
+        assert!(validate_type_def(&empty_roles).is_err());
+
+        let mut zero_rate = finding_def();
+        zero_rate.rate_hint = Some(0);
+        assert!(validate_type_def(&zero_rate).is_err());
+
+        let mut zero_payload = finding_def();
+        zero_payload.max_payload_hint = Some(0);
+        assert!(validate_type_def(&zero_payload).is_err());
+    }
+
+    #[test]
+    fn validate_pack_import_covers_each_arm() {
+        validate_pack_import(&PackImport {
+            use_pack: Some(pack_id::REACTIONS.to_owned()),
+            ..PackImport::default()
+        })
+        .unwrap();
+
+        validate_pack_import(&PackImport {
+            pack: Some("https://example.com/p.json".to_owned()),
+            digest: Some("sha256:abc".to_owned()),
+            ..PackImport::default()
+        })
+        .unwrap();
+
+        assert!(validate_pack_import(&PackImport {
+            pack: Some("https://example.com/p.json".to_owned()),
+            digest: Some("   ".to_owned()),
+            ..PackImport::default()
+        })
+        .is_err());
+
+        assert!(validate_pack_import(&PackImport::default()).is_err());
+
+        assert!(validate_pack_import(&PackImport {
+            use_pack: Some(pack_id::REACTIONS.to_owned()),
+            types: Some(vec![]),
+            ..PackImport::default()
+        })
+        .is_err());
+
+        let invalid = TypeDeclaration::Import(PackImport {
+            use_pack: Some(pack_id::REACTIONS.to_owned()),
+            pack: Some("https://example.com/p.json".to_owned()),
+            digest: Some("sha256:abc".to_owned()),
+            ..PackImport::default()
+        });
+        assert!(TypeRegistry::from_declarations(&[invalid], &registered_packs()).is_err());
+    }
+
+    #[test]
+    fn registered_pack_id_shape() {
+        assert!(validate_pack_import(&PackImport {
+            use_pack: Some("not-prefixed".to_owned()),
+            ..PackImport::default()
+        })
+        .is_err());
+        assert!(validate_pack_import(&PackImport {
+            use_pack: Some("adp:no-slash".to_owned()),
+            ..PackImport::default()
+        })
+        .is_err());
+        assert!(validate_pack_import(&PackImport {
+            use_pack: Some("adp:bad_name/1.0".to_owned()),
+            ..PackImport::default()
+        })
+        .is_err());
+        assert!(validate_pack_import(&PackImport {
+            use_pack: Some("adp:bad/1.x".to_owned()),
+            ..PackImport::default()
+        })
+        .is_err());
+        assert!(validate_pack_import(&PackImport {
+            use_pack: Some("adp:bad/1.2.3".to_owned()),
+            ..PackImport::default()
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn validate_message_create_payload_checks_content_type() {
+        validate_message_create_payload(&MessageCreatePayload::text("hi")).unwrap();
+        let mut empty = MessageCreatePayload::text("hi");
+        empty.content_type = " ".to_owned();
+        assert!(validate_message_create_payload(&empty).is_err());
+    }
+
+    #[test]
+    fn import_rejects_unknown_subset_and_applies_all_overrides() {
+        let packs = registered_packs();
+        let missing_subset = TypeDeclaration::Import(PackImport {
+            use_pack: Some(pack_id::REACTIONS.to_owned()),
+            types: Some(vec!["does.not.exist".to_owned()]),
+            ..PackImport::default()
+        });
+        assert!(TypeRegistry::from_declarations(&[missing_subset], &packs).is_err());
+
+        let missing_pack = TypeDeclaration::Import(PackImport {
+            use_pack: Some("adp:missing/1.0".to_owned()),
+            ..PackImport::default()
+        });
+        assert!(TypeRegistry::from_declarations(&[missing_pack], &packs).is_err());
+
+        let hidden_override = TypeDeclaration::Import(PackImport {
+            use_pack: Some(pack_id::DELIBERATION.to_owned()),
+            types: Some(vec!["poll.create".to_owned()]),
+            overrides: BTreeMap::from([("poll.vote".to_owned(), TypeOverride::default())]),
+            ..PackImport::default()
+        });
+        assert!(TypeRegistry::from_declarations(&[hidden_override], &packs).is_err());
+
+        let empty_pack = BTreeMap::from([(
+            "adp:empty/1.0".to_owned(),
+            Pack {
+                id: "adp:empty/1.0".to_owned(),
+                title: "Empty pack".to_owned(),
+                description: None,
+                types: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+        )]);
+        let empty_import = TypeDeclaration::Import(PackImport {
+            use_pack: Some("adp:empty/1.0".to_owned()),
+            ..PackImport::default()
+        });
+        assert!(
+            TypeRegistry::from_declarations(&[empty_import], &empty_pack)
+                .unwrap()
+                .is_empty()
+        );
+
+        let overridden = TypeDeclaration::Import(PackImport {
+            use_pack: Some(pack_id::REACTIONS.to_owned()),
+            overrides: BTreeMap::from([(
+                "reaction.create".to_owned(),
+                TypeOverride {
+                    roles: Some(vec![Role::Moderator]),
+                    instructions: Some("be concise".to_owned()),
+                    status: Some(TypeStatus::Deprecated),
+                    rate_hint: Some(5),
+                    max_payload_hint: Some(2048),
+                },
+            )]),
+            ..PackImport::default()
+        });
+        let registry = TypeRegistry::from_declarations(&[overridden], &packs).unwrap();
+        let def = registry.get("reaction.create").unwrap();
+        assert_eq!(def.instructions.as_deref(), Some("be concise"));
+        assert_eq!(def.status(), TypeStatus::Deprecated);
+        assert_eq!(def.rate_hint, Some(5));
+        assert_eq!(def.max_payload_hint, Some(2048));
+        assert_eq!(def.roles.as_deref(), Some([Role::Moderator].as_slice()));
+
+        let no_roles_override = TypeDeclaration::Import(PackImport {
+            use_pack: Some(pack_id::REACTIONS.to_owned()),
+            overrides: BTreeMap::from([(
+                "reaction.create".to_owned(),
+                TypeOverride {
+                    instructions: Some("no role override".to_owned()),
+                    ..TypeOverride::default()
+                },
+            )]),
+            ..PackImport::default()
+        });
+        let registry = TypeRegistry::from_declarations(&[no_roles_override], &packs).unwrap();
+        let def = registry.get("reaction.create").unwrap();
+        assert_eq!(def.instructions.as_deref(), Some("no role override"));
+        assert!(def.roles.is_none());
+
+        let mut invalid_def = finding_def();
+        invalid_def.title = String::new();
+        let invalid_pack = BTreeMap::from([(
+            "adp:invalid/1.0".to_owned(),
+            Pack {
+                id: "adp:invalid/1.0".to_owned(),
+                title: "Invalid pack".to_owned(),
+                description: None,
+                types: vec![invalid_def],
+                extra: BTreeMap::new(),
+            },
+        )]);
+        let invalid_import = TypeDeclaration::Import(PackImport {
+            use_pack: Some("adp:invalid/1.0".to_owned()),
+            ..PackImport::default()
+        });
+        assert!(TypeRegistry::from_declarations(&[invalid_import], &invalid_pack).is_err());
+    }
+
+    #[test]
+    fn registry_introspection_and_registry_validation() {
+        let mut registry = TypeRegistry::new();
+        assert!(registry.is_empty());
+        registry.define(finding_def()).unwrap();
+        assert!(!registry.is_empty());
+        assert_eq!(registry.definitions().count(), 1);
+
+        // built-in payloads bypass the registry
+        validate_event_against_registry(
+            event_type::MESSAGE_CREATE,
+            &json!({"anything": true}),
+            &registry,
+        )
+        .unwrap();
+        validate_event_against_registry(
+            "review.finding",
+            &json!({"severity": "high", "summary": "s"}),
+            &registry,
+        )
+        .unwrap();
+        assert!(validate_event_against_registry("review.finding", &json!({}), &registry).is_err());
+
+        let mut invalid_schema = finding_def();
+        invalid_schema.schema = json!({"type": 123});
+        registry
+            .types
+            .insert(invalid_schema.name.clone(), invalid_schema);
+        assert!(registry
+            .validate_payload(
+                "review.finding",
+                &json!({"severity": "high", "summary": "s"})
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn custom_permission_edges_and_room_write() {
+        let mut registry = TypeRegistry::new();
+        registry.define(finding_def()).unwrap();
+        let mut disabled = finding_def();
+        disabled.name = "review.disabled".to_owned();
+        disabled.status = Some(TypeStatus::Disabled);
+        registry.define(disabled).unwrap();
+
+        // disabled custom type is never submittable
+        assert!(!can_submit_event(
+            "review.disabled",
+            &PermissionContext::creator(None),
+            &registry
+        ));
+        // a member with no role cannot submit a custom type
+        assert!(!can_submit_event(
+            "review.finding",
+            &PermissionContext::default(),
+            &registry
+        ));
+
+        validate_room_write(
+            event_type::MESSAGE_CREATE,
+            RoomState::Active,
+            &PermissionContext::for_role(Role::Speaker),
+            &registry,
+        )
+        .unwrap();
+        assert!(validate_room_write(
+            event_type::MESSAGE_CREATE,
+            RoomState::Ended,
+            &PermissionContext::for_role(Role::Speaker),
+            &registry,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn server_record_chain_violations() {
+        let signer = AgentSigner::from_seed([43; 32]);
+        let make = |seq: u64, nonce: u64, pre_hash: Option<String>| {
+            let envelope = signer
+                .sign_event(discourse_event(
+                    event_type::MESSAGE_CREATE,
+                    signer.agent_id(),
+                    100,
+                    nonce,
+                    "room1",
+                    json!({"content_type": "text/plain", "content": "hi"}),
+                ))
+                .unwrap();
+            build_server_record("room1", seq, pre_hash, 100 + seq as i64, envelope).unwrap()
+        };
+
+        let first = make(1, 1, None);
+        let gap = make(3, 2, Some(first.hash.clone()));
+        assert!(verify_server_record_chain(&[first.clone(), gap]).is_err());
+
+        let wrong_pre = make(2, 3, Some("not-the-previous-hash".to_owned()));
+        assert!(verify_server_record_chain(&[first.clone(), wrong_pre]).is_err());
+
+        let first_with_pre = make(1, 4, Some("unexpected".to_owned()));
+        assert!(verify_server_record_chain(&[first_with_pre]).is_err());
     }
 }

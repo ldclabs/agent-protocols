@@ -201,11 +201,13 @@ function addQuery(
   path: string,
   params: Record<string, string | number | undefined>,
 ): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) query.set(key, String(value));
-  }
-  const encoded = query.toString();
+  const encoded = Object.entries(params)
+    .filter((entry): entry is [string, string | number] => entry[1] !== undefined)
+    .map(
+      ([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`,
+    )
+    .join("&");
   return encoded ? `${path}?${encoded}` : path;
 }
 
