@@ -1,11 +1,9 @@
 {
   "name": "agent-protocols-monorepo",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
+  "packageManager": "pnpm@11.1.2",
   "scripts": {
-    "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces"
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
   }
 }

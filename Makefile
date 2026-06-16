@@ -12,5 +12,5 @@ fix:
 
 test:
 	@cargo test --workspace --all-features -- --nocapture
-	@npm test
+	@pnpm test
 	@$(PYTHON) -m pytest python/agent-protocols/tests

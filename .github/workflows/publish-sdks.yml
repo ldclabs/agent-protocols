@@ -29,19 +29,21 @@ jobs:
     name: Verify SDKs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install TypeScript dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Check SDK versions
         run: |
@@ -78,8 +80,8 @@ jobs:
 
       - name: Run TypeScript checks
         run: |
-          npm test
-          npm run build
+          pnpm -r test
+          pnpm -r build
 
       - name: Run Python tests
         run: |
@@ -97,37 +99,39 @@ jobs:
     runs-on: ubuntu-latest
     needs: verify
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
           registry-url: "https://registry.npmjs.org"
 
       - name: Build package
         run: |
-          npm ci
-          npm run build --workspace agent-protocols
+          pnpm install --frozen-lockfile
+          pnpm --filter agent-protocols build
 
       - name: Dry-run npm publish
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         working-directory: packages/agent-protocols
-        run: npm publish --dry-run --access public
+        run: pnpm publish --dry-run --no-git-checks --access public
 
       - name: Publish to npm
         if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
         working-directory: packages/agent-protocols
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+        run: pnpm publish --access public --provenance --no-git-checks
 
   publish-pypi:
     name: Publish Python SDK to PyPI
     runs-on: ubuntu-latest
     needs: verify
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
@@ -156,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: verify
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Prepare Rust toolchain
         run: rustup update --no-self-update stable
