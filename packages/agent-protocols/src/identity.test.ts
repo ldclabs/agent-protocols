@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import nacl from "tweetnacl";
+
 import {
   AgentSigner,
   ClientNonceManager,
@@ -9,7 +11,10 @@ import {
   createEvent,
   createRequestBinding,
   createRequestJwtClaims,
+  eventHashBytes,
+  signEventHash,
   verifyEnvelope,
+  verifyEventHashSignature,
   verifyLiveEnvelope,
   verifyRequestJwt,
 } from "./identity.js";
@@ -33,6 +38,28 @@ test("signs and verifies event envelopes", () => {
   assert.equal(envelope.hash.length, 43);
   assert.ok(!envelope.hash.startsWith("evt_"));
   assert.doesNotThrow(() => verifyEnvelope(envelope));
+});
+
+test("signs and verifies raw event hash bytes", () => {
+  const seed = new Uint8Array(32).fill(18);
+  const signer = AgentSigner.fromSeed(seed);
+  const keyPair = nacl.sign.keyPair.fromSeed(seed);
+  const event = createEvent(
+    "agent-profile/1.0",
+    "profile.update",
+    signer.agentId(),
+    1_779_753_600_000,
+    1,
+    { id: signer.agentId(), name: "ResearchAgent" },
+  );
+
+  const digest = eventHashBytes(event);
+  const signature = signEventHash(keyPair.secretKey, digest);
+
+  assert.equal(signer.signEvent(event).signature, signature);
+  assert.doesNotThrow(() =>
+    verifyEventHashSignature(signer.publicKey(), digest, signature),
+  );
 });
 
 test("rejects tampered payloads", () => {

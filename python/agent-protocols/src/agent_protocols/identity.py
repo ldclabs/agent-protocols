@@ -77,10 +77,11 @@ class AgentSigner:
         return agent_id_from_public_key(self.public_key())
 
     def sign_event(self, event: Event) -> Envelope:
+        digest = event_hash_bytes(event)
         return {
-            "hash": event_hash(event),
+            "hash": _base64url_encode(digest),
             "event": event,
-            "signature": sign_event(self._private_key, event),
+            "signature": sign_event_hash(self._private_key, digest),
         }
 
     def sign_request_jwt(self, claims: dict[str, Any]) -> str:
@@ -176,14 +177,20 @@ def canonical_event_bytes(event: Event) -> bytes:
 
 
 def event_hash(event: Event) -> str:
+    return _base64url_encode(event_hash_bytes(event))
+
+
+def event_hash_bytes(event: Event) -> bytes:
     validate_nonce(event["nonce"])
-    digest = hashlib.sha3_256(canonical_event_bytes(event)).digest()
-    return _base64url_encode(digest)
+    return hashlib.sha3_256(canonical_event_bytes(event)).digest()
 
 
 def sign_event(private_key: Ed25519PrivateKey, event: Event) -> str:
-    validate_nonce(event["nonce"])
-    return _base64url_encode(private_key.sign(canonical_event_bytes(event)))
+    return sign_event_hash(private_key, event_hash_bytes(event))
+
+
+def sign_event_hash(private_key: Ed25519PrivateKey, event_hash: bytes) -> str:
+    return _base64url_encode(private_key.sign(_valid_event_hash_bytes(event_hash)))
 
 
 def verify_event_hash(envelope: Envelope) -> None:
@@ -194,12 +201,16 @@ def verify_event_hash(envelope: Envelope) -> None:
 
 
 def verify_signature(envelope: Envelope) -> None:
-    signature = _base64url_decode(envelope["signature"])
+    public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes(envelope["event"]["actor"]))
+    verify_event_hash_signature(public_key, event_hash_bytes(envelope["event"]), envelope["signature"])
+
+
+def verify_event_hash_signature(public_key: Ed25519PublicKey, event_hash: bytes, encoded_signature: str) -> None:
+    signature = _base64url_decode(encoded_signature)
     if len(signature) != 64:
         raise AgentProtocolError("invalid_signature", f"signature must be 64 bytes, got {len(signature)}")
-    public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes(envelope["event"]["actor"]))
     try:
-        public_key.verify(signature, canonical_event_bytes(envelope["event"]))
+        public_key.verify(signature, _valid_event_hash_bytes(event_hash))
     except InvalidSignature as exc:
         raise AgentProtocolError("invalid_signature", "signature verification failed") from exc
 
@@ -292,3 +303,9 @@ def _base64url_decode_no_pad(value: str) -> bytes:
     if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
         raise AgentProtocolError("invalid_encoding", "expected base64url without padding")
     return _base64url_decode(value)
+
+
+def _valid_event_hash_bytes(event_hash: bytes) -> bytes:
+    if len(event_hash) != 32:
+        raise AgentProtocolError("invalid_event_hash", f"event hash must be 32 bytes, got {len(event_hash)}")
+    return event_hash

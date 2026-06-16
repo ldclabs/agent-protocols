@@ -1,4 +1,5 @@
 BUILD_ENV := rust
+PYTHON ?= $(if $(wildcard .venv/bin/python),$(CURDIR)/.venv/bin/python,python3)
 
 .PHONY: lint fix test
 
@@ -12,4 +13,4 @@ fix:
 test:
 	@cargo test --workspace --all-features -- --nocapture
 	@npm test
-	@cd python/agent-protocols && python3 -m pytest
+	@$(PYTHON) -m pytest python/agent-protocols/tests

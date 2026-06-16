@@ -34,6 +34,9 @@ pub enum SdkError {
     #[error("invalid event hash: expected {expected}, got {actual}")]
     InvalidEventHash { expected: String, actual: String },
 
+    #[error("invalid event hash length: expected 32 bytes, got {0}")]
+    InvalidEventHashLength(usize),
+
     #[error("invalid event protocol: expected {expected}, got {actual}")]
     InvalidEventProtocol { expected: String, actual: String },
 

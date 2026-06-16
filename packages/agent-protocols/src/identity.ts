@@ -100,10 +100,11 @@ export class AgentSigner {
   }
 
   signEvent<P>(event: Event<P>): Envelope<P> {
+    const hashBytes = eventHashBytes(event);
     return {
-      hash: eventHash(event),
+      hash: base64UrlEncode(hashBytes),
       event,
-      signature: signEvent(this.keyPair.secretKey, event),
+      signature: signEventHash(this.keyPair.secretKey, hashBytes),
     };
   }
 
@@ -265,18 +266,29 @@ export function canonicalEventBytes(event: Event<unknown>): Uint8Array {
 }
 
 export function eventHash(event: Event<unknown>): string {
+  return base64UrlEncode(eventHashBytes(event));
+}
+
+export function eventHashBytes(event: Event<unknown>): Uint8Array {
   validateNonce(event.nonce);
-  const digest = createHash("sha3-256")
-    .update(canonicalEventBytes(event))
-    .digest();
-  return base64UrlEncode(digest);
+  return new Uint8Array(
+    createHash("sha3-256")
+      .update(canonicalEventBytes(event))
+      .digest(),
+  );
 }
 
 export function signEvent(
   secretKey: Uint8Array,
   event: Event<unknown>,
 ): string {
-  validateNonce(event.nonce);
+  return signEventHash(secretKey, eventHashBytes(event));
+}
+
+export function signEventHash(
+  secretKey: Uint8Array,
+  eventHash: Uint8Array,
+): string {
   if (secretKey.byteLength !== 64) {
     throw protocolError(
       "invalid_private_key",
@@ -284,7 +296,7 @@ export function signEvent(
     );
   }
   return base64UrlEncode(
-    nacl.sign.detached(canonicalEventBytes(event), secretKey),
+    nacl.sign.detached(validEventHashBytes(eventHash), secretKey),
   );
 }
 
@@ -299,7 +311,25 @@ export function verifyEventHash(envelope: Envelope<unknown>): void {
 }
 
 export function verifySignature(envelope: Envelope<unknown>): void {
-  const signature = base64UrlDecode(envelope.signature);
+  verifyEventHashSignature(
+    publicKeyBytes(envelope.event.actor),
+    eventHashBytes(envelope.event),
+    envelope.signature,
+  );
+}
+
+export function verifyEventHashSignature(
+  publicKey: Uint8Array,
+  eventHash: Uint8Array,
+  encodedSignature: string,
+): void {
+  if (publicKey.byteLength !== 32) {
+    throw protocolError(
+      "invalid_public_key",
+      `public key must be 32 bytes, got ${publicKey.byteLength}`,
+    );
+  }
+  const signature = base64UrlDecode(encodedSignature);
   if (signature.byteLength !== 64) {
     throw protocolError(
       "invalid_signature",
@@ -307,9 +337,9 @@ export function verifySignature(envelope: Envelope<unknown>): void {
     );
   }
   const ok = nacl.sign.detached.verify(
-    canonicalEventBytes(envelope.event),
+    validEventHashBytes(eventHash),
     signature,
-    publicKeyBytes(envelope.event.actor),
+    publicKey,
   );
   if (!ok) {
     throw protocolError("invalid_signature", "signature verification failed");
@@ -472,4 +502,14 @@ function base64UrlDecodeNoPad(value: string): Uint8Array {
     );
   }
   return base64UrlDecode(value);
+}
+
+function validEventHashBytes(eventHash: Uint8Array): Uint8Array {
+  if (eventHash.byteLength !== 32) {
+    throw protocolError(
+      "invalid_event_hash",
+      `event hash must be 32 bytes, got ${eventHash.byteLength}`,
+    );
+  }
+  return eventHash;
 }

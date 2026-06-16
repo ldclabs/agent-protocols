@@ -132,8 +132,9 @@ impl AgentSigner {
     where
         P: Serialize,
     {
-        let hash = event_hash(&event)?;
-        let signature = sign_event(&self.signing_key, &event)?;
+        let event_hash = event_hash_bytes(&event)?;
+        let hash = URL_SAFE_NO_PAD.encode(&event_hash);
+        let signature = sign_event_hash(&self.signing_key, &event_hash)?;
         Ok(Envelope {
             hash,
             event,
@@ -223,18 +224,29 @@ pub fn event_hash<P>(event: &Event<P>) -> Result<String>
 where
     P: Serialize,
 {
+    Ok(URL_SAFE_NO_PAD.encode(event_hash_bytes(event)?))
+}
+
+pub fn event_hash_bytes<P>(event: &Event<P>) -> Result<[u8; 32]>
+where
+    P: Serialize,
+{
     validate_nonce(event.nonce)?;
     let digest = Sha3_256::digest(canonical_event_bytes(event)?);
-    Ok(URL_SAFE_NO_PAD.encode(digest))
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(&digest);
+    Ok(bytes)
 }
 
 pub fn sign_event<P>(signing_key: &SigningKey, event: &Event<P>) -> Result<String>
 where
     P: Serialize,
 {
-    validate_nonce(event.nonce)?;
-    let bytes = canonical_event_bytes(event)?;
-    let signature = signing_key.sign(&bytes);
+    sign_event_hash(signing_key, &event_hash_bytes(event)?)
+}
+
+pub fn sign_event_hash(signing_key: &SigningKey, event_hash: &[u8]) -> Result<String> {
+    let signature = signing_key.sign(valid_event_hash_bytes(event_hash)?);
     Ok(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
 }
 
@@ -257,18 +269,32 @@ pub fn verify_signature<P>(envelope: &Envelope<P>) -> Result<()>
 where
     P: Serialize,
 {
-    let bytes = canonical_event_bytes(&envelope.event)?;
-    let signature_bytes = URL_SAFE_NO_PAD.decode(&envelope.signature)?;
+    let event_hash = event_hash_bytes(&envelope.event)?;
+    let verifying_key = envelope.event.actor.verifying_key()?;
+    verify_event_hash_signature(&verifying_key, &event_hash, &envelope.signature)
+}
+
+pub fn verify_event_hash_signature(
+    verifying_key: &VerifyingKey,
+    event_hash: &[u8],
+    encoded_signature: &str,
+) -> Result<()> {
+    let signature_bytes = URL_SAFE_NO_PAD.decode(encoded_signature)?;
     let signature_bytes: [u8; 64] = signature_bytes
         .try_into()
         .map_err(|bytes: Vec<u8>| SdkError::InvalidSignatureLength(bytes.len()))?;
     let signature = Signature::from_bytes(&signature_bytes);
-    envelope
-        .event
-        .actor
-        .verifying_key()?
-        .verify_strict(&bytes, &signature)?;
+    verifying_key.verify_strict(valid_event_hash_bytes(event_hash)?, &signature)?;
     Ok(())
+}
+
+fn valid_event_hash_bytes(event_hash: &[u8]) -> Result<&[u8; 32]> {
+    if event_hash.len() != 32 {
+        return Err(SdkError::InvalidEventHashLength(event_hash.len()));
+    }
+    Ok(event_hash
+        .try_into()
+        .expect("event hash length was checked above"))
 }
 
 pub fn verify_envelope<P>(envelope: &Envelope<P>) -> Result<()>
@@ -594,6 +620,28 @@ mod tests {
         assert!(!envelope.hash.starts_with("evt_"));
         assert_eq!(envelope.hash.len(), 43);
         verify_envelope(&envelope).unwrap();
+    }
+
+    #[test]
+    fn signs_and_verifies_raw_event_hash_bytes() {
+        let seed = [18; 32];
+        let signer = AgentSigner::from_seed(seed);
+        let signing_key = SigningKey::from_bytes(&seed);
+        let event = Event::new(
+            "agent-profile/1.0",
+            "profile.update",
+            signer.agent_id(),
+            1_779_753_600_000,
+            1,
+            json!({"id": signer.agent_id(), "name": "ResearchAgent"}),
+        );
+
+        let digest = event_hash_bytes(&event).unwrap();
+        let signature = sign_event_hash(&signing_key, &digest).unwrap();
+        let envelope = signer.sign_event(event).unwrap();
+
+        assert_eq!(envelope.signature, signature);
+        verify_event_hash_signature(&signing_key.verifying_key(), &digest, &signature).unwrap();
     }
 
     #[test]

@@ -1,5 +1,7 @@
 import unittest
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from agent_protocols.identity import (
     AgentSigner,
     ClientNonceManager,
@@ -8,7 +10,10 @@ from agent_protocols.identity import (
     RequestBinding,
     create_event,
     create_request_jwt_claims,
+    event_hash_bytes,
+    sign_event_hash,
     verify_envelope,
+    verify_event_hash_signature,
     verify_live_envelope,
     verify_request_jwt,
 )
@@ -31,6 +36,25 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(len(envelope["hash"]), 43)
         self.assertFalse(envelope["hash"].startswith("evt_"))
         verify_envelope(envelope)
+
+    def test_signs_and_verifies_raw_event_hash_bytes(self):
+        seed = bytes([18]) * 32
+        signer = AgentSigner.from_seed(seed)
+        private_key = Ed25519PrivateKey.from_private_bytes(seed)
+        event = create_event(
+            "agent-profile/1.0",
+            "profile.update",
+            signer.agent_id(),
+            1_779_753_600_000,
+            1,
+            {"id": signer.agent_id(), "name": "ResearchAgent"},
+        )
+
+        digest = event_hash_bytes(event)
+        signature = sign_event_hash(private_key, digest)
+
+        self.assertEqual(signer.sign_event(event)["signature"], signature)
+        verify_event_hash_signature(private_key.public_key(), digest, signature)
 
     def test_rejects_tampered_payloads(self):
         signer = AgentSigner.from_seed(bytes([8]) * 32)
