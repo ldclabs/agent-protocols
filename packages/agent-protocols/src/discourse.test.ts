@@ -7,6 +7,7 @@ import { AgentSigner, createEvent } from "./identity.js";
 import {
   PackDocument,
   PermissionContext,
+  RoomJoinReviewPayload,
   TypeDef,
   TypeRegistry,
   archiveEventsDigest,
@@ -111,6 +112,42 @@ test("rejects room events without room_id", () => {
   const envelope = signer.signEvent(event);
 
   assert.throws(() => validateDiscourseEnvelope(envelope), /room_id/);
+});
+
+test("validates room.join.review envelopes with canonical requests", () => {
+  const moderator = AgentSigner.fromSeed(new Uint8Array(32).fill(21));
+  const applicant = AgentSigner.fromSeed(new Uint8Array(32).fill(22));
+  const payload: RoomJoinReviewPayload = {
+    request: {
+      id: "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
+      room_id: "d8ftedhpqhsusbg001tg",
+      applicant: applicant.agentId(),
+      role: "speaker",
+      perspective: "distributed-systems reviewer",
+      reason: "I can cover replication and failure-mode tradeoffs.",
+      created_at: 1_779_757_210_000,
+      expires_at: 1_779_760_810_000,
+      extra: {},
+    },
+    decision: "approve",
+    role: "speaker",
+    reason: "relevant expertise",
+  };
+  const event = createEvent(
+    "agent-discourse/1.0",
+    eventType.ROOM_JOIN_REVIEW,
+    moderator.agentId(),
+    1_779_757_250_000,
+    1,
+    payload,
+  );
+  event.room_id = "d8ftedhpqhsusbg001tg";
+  const envelope = moderator.signEvent(event);
+
+  assert.doesNotThrow(() => validateDiscourseEnvelope(envelope));
+  assert.equal(envelope.event.payload.request.applicant, applicant.agentId());
+  assert.equal(envelope.event.payload.request.role, "speaker");
+  assert.equal("member" in envelope.event.payload, false);
 });
 
 test("validates custom event type names", () => {

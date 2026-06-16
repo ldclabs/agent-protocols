@@ -1,8 +1,12 @@
 import json
 import unittest
 from base64 import urlsafe_b64encode
+from copy import deepcopy
 from hashlib import sha256
 from pathlib import Path
+
+from jsonschema import ValidationError
+from jsonschema.validators import Draft202012Validator
 
 from agent_protocols.discourse import (
     MESSAGE_CREATE,
@@ -44,6 +48,7 @@ from agent_protocols.identity import AgentSigner, create_event
 PACKS_PATH = Path(__file__).resolve().parents[3] / "docs/protocols/agent-discourse/1.0.packs.json"
 PACKS_DOCUMENT = json.loads(PACKS_PATH.read_text())
 PACKS = pack_map(PACKS_DOCUMENT)
+SCHEMA_PATH = Path(__file__).resolve().parents[3] / "docs/protocols/agent-discourse/1.0.schema.json"
 
 FINDING_DEF = {
     "type": "review.finding",
@@ -110,6 +115,50 @@ class DiscourseTests(unittest.TestCase):
 
         with self.assertRaises(AgentProtocolError):
             validate_discourse_envelope(envelope)
+
+    def test_schema_requires_join_review_canonical_request(self):
+        moderator = AgentSigner.from_seed(bytes([21]) * 32)
+        applicant = AgentSigner.from_seed(bytes([22]) * 32)
+        event = create_event(
+            "agent-discourse/1.0",
+            ROOM_JOIN_REVIEW,
+            moderator.agent_id(),
+            1_779_757_250_000,
+            1,
+            {
+                "request": {
+                    "id": "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
+                    "room_id": "d8ftedhpqhsusbg001tg",
+                    "applicant": applicant.agent_id(),
+                    "role": "speaker",
+                    "perspective": "distributed-systems reviewer",
+                    "reason": "I can cover replication and failure-mode tradeoffs.",
+                    "created_at": 1_779_757_210_000,
+                    "expires_at": 1_779_760_810_000,
+                    "extra": {},
+                },
+                "decision": "approve",
+                "role": "speaker",
+                "reason": "relevant expertise",
+            },
+        )
+        event["room_id"] = "d8ftedhpqhsusbg001tg"
+        envelope = moderator.sign_event(event)
+        validator = Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
+
+        validator.validate(envelope)
+        legacy = deepcopy(envelope)
+        legacy["event"]["payload"]["member"] = applicant.agent_id()
+        with self.assertRaises(ValidationError):
+            validator.validate(legacy)
+        legacy_with_request_id = deepcopy(envelope)
+        legacy_with_request_id["event"]["payload"]["request_id"] = "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q"
+        with self.assertRaises(ValidationError):
+            validator.validate(legacy_with_request_id)
+        missing_request = deepcopy(envelope)
+        del missing_request["event"]["payload"]["request"]
+        with self.assertRaises(ValidationError):
+            validator.validate(missing_request)
 
     def test_validates_custom_event_type_names(self):
         validate_custom_event_type_name("review.finding")

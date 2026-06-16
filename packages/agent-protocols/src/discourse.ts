@@ -166,12 +166,10 @@ export interface RoomResponse {
 export interface RoomJoinPayload {
   request_id: string;
   role: Role;
-  perspective?: string;
-  extra?: Record<string, unknown>;
 }
 
-export interface RoomJoinRequestPayload {
-  requested_role: Role;
+export interface RoomJoinRequestInput {
+  role: Role;
   perspective?: string;
   reason?: string;
   extra?: Record<string, unknown>;
@@ -181,22 +179,25 @@ export interface RoomJoinRequest {
   id: string;
   room_id: string;
   applicant: AgentId;
-  requested_role: Role;
-  approved_role?: Role;
+  role: Role;
   perspective?: string;
-  status: JoinRequestStatus;
-  request_reason?: string;
-  review_reason?: string;
+  reason?: string;
   created_at: number;
-  reviewed_by?: AgentId | null;
-  reviewed_at?: number | null;
-  expires_at?: number;
+  expires_at: number;
   extra?: Record<string, unknown>;
 }
 
+export interface RoomJoinRequestStatus {
+  request: RoomJoinRequest;
+  status: JoinRequestStatus;
+  approved_role?: Role;
+  review_reason?: string;
+  reviewed_by?: AgentId | null;
+  reviewed_at?: number | null;
+}
+
 export interface RoomJoinReviewPayload {
-  request_id: string;
-  member: AgentId;
+  request: RoomJoinRequest;
   decision: JoinDecision;
   role?: Role;
   reason?: string;

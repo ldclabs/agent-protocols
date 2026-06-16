@@ -3,9 +3,8 @@ import {
   RoomCreatePayload,
   RoomResponse,
   RoomJoinPayload,
-  RoomJoinRequest,
-  RoomJoinRequestPayload,
-  RoomJoinReviewPayload,
+  RoomJoinRequestInput,
+  RoomJoinRequestStatus,
   RoomLeavePayload,
   ServerRecord,
 } from "./discourse.js";
@@ -95,8 +94,8 @@ export class DiscourseClient {
   async requestJoin(
     roomId: string,
     jwt: string,
-    request: RoomJoinRequestPayload,
-  ): Promise<RoomJoinRequest> {
+    request: RoomJoinRequestInput,
+  ): Promise<RoomJoinRequestStatus> {
     return this.postJson(`/v1/rooms/${roomId}/join-requests`, request, jwt);
   }
 
@@ -104,11 +103,14 @@ export class DiscourseClient {
     roomId: string,
     requestId: string,
     jwt: string,
-  ): Promise<RoomJoinRequest> {
+  ): Promise<RoomJoinRequestStatus> {
     return this.getJson(`/v1/rooms/${roomId}/join-requests/${requestId}`, jwt);
   }
 
-  async joinRequests(roomId: string, jwt: string): Promise<RoomJoinRequest[]> {
+  async joinRequests(
+    roomId: string,
+    jwt: string,
+  ): Promise<RoomJoinRequestStatus[]> {
     return this.getJson(`/v1/rooms/${roomId}/join-requests`, jwt);
   }
 

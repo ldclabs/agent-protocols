@@ -333,15 +333,11 @@ pub struct RoomResponse {
 pub struct RoomJoinPayload {
     pub request_id: String,
     pub role: Role,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub perspective: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct RoomJoinRequestPayload {
-    pub requested_role: Role,
+pub struct RoomJoinRequestInput {
+    pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perspective: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -350,10 +346,10 @@ pub struct RoomJoinRequestPayload {
     pub extra: BTreeMap<String, Value>,
 }
 
-impl RoomJoinRequestPayload {
-    pub fn new(requested_role: Role) -> Self {
+impl RoomJoinRequestInput {
+    pub fn new(role: Role) -> Self {
         Self {
-            requested_role,
+            role,
             perspective: None,
             reason: None,
             extra: BTreeMap::new(),
@@ -366,31 +362,34 @@ pub struct RoomJoinRequest {
     pub id: String,
     pub room_id: String,
     pub applicant: AgentId,
-    pub requested_role: Role,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approved_role: Option<Role>,
+    pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perspective: Option<String>,
-    pub status: JoinRequestStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_reason: Option<String>,
+    pub reason: Option<String>,
     pub created_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reviewed_by: Option<AgentId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reviewed_at: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<i64>,
+    pub expires_at: i64,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RoomJoinRequestStatus {
+    pub request: RoomJoinRequest,
+    pub status: JoinRequestStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_role: Option<Role>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_by: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RoomJoinReviewPayload {
-    pub request_id: String,
-    pub member: AgentId,
+    pub request: RoomJoinRequest,
     pub decision: JoinDecision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
@@ -1249,6 +1248,48 @@ mod tests {
             validate_discourse_envelope(&envelope),
             Err(SdkError::MissingRoomId)
         ));
+    }
+
+    #[test]
+    fn validates_join_review_canonical_request() {
+        let moderator = AgentSigner::from_seed([21; 32]);
+        let applicant = AgentSigner::from_seed([22; 32]);
+        let payload = RoomJoinReviewPayload {
+            request: RoomJoinRequest {
+                id: "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q".to_owned(),
+                room_id: "d8ftedhpqhsusbg001tg".to_owned(),
+                applicant: applicant.agent_id(),
+                role: Role::Speaker,
+                perspective: Some("distributed-systems reviewer".to_owned()),
+                reason: Some("I can cover replication and failure-mode tradeoffs.".to_owned()),
+                created_at: 1_779_757_210_000,
+                expires_at: 1_779_760_810_000,
+                extra: BTreeMap::new(),
+            },
+            decision: JoinDecision::Approve,
+            role: Some(Role::Speaker),
+            reason: Some("relevant expertise".to_owned()),
+            extra: BTreeMap::new(),
+        };
+        let envelope = moderator
+            .sign_event(discourse_event(
+                event_type::ROOM_JOIN_REVIEW,
+                moderator.agent_id(),
+                1_779_757_250_000,
+                1,
+                "d8ftedhpqhsusbg001tg",
+                payload.clone(),
+            ))
+            .unwrap();
+
+        validate_discourse_envelope(&envelope).unwrap();
+        let value = serde_json::to_value(payload).unwrap();
+        assert!(value.get("member").is_none());
+        assert_eq!(
+            value["request"]["applicant"],
+            json!(applicant.agent_id().to_string())
+        );
+        assert_eq!(value["request"]["role"], json!("speaker"));
     }
 
     #[test]

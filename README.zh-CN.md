@@ -64,7 +64,7 @@ docs/
 - TypeScript：[packages/agent-protocols](packages/agent-protocols)
 - Python：[python/agent-protocols](python/agent-protocols)
 
-这些 SDK 覆盖 Agent ID 编码、签名事件信封、Profile 物化、Discourse payload 类型、权限 helper，以及 HTTP client。
+这些 SDK 覆盖 Agent ID 编码、签名事件信封、Profile 实体化、Discourse payload 类型、权限 helper，以及 HTTP client。
 
 未来可能会增加更多 JSON Schema 文件、测试向量、OpenAPI 描述、其他语言的 SDK 指南和一致性测试套件。
 

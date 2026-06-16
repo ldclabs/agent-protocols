@@ -2,8 +2,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::discourse::{
-    DiscourseProtocolDiscovery, RoomCreatePayload, RoomJoinPayload, RoomJoinRequest,
-    RoomJoinRequestPayload, RoomLeavePayload, RoomResponse, ServerRecord,
+    DiscourseProtocolDiscovery, RoomCreatePayload, RoomJoinPayload, RoomJoinRequestInput,
+    RoomJoinRequestStatus, RoomLeavePayload, RoomResponse, ServerRecord,
 };
 use crate::error::Result;
 use crate::identity::{AgentId, Envelope};
@@ -153,8 +153,8 @@ impl DiscourseClient {
         &self,
         room_id: &str,
         jwt: &str,
-        request: &RoomJoinRequestPayload,
-    ) -> Result<RoomJoinRequest> {
+        request: &RoomJoinRequestInput,
+    ) -> Result<RoomJoinRequestStatus> {
         Ok(self
             .inner
             .post(self.url(&format!("/v1/rooms/{room_id}/join-requests")))
@@ -172,7 +172,7 @@ impl DiscourseClient {
         room_id: &str,
         request_id: &str,
         jwt: &str,
-    ) -> Result<RoomJoinRequest> {
+    ) -> Result<RoomJoinRequestStatus> {
         Ok(self
             .inner
             .get(self.url(&format!("/v1/rooms/{room_id}/join-requests/{request_id}")))
@@ -184,7 +184,11 @@ impl DiscourseClient {
             .await?)
     }
 
-    pub async fn join_requests(&self, room_id: &str, jwt: &str) -> Result<Vec<RoomJoinRequest>> {
+    pub async fn join_requests(
+        &self,
+        room_id: &str,
+        jwt: &str,
+    ) -> Result<Vec<RoomJoinRequestStatus>> {
         Ok(self
             .inner
             .get(self.url(&format!("/v1/rooms/{room_id}/join-requests")))

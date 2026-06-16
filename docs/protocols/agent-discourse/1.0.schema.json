@@ -639,8 +639,23 @@
         },
         "role": {
           "$ref": "#/$defs/role"
+        }
+      },
+      "additionalProperties": false
+    },
+    "roomJoinRequestInput": {
+      "type": "object",
+      "required": [
+        "role"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/role"
         },
         "perspective": {
+          "type": "string"
+        },
+        "reason": {
           "type": "string"
         },
         "extra": {
@@ -652,16 +667,12 @@
     "roomJoinReviewPayload": {
       "type": "object",
       "required": [
-        "request_id",
-        "member",
+        "request",
         "decision"
       ],
       "properties": {
-        "request_id": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "member": {
-          "$ref": "#/$defs/agentId"
+        "request": {
+          "$ref": "#/$defs/joinRequest"
         },
         "decision": {
           "type": "string",
@@ -787,8 +798,7 @@
         "id",
         "room_id",
         "applicant",
-        "requested_role",
-        "status",
+        "role",
         "created_at",
         "expires_at"
       ],
@@ -802,14 +812,36 @@
         "applicant": {
           "$ref": "#/$defs/agentId"
         },
-        "requested_role": {
-          "$ref": "#/$defs/role"
-        },
-        "approved_role": {
+        "role": {
           "$ref": "#/$defs/role"
         },
         "perspective": {
           "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "joinRequestStatus": {
+      "type": "object",
+      "required": [
+        "request",
+        "status"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/joinRequest"
         },
         "status": {
           "type": "string",
@@ -820,14 +852,11 @@
             "expired"
           ]
         },
-        "request_reason": {
-          "type": "string"
+        "approved_role": {
+          "$ref": "#/$defs/role"
         },
         "review_reason": {
           "type": "string"
-        },
-        "created_at": {
-          "$ref": "#/$defs/timestampMs"
         },
         "reviewed_by": {
           "anyOf": [
@@ -848,12 +877,6 @@
               "type": "null"
             }
           ]
-        },
-        "expires_at": {
-          "$ref": "#/$defs/timestampMs"
-        },
-        "extra": {
-          "$ref": "#/$defs/extra"
         }
       },
       "additionalProperties": false
