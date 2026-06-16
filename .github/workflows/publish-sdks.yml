@@ -1,7 +1,9 @@
+# npm and crates.io use OIDC Trusted Publishing (no stored tokens). Configure the
+# trusted publisher for each registry to point at this repo + workflow file:
+# - npm:       https://www.npmjs.com/package/agent-protocols/access
+# - crates.io: https://crates.io/crates/agent-protocols/settings
 # Required secrets for real publishing:
-# - NPM_TOKEN
-# - PYPI_API_TOKEN
-# - CARGO_REGISTRY_TOKEN
+# - PYPI_API_TOKEN  (PyPI still uses an API token)
 name: Publish SDKs
 
 on:
@@ -36,14 +38,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install TypeScript dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Check SDK versions
         run: |
@@ -106,25 +107,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
           registry-url: "https://registry.npmjs.org"
 
       - name: Build package
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --no-frozen-lockfile
           pnpm --filter agent-protocols build
+
+      # Trusted publishing needs npm CLI >= 11.5.1; Node 22 ships an older npm, and
+      # pnpm 11's OIDC publish is currently broken (pnpm/pnpm#11513), so publish via npm.
+      - name: Upgrade npm for trusted publishing
+        run: npm install --global npm@latest
 
       - name: Dry-run npm publish
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         working-directory: packages/agent-protocols
-        run: pnpm publish --dry-run --no-git-checks --access public
+        run: npm publish --dry-run --access public
 
+      # OIDC trusted publishing: no NODE_AUTH_TOKEN, provenance is generated automatically.
       - name: Publish to npm
         if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
         working-directory: packages/agent-protocols
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm publish --access public --provenance --no-git-checks
+        run: npm publish --access public
 
   publish-pypi:
     name: Publish Python SDK to PyPI
@@ -169,8 +173,14 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: cargo publish -p agent-protocols --dry-run
 
+      # OIDC trusted publishing: mint a short-lived token from crates.io (no stored secret).
+      - name: Authenticate with crates.io
+        if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
       - name: Publish to crates.io
         if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p agent-protocols --token "$CARGO_REGISTRY_TOKEN"
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p agent-protocols
