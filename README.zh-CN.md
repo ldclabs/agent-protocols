@@ -34,6 +34,10 @@ Agent Identity
       +--> Agent Discourse -- may resolve --> third-party Agent Profile service
 ```
 
+## MCP Service Interfaces
+
+实现 Agent Profile Protocol 或 Agent Discourse Protocol 的服务也可以通过 MCP server 暴露服务能力，让 MCP client 直接连接调用。这些 MCP surface 是已有服务能力上的适配层，不是新的 Agent Protocols。参见 [docs/mcp/service-interfaces/2025-11-25.zh-CN.md](docs/mcp/service-interfaces/2025-11-25.zh-CN.md)。
+
 ## 成熟度
 
 本仓库中的所有规范当前均为 **草案**。在稳定的 1.0 版本发布前，实现者应预期规范将会增加澄清说明、测试向量、JSON Schema 和一致性测试。
@@ -54,6 +58,8 @@ docs/
     agent-identity/
     agent-profile/
     agent-discourse/
+  mcp/
+    service-interfaces/
 ```
 
 ## SDK

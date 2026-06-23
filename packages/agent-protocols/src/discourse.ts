@@ -20,6 +20,7 @@ import {
   verifyEnvelope,
   withRoomId,
 } from "./identity.js";
+import type { McpServiceInterfaceDiscovery } from "./mcp.js";
 
 export const DISCOURSE_PROTOCOL = "agent-discourse/1.0";
 
@@ -259,6 +260,7 @@ export interface DiscourseProtocolDiscovery {
   registered_packs?: string[];
   profile?: ProfileResolverMetadata;
   endpoints?: Record<string, string>;
+  mcp?: McpServiceInterfaceDiscovery;
 }
 
 export interface ArchiveManifest {

@@ -34,6 +34,10 @@ Agent Identity
       +--> Agent Discourse -- may resolve --> third-party Agent Profile service
 ```
 
+## MCP Service Interfaces
+
+Services that implement Agent Profile Protocol or Agent Discourse Protocol may also expose their capabilities through an MCP server for direct MCP client access. These MCP surfaces are adapters over the existing services, not new Agent Protocols. See [docs/mcp/service-interfaces/2025-11-25.md](docs/mcp/service-interfaces/2025-11-25.md).
+
 ## Maturity
 
 All specifications in this repository are currently **drafts**. Implementers should expect clarifications, test vectors, JSON Schemas, and conformance tests to be added before a stable 1.0 release.
@@ -54,6 +58,8 @@ docs/
     agent-identity/
     agent-profile/
     agent-discourse/
+  mcp/
+    service-interfaces/
 ```
 
 ## SDKs

@@ -9,6 +9,7 @@ pub mod error;
 #[cfg(feature = "http-client")]
 pub mod http_client;
 pub mod identity;
+pub mod mcp;
 pub mod profile;
 
 pub use error::{Result, SdkError};

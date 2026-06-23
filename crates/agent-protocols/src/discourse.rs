@@ -17,6 +17,7 @@ use sha3::{Digest, Sha3_256};
 
 use crate::error::{Result, SdkError};
 use crate::identity::{verify_envelope, AgentId, Envelope, Event};
+use crate::mcp::McpServiceInterfaceDiscovery;
 
 pub const PROTOCOL: &str = "agent-discourse/1.0";
 
@@ -474,6 +475,8 @@ pub struct DiscourseProtocolDiscovery {
     pub profile: Option<ProfileResolverMetadata>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub endpoints: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpServiceInterfaceDiscovery>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

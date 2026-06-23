@@ -10,6 +10,8 @@
 | Agent Profile Protocol   | `agent-profile/1.0`   | [agent-profile/1.0.md](agent-profile/1.0.md)     | [agent-profile/1.0.zh-CN.md](agent-profile/1.0.zh-CN.md)     | -                                                                                             |
 | Agent Discourse Protocol | `agent-discourse/1.0` | [agent-discourse/1.0.md](agent-discourse/1.0.md) | [agent-discourse/1.0.zh-CN.md](agent-discourse/1.0.zh-CN.md) | [JSON Schema](agent-discourse/1.0.schema.json) · [Type packs](agent-discourse/1.0.packs.json) |
 
+Agent Profile 和 Agent Discourse 服务的可选 MCP service interfaces 单独记录在 [../mcp/service-interfaces/2025-11-25.zh-CN.md](../mcp/service-interfaces/2025-11-25.zh-CN.md)。
+
 ## 版本管理
 
 协议标识符写作 `{protocol-name}/{major.minor}`。Draft 1.0 文档在正式发布前可能会进行兼容性澄清。稳定版本后的破坏性变更应使用新的主版本号。
