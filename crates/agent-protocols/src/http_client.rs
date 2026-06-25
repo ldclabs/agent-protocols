@@ -211,6 +211,35 @@ impl DiscourseClient {
             .await?)
     }
 
+    pub async fn public_rooms(&self, options: &PublicRoomsOptions) -> Result<Vec<RoomResponse>> {
+        let mut path = "/v1/rooms/public".to_owned();
+        let query = options.query_string();
+        if !query.is_empty() {
+            path.push('?');
+            path.push_str(&query);
+        }
+        Ok(self
+            .inner
+            .get(self.url(&path))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn my_rooms(&self, jwt: &str) -> Result<Vec<RoomResponse>> {
+        Ok(self
+            .inner
+            .get(self.url("/v1/me/rooms"))
+            .bearer_auth(jwt)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
     pub async fn join_room(
         &self,
         room_id: &str,
@@ -285,8 +314,8 @@ impl DiscourseClient {
         Ok(request.send().await?.error_for_status()?.json().await?)
     }
 
-    pub fn websocket_events_url(&self, room_id: &str, jwt: &str) -> String {
-        websocket_events_url(&self.base_url, room_id, jwt)
+    pub fn sse_events_url(&self, room_id: &str) -> String {
+        sse_events_url(&self.base_url, room_id)
     }
 
     pub async fn archive(&self, room_id: &str) -> Result<Value> {
@@ -333,19 +362,53 @@ impl RoomEventsOptions {
     }
 }
 
-pub fn websocket_events_url(base_url: &str, room_id: &str, jwt: &str) -> String {
-    let mut websocket_base = base_url.trim_end_matches('/').to_owned();
-    if let Some(rest) = websocket_base.strip_prefix("https://") {
-        websocket_base = format!("wss://{rest}");
-    } else if let Some(rest) = websocket_base.strip_prefix("http://") {
-        websocket_base = format!("ws://{rest}");
+#[derive(Clone, Debug, Default)]
+pub struct PublicRoomsOptions {
+    pub status: Option<String>,
+    pub tag: Option<String>,
+    pub keyword: Option<String>,
+    pub creator: Option<String>,
+    pub starts_after: Option<i64>,
+    pub ends_before: Option<i64>,
+    pub language: Option<String>,
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+}
+
+impl PublicRoomsOptions {
+    fn query_string(&self) -> String {
+        let mut pairs = Vec::new();
+        push_query_pair(&mut pairs, "status", self.status.as_deref());
+        push_query_pair(&mut pairs, "tag", self.tag.as_deref());
+        push_query_pair(&mut pairs, "keyword", self.keyword.as_deref());
+        push_query_pair(&mut pairs, "creator", self.creator.as_deref());
+        if let Some(starts_after) = self.starts_after {
+            pairs.push(format!("starts_after={starts_after}"));
+        }
+        if let Some(ends_before) = self.ends_before {
+            pairs.push(format!("ends_before={ends_before}"));
+        }
+        push_query_pair(&mut pairs, "language", self.language.as_deref());
+        if let Some(limit) = self.limit {
+            pairs.push(format!("limit={limit}"));
+        }
+        push_query_pair(&mut pairs, "cursor", self.cursor.as_deref());
+        pairs.join("&")
     }
+}
+
+pub fn sse_events_url(base_url: &str, room_id: &str) -> String {
     format!(
-        "{}/v1/rooms/{}/events/live?access_token={}",
-        websocket_base,
-        room_id,
-        encode_query_component(jwt)
+        "{}/v1/rooms/{}/events/live",
+        base_url.trim_end_matches('/'),
+        encode_query_component(room_id)
     )
+}
+
+fn push_query_pair(pairs: &mut Vec<String>, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        pairs.push(format!("{key}={}", encode_query_component(value)));
+    }
 }
 
 fn encode_query_component(value: &str) -> String {

@@ -17,7 +17,7 @@ use agent_protocols::discourse::{
 };
 use agent_protocols::error::SdkError;
 use agent_protocols::http_client::{
-    websocket_events_url, DiscourseClient, ProfileClient, RoomEventsOptions,
+    sse_events_url, DiscourseClient, ProfileClient, PublicRoomsOptions, RoomEventsOptions,
 };
 use agent_protocols::identity::{AgentId, AgentSigner};
 use agent_protocols::profile::{profile_update_event, ProfileUpdatePayload};
@@ -265,6 +265,8 @@ fn discourse_client_round_trips_every_endpoint() {
     );
     server.enqueue(200, room_body); // create_room
     server.enqueue(200, room_body); // room
+    server.enqueue(200, "[]"); // public_rooms
+    server.enqueue(200, "[]"); // my_rooms
     server.enqueue(200, join_status.clone()); // request_join
     server.enqueue(200, join_status.clone()); // join_request
     server.enqueue(200, format!("[{join_status}]")); // join_requests
@@ -292,6 +294,17 @@ fn discourse_client_round_trips_every_endpoint() {
             .unwrap();
         client.create_room(&create_envelope).await.unwrap();
         client.room("room1").await.unwrap();
+        client
+            .public_rooms(&PublicRoomsOptions {
+                status: Some("active".to_owned()),
+                tag: Some("a b".to_owned()),
+                limit: Some(5),
+                cursor: Some("c d".to_owned()),
+                ..PublicRoomsOptions::default()
+            })
+            .await
+            .unwrap();
+        client.my_rooms("jwt-me").await.unwrap();
 
         let input = RoomJoinRequestInput::new(Role::Speaker);
         client.request_join("room1", "jwt-a", &input).await.unwrap();
@@ -355,8 +368,8 @@ fn discourse_client_round_trips_every_endpoint() {
             .unwrap();
 
         assert_eq!(
-            client.websocket_events_url("room1", "jwt.token"),
-            websocket_events_url(&server.base_url, "room1", "jwt.token")
+            client.sse_events_url("room1"),
+            sse_events_url(&server.base_url, "room1")
         );
 
         let archive = client.archive("room1").await.unwrap();
@@ -367,16 +380,22 @@ fn discourse_client_round_trips_every_endpoint() {
     assert_eq!(requests[0].path, "/.well-known/agent-discourse");
     assert_eq!(requests[1].path, "/v1/rooms");
     assert_eq!(requests[2].path, "/v1/rooms/room1");
-    assert_eq!(requests[3].authorization.as_deref(), Some("Bearer jwt-a"));
-    assert_eq!(requests[4].authorization.as_deref(), Some("Bearer jwt-b"));
-    assert_eq!(requests[5].authorization.as_deref(), Some("Bearer jwt-c"));
-    assert_eq!(requests[9].path, "/v1/rooms/room1/events");
     assert_eq!(
-        requests[10].path,
+        requests[3].path,
+        "/v1/rooms/public?status=active&tag=a%20b&limit=5&cursor=c%20d"
+    );
+    assert_eq!(requests[4].path, "/v1/me/rooms");
+    assert_eq!(requests[4].authorization.as_deref(), Some("Bearer jwt-me"));
+    assert_eq!(requests[5].authorization.as_deref(), Some("Bearer jwt-a"));
+    assert_eq!(requests[6].authorization.as_deref(), Some("Bearer jwt-b"));
+    assert_eq!(requests[7].authorization.as_deref(), Some("Bearer jwt-c"));
+    assert_eq!(requests[11].path, "/v1/rooms/room1/events");
+    assert_eq!(
+        requests[12].path,
         "/v1/rooms/room1/events?after_seq=7&limit=10&cursor=a%20b"
     );
-    assert_eq!(requests[10].authorization.as_deref(), Some("Bearer jwt-d"));
-    assert_eq!(requests[11].path, "/v1/rooms/room1/archive");
+    assert_eq!(requests[12].authorization.as_deref(), Some("Bearer jwt-d"));
+    assert_eq!(requests[13].path, "/v1/rooms/room1/archive");
 }
 
 #[test]
@@ -402,17 +421,17 @@ fn error_status_is_propagated() {
 }
 
 #[test]
-fn builds_websocket_events_url_variants() {
+fn builds_sse_events_url_variants() {
     assert_eq!(
-        websocket_events_url("https://api.example.com", "room123", "jwt.token"),
-        "wss://api.example.com/v1/rooms/room123/events/live?access_token=jwt.token"
+        sse_events_url("https://api.example.com", "room123"),
+        "https://api.example.com/v1/rooms/room123/events/live"
     );
     assert_eq!(
-        websocket_events_url("http://api.example.com/", "room1", "a+b"),
-        "ws://api.example.com/v1/rooms/room1/events/live?access_token=a%2Bb"
+        sse_events_url("http://api.example.com/", "room 1"),
+        "http://api.example.com/v1/rooms/room%201/events/live"
     );
     assert_eq!(
-        websocket_events_url("ftp://api.example.com", "r", "t"),
-        "ftp://api.example.com/v1/rooms/r/events/live?access_token=t"
+        sse_events_url("ftp://api.example.com", "r"),
+        "ftp://api.example.com/v1/rooms/r/events/live"
     );
 }

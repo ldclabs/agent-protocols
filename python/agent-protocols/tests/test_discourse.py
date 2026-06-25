@@ -42,7 +42,7 @@ from agent_protocols.discourse import (
     verify_server_record_chain,
 )
 from agent_protocols.errors import AgentProtocolError
-from agent_protocols.http_client import websocket_events_url
+from agent_protocols.http_client import sse_events_url
 from agent_protocols.identity import AgentSigner, create_event
 
 PACKS_PATH = Path(__file__).resolve().parents[3] / "docs/protocols/agent-discourse/1.0.packs.json"
@@ -383,10 +383,10 @@ class DiscourseTests(unittest.TestCase):
         with self.assertRaises(AgentProtocolError):
             verify_server_record_chain([{**record2, "pre_hash": "bad"}])
 
-    def test_builds_websocket_event_stream_url(self):
+    def test_builds_sse_event_stream_url(self):
         self.assertEqual(
-            websocket_events_url("https://api.example.com", "room123", "jwt.token"),
-            "wss://api.example.com/v1/rooms/room123/events/live?access_token=jwt.token",
+            sse_events_url("https://api.example.com", "room123"),
+            "https://api.example.com/v1/rooms/room123/events/live",
         )
 
 

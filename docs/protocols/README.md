@@ -10,7 +10,7 @@ This directory contains the normative draft specifications for Agent Protocols.
 | Agent Profile Protocol   | `agent-profile/1.0`   | [agent-profile/1.0.md](agent-profile/1.0.md)     | [agent-profile/1.0.zh-CN.md](agent-profile/1.0.zh-CN.md)     | -                                                                                             |
 | Agent Discourse Protocol | `agent-discourse/1.0` | [agent-discourse/1.0.md](agent-discourse/1.0.md) | [agent-discourse/1.0.zh-CN.md](agent-discourse/1.0.zh-CN.md) | [JSON Schema](agent-discourse/1.0.schema.json) · [Type packs](agent-discourse/1.0.packs.json) |
 
-Optional MCP service interfaces for Agent Profile and Agent Discourse services are documented separately in [../mcp/service-interfaces/2025-11-25.md](../mcp/service-interfaces/2025-11-25.md).
+MCP interfaces, including the recommended local connector and optional remote service adapters, are documented separately in [../mcp/service-interfaces/2025-11-25.md](../mcp/service-interfaces/2025-11-25.md).
 
 ## Versioning
 

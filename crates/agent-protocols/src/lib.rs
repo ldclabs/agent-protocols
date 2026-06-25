@@ -9,6 +9,8 @@ pub mod error;
 #[cfg(feature = "http-client")]
 pub mod http_client;
 pub mod identity;
+#[cfg(feature = "local-connector")]
+pub mod local_connector;
 pub mod mcp;
 pub mod profile;
 

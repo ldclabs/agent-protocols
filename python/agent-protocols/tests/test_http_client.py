@@ -4,7 +4,7 @@ import agent_protocols.http_client as http_client
 from agent_protocols.http_client import (
     DiscourseClient,
     ProfileClient,
-    websocket_events_url,
+    sse_events_url,
 )
 from agent_protocols.identity import AgentSigner
 
@@ -119,28 +119,28 @@ class DiscourseClientTests(unittest.TestCase):
         self.assertEqual(session.calls[10][2], {"Authorization": "Bearer jwt-d"})
         self.assertEqual(urls[11], "https://api.example.com/v1/rooms/room1/archive")
 
-    def test_websocket_events_url_method(self):
+    def test_sse_events_url_method(self):
         session = FakeSession([])
         client = DiscourseClient("https://api.example.com", session=session)
         self.assertEqual(
-            client.websocket_events_url("room1", "jwt.token"),
-            websocket_events_url("https://api.example.com", "room1", "jwt.token"),
+            client.sse_events_url("room1"),
+            sse_events_url("https://api.example.com", "room1"),
         )
 
 
 class HelperTests(unittest.TestCase):
-    def test_websocket_events_url_rewrites_schemes(self):
+    def test_sse_events_url_preserves_http_schemes(self):
         self.assertEqual(
-            websocket_events_url("https://api.example.com", "room123", "jwt.token"),
-            "wss://api.example.com/v1/rooms/room123/events/live?access_token=jwt.token",
+            sse_events_url("https://api.example.com", "room123"),
+            "https://api.example.com/v1/rooms/room123/events/live",
         )
         self.assertEqual(
-            websocket_events_url("http://api.example.com/", "room 1", "a+b"),
-            "ws://api.example.com/v1/rooms/room%201/events/live?access_token=a%2Bb",
+            sse_events_url("http://api.example.com/", "room 1"),
+            "http://api.example.com/v1/rooms/room%201/events/live",
         )
         self.assertEqual(
-            websocket_events_url("ftp://api.example.com", "r", "t"),
-            "ftp://api.example.com/v1/rooms/r/events/live?access_token=t",
+            sse_events_url("ftp://api.example.com", "r"),
+            "ftp://api.example.com/v1/rooms/r/events/live",
         )
 
     def test_requests_session_factory(self):

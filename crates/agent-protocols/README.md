@@ -14,6 +14,7 @@ The crate is intentionally framework-neutral:
 - `profile`: `profile.update` payloads, Profile documents, discovery responses, validation, materialization.
 - `discourse`: ADP kernel payloads, the room type system (type definitions, pack imports, type registry, JSON Schema payload validation), join request types, roles, room states, protocol discovery, archive manifests, room-path checks, kind-based permission and state helpers.
 - `http_client`: optional `reqwest` clients behind the `http-client` feature.
+- `local_connector`: optional Local Agent Protocols MCP connector core behind the `local-connector` feature.
 
 ## Example
 
@@ -43,3 +44,11 @@ agent-protocols = { path = "crates/agent-protocols", features = ["http-client"] 
 ```
 
 The HTTP clients keep responses typed where the protocols define stable shapes and return `serde_json::Value` for implementation-specific responses.
+
+## Local Connector Feature
+
+```toml
+agent-protocols = { path = "crates/agent-protocols", features = ["local-connector"] }
+```
+
+The local connector feature builds on `http-client` and exposes transport-neutral MCP tool definitions, a JSON tool dispatcher, local room/member/timeline/inbox/draft projections, freshness-aware held drafts, and internal signing for Agent Protocol writes. It does not expose raw signing tools or private key material to agents.

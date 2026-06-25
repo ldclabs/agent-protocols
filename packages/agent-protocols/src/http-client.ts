@@ -149,8 +149,8 @@ export class DiscourseClient {
     );
   }
 
-  websocketEventsUrl(roomId: string, jwt: string): string {
-    return websocketEventsUrl(this.baseUrl, roomId, jwt);
+  sseEventsUrl(roomId: string): string {
+    return sseEventsUrl(this.baseUrl, roomId);
   }
 
   async archive(roomId: string): Promise<unknown> {
@@ -185,16 +185,8 @@ export class DiscourseClient {
   }
 }
 
-export function websocketEventsUrl(
-  baseUrl: string,
-  roomId: string,
-  jwt: string,
-): string {
-  const websocketBase = baseUrl
-    .replace(/\/$/, "")
-    .replace(/^https:/, "wss:")
-    .replace(/^http:/, "ws:");
-  return `${websocketBase}/v1/rooms/${encodeURIComponent(roomId)}/events/live?access_token=${encodeURIComponent(jwt)}`;
+export function sseEventsUrl(baseUrl: string, roomId: string): string {
+  return `${baseUrl.replace(/\/$/, "")}/v1/rooms/${encodeURIComponent(roomId)}/events/live`;
 }
 
 function addQuery(

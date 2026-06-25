@@ -919,8 +919,8 @@
             "api": {
               "$ref": "#/$defs/uri"
             },
-            "websocket": {
-              "type": "string"
+            "sse": {
+              "$ref": "#/$defs/uri"
             }
           },
           "additionalProperties": true

@@ -31,7 +31,7 @@ import {
   verifyServerRecord,
   verifyServerRecordChain,
 } from "./discourse.js";
-import { websocketEventsUrl } from "./http-client.js";
+import { sseEventsUrl } from "./http-client.js";
 
 const packsDocument = JSON.parse(
   readFileSync(
@@ -472,9 +472,9 @@ test("builds and verifies server record chains", () => {
   );
 });
 
-test("builds websocket event stream URLs", () => {
+test("builds SSE event stream URLs", () => {
   assert.equal(
-    websocketEventsUrl("https://api.example.com", "room123", "jwt.token"),
-    "wss://api.example.com/v1/rooms/room123/events/live?access_token=jwt.token",
+    sseEventsUrl("https://api.example.com", "room123"),
+    "https://api.example.com/v1/rooms/room123/events/live",
   );
 });

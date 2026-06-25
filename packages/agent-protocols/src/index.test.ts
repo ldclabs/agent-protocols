@@ -19,5 +19,5 @@ test("index re-exports the public surface of every module", () => {
   // http-client
   assert.equal(typeof sdk.ProfileClient, "function");
   assert.equal(typeof sdk.DiscourseClient, "function");
-  assert.equal(typeof sdk.websocketEventsUrl, "function");
+  assert.equal(typeof sdk.sseEventsUrl, "function");
 });

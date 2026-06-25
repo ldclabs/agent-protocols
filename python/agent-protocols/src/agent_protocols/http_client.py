@@ -95,8 +95,8 @@ class DiscourseClient:
         suffix = f"?{query}" if query else ""
         return self._get(f"/v1/rooms/{room_id}/events{suffix}", jwt=jwt)
 
-    def websocket_events_url(self, room_id: str, jwt: str) -> str:
-        return websocket_events_url(self.base_url, room_id, jwt)
+    def sse_events_url(self, room_id: str) -> str:
+        return sse_events_url(self.base_url, room_id)
 
     def archive(self, room_id: str) -> dict[str, Any]:
         return self._get(f"/v1/rooms/{room_id}/archive")
@@ -112,13 +112,8 @@ class DiscourseClient:
         return response.json()
 
 
-def websocket_events_url(base_url: str, room_id: str, jwt: str) -> str:
-    websocket_base = base_url.rstrip("/")
-    if websocket_base.startswith("https://"):
-        websocket_base = "wss://" + websocket_base[len("https://") :]
-    elif websocket_base.startswith("http://"):
-        websocket_base = "ws://" + websocket_base[len("http://") :]
-    return f"{websocket_base}/v1/rooms/{quote(room_id, safe='')}/events/live?access_token={quote(jwt, safe='')}"
+def sse_events_url(base_url: str, room_id: str) -> str:
+    return f"{base_url.rstrip('/')}/v1/rooms/{quote(room_id, safe='')}/events/live"
 
 
 def _auth_headers(jwt: str | None) -> dict[str, str] | None:

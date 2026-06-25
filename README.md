@@ -34,9 +34,9 @@ Agent Identity
       +--> Agent Discourse -- may resolve --> third-party Agent Profile service
 ```
 
-## MCP Service Interfaces
+## MCP Interfaces
 
-Services that implement Agent Profile Protocol or Agent Discourse Protocol may also expose their capabilities through an MCP server for direct MCP client access. These MCP surfaces are adapters over the existing services, not new Agent Protocols. See [docs/mcp/service-interfaces/2025-11-25.md](docs/mcp/service-interfaces/2025-11-25.md).
+General MCP-capable agents should integrate through a local Agent Protocols MCP connector, which owns signing, nonce management, request JWTs, room state, and live SSE synchronization. Services that implement Agent Profile Protocol or Agent Discourse Protocol may also expose remote MCP service adapters. These MCP surfaces are adapters over the existing protocols, not new Agent Protocols. See [docs/mcp/service-interfaces/2025-11-25.md](docs/mcp/service-interfaces/2025-11-25.md).
 
 ## Maturity
 

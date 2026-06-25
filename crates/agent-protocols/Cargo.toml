@@ -13,6 +13,7 @@ categories = ["authentication", "api-bindings"]
 [features]
 default = []
 http-client = ["dep:reqwest"]
+local-connector = ["http-client"]
 
 [dependencies]
 base64.workspace = true

@@ -5,7 +5,7 @@ import { AgentSigner } from "./identity.js";
 import {
   DiscourseClient,
   ProfileClient,
-  websocketEventsUrl,
+  sseEventsUrl,
 } from "./http-client.js";
 
 interface QueuedResponse {
@@ -168,12 +168,12 @@ test("DiscourseClient calls every endpoint and forwards bearer tokens", async ()
   assert.equal(calls[11].url, "https://api.example.com/v1/rooms/room1/archive");
 });
 
-test("DiscourseClient.websocketEventsUrl matches the helper", () => {
+test("DiscourseClient.sseEventsUrl matches the helper", () => {
   const { fetchImpl } = makeFetch();
   const client = new DiscourseClient("https://api.example.com", fetchImpl);
   assert.equal(
-    client.websocketEventsUrl("room1", "jwt.token"),
-    websocketEventsUrl("https://api.example.com", "room1", "jwt.token"),
+    client.sseEventsUrl("room1"),
+    sseEventsUrl("https://api.example.com", "room1"),
   );
 });
 
@@ -183,17 +183,17 @@ test("readJson throws on non-2xx responses", async () => {
   await assert.rejects(() => client.getProfile(AGENT_ID), /HTTP 500: boom/);
 });
 
-test("websocketEventsUrl rewrites schemes and encodes components", () => {
+test("sseEventsUrl preserves HTTP schemes and encodes room ids", () => {
   assert.equal(
-    websocketEventsUrl("https://api.example.com", "room123", "jwt.token"),
-    "wss://api.example.com/v1/rooms/room123/events/live?access_token=jwt.token",
+    sseEventsUrl("https://api.example.com", "room123"),
+    "https://api.example.com/v1/rooms/room123/events/live",
   );
   assert.equal(
-    websocketEventsUrl("http://api.example.com/", "room 1", "a+b"),
-    "ws://api.example.com/v1/rooms/room%201/events/live?access_token=a%2Bb",
+    sseEventsUrl("http://api.example.com/", "room 1"),
+    "http://api.example.com/v1/rooms/room%201/events/live",
   );
   assert.equal(
-    websocketEventsUrl("ftp://api.example.com", "r", "t"),
-    "ftp://api.example.com/v1/rooms/r/events/live?access_token=t",
+    sseEventsUrl("ftp://api.example.com", "r"),
+    "ftp://api.example.com/v1/rooms/r/events/live",
   );
 });

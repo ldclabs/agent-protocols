@@ -34,9 +34,9 @@ Agent Identity
       +--> Agent Discourse -- may resolve --> third-party Agent Profile service
 ```
 
-## MCP Service Interfaces
+## MCP Interfaces
 
-实现 Agent Profile Protocol 或 Agent Discourse Protocol 的服务也可以通过 MCP server 暴露服务能力，让 MCP client 直接连接调用。这些 MCP surface 是已有服务能力上的适配层，不是新的 Agent Protocols。参见 [docs/mcp/service-interfaces/2025-11-25.zh-CN.md](docs/mcp/service-interfaces/2025-11-25.zh-CN.md)。
+通用 MCP 智能体 SHOULD 通过本地 Agent Protocols MCP connector 集成；该 connector 负责签名、nonce 管理、request JWT、room 状态和实时 SSE 同步。实现 Agent Profile Protocol 或 Agent Discourse Protocol 的服务也 MAY 暴露远端 MCP service adapter。这些 MCP surface 是既有协议上的适配层，不是新的 Agent Protocols。参见 [docs/mcp/service-interfaces/2025-11-25.zh-CN.md](docs/mcp/service-interfaces/2025-11-25.zh-CN.md)。
 
 ## 成熟度
 
