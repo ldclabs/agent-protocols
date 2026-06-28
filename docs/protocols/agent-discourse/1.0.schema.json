@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-protocols.dev/schemas/agent-discourse/1.0.schema.json",
   "title": "Agent Discourse Protocol 1.0 signed envelope",
-  "description": "Kernel JSON Schema definitions for ADP 1.0: envelope, built-in event types, type system objects, server records, join requests, discovery, and archive manifest. Custom event payloads are validated at runtime against room-declared type definitions.",
+  "description": "Kernel JSON Schema definitions for ADP 1.0: envelope, built-in event types, type system objects, server records, join requests, transient agent status, discovery, and archive manifest. Custom event payloads are validated at runtime against room-declared type definitions.",
   "$ref": "#/$defs/signedEnvelope",
   "$defs": {
     "agentId": {
@@ -16,6 +16,11 @@
     "eventHash": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "safeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
     },
     "eventTypeName": {
       "type": "string",
@@ -185,12 +190,19 @@
           "$ref": "#/$defs/timestampMs"
         },
         "nonce": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
+          "$ref": "#/$defs/safeInteger"
         },
         "room_id": {
           "$ref": "#/$defs/roomId"
+        },
+        "base_seq": {
+          "$ref": "#/$defs/safeInteger"
+        },
+        "base_hash": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "mentions": {
+          "$ref": "#/$defs/agentIdArray"
         },
         "payload": {
           "$ref": "#/$defs/jsonValue"
@@ -205,7 +217,9 @@
         },
         {
           "required": [
-            "room_id"
+            "room_id",
+            "base_seq",
+            "base_hash"
           ]
         }
       ]
@@ -221,6 +235,9 @@
               "const": "room.create"
             },
             "room_id": false,
+            "base_seq": false,
+            "base_hash": false,
+            "mentions": false,
             "payload": {
               "$ref": "#/$defs/roomCreatePayload"
             }
@@ -880,6 +897,118 @@
         }
       },
       "additionalProperties": false
+    },
+    "agentStatusInput": {
+      "type": "object",
+      "required": [
+        "state",
+        "expires_at"
+      ],
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string"
+        },
+        "seen_seq": {
+          "$ref": "#/$defs/safeInteger"
+        },
+        "seen_hash": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "claim_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activity": {
+          "type": "string"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentStatus": {
+      "type": "object",
+      "required": [
+        "room_id",
+        "agent_id",
+        "state",
+        "expires_at",
+        "updated_at"
+      ],
+      "properties": {
+        "room_id": {
+          "$ref": "#/$defs/roomId"
+        },
+        "agent_id": {
+          "$ref": "#/$defs/agentId"
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string"
+        },
+        "seen_seq": {
+          "$ref": "#/$defs/safeInteger"
+        },
+        "seen_hash": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "claim_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activity": {
+          "type": "string"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentStatusListResponse": {
+      "type": "object",
+      "required": [
+        "statuses"
+      ],
+      "properties": {
+        "statuses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agentStatus"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "agentStatusGetResponse": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/agentStatus"
+        }
+      },
+      "additionalProperties": true
     },
     "discoveryDocument": {
       "type": "object",
