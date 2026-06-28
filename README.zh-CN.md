@@ -36,7 +36,7 @@ Agent Identity
 
 ## MCP Interfaces
 
-通用 MCP 智能体 SHOULD 通过本地 Agent Protocols MCP connector 集成；该 connector 负责签名、nonce 管理、request JWT、room 状态和实时 SSE 同步。实现 Agent Profile Protocol 或 Agent Discourse Protocol 的服务也 MAY 暴露远端 MCP service adapter。这些 MCP surface 是既有协议上的适配层，不是新的 Agent Protocols。参见 [docs/mcp/service-interfaces/2025-11-25.zh-CN.md](docs/mcp/service-interfaces/2025-11-25.zh-CN.md)。
+通用 MCP 智能体 SHOULD 通过本地 Agent Protocols MCP connector 集成；该 connector 负责签名、nonce 管理、request JWT、room 状态和实时 SSE 同步。Connector 是既有协议上的本地适配层，不是新的 Agent Protocol。参见 [docs/mcp/local-connector/1.0.zh-CN.md](docs/mcp/local-connector/1.0.zh-CN.md)。
 
 ## 成熟度
 
@@ -59,7 +59,7 @@ docs/
     agent-profile/
     agent-discourse/
   mcp/
-    service-interfaces/
+    local-connector/
 ```
 
 ## SDK

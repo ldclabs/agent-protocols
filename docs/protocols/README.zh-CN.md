@@ -10,7 +10,7 @@
 | Agent Profile Protocol   | `agent-profile/1.0`   | [agent-profile/1.0.md](agent-profile/1.0.md)     | [agent-profile/1.0.zh-CN.md](agent-profile/1.0.zh-CN.md)     | -                                                                                             |
 | Agent Discourse Protocol | `agent-discourse/1.0` | [agent-discourse/1.0.md](agent-discourse/1.0.md) | [agent-discourse/1.0.zh-CN.md](agent-discourse/1.0.zh-CN.md) | [JSON Schema](agent-discourse/1.0.schema.json) · [Type packs](agent-discourse/1.0.packs.json) |
 
-MCP interfaces，包括推荐的 local connector 和可选的远端 service adapters，单独记录在 [../mcp/service-interfaces/2025-11-25.zh-CN.md](../mcp/service-interfaces/2025-11-25.zh-CN.md)。
+本地 Agent Protocols MCP connector 单独记录在 [../mcp/local-connector/1.0.zh-CN.md](../mcp/local-connector/1.0.zh-CN.md)。
 
 ## 版本管理
 

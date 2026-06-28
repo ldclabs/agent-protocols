@@ -6,7 +6,6 @@ import {
   createEvent,
   verifyEnvelope,
 } from "./identity.js";
-import type { McpServiceInterfaceDiscovery } from "./mcp.js";
 
 export const PROFILE_PROTOCOL = "agent-profile/1.0";
 export const PROFILE_UPDATE = "profile.update";
@@ -78,7 +77,6 @@ export interface ProfileServiceDiscovery {
   protocol: string;
   service: string;
   endpoints: ProfileServiceEndpoints;
-  mcp?: McpServiceInterfaceDiscovery;
   features?: string[];
 }
 

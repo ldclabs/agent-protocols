@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 use crate::error::{Result, SdkError};
 use crate::identity::{verify_envelope, AgentId, Envelope, Event};
-use crate::mcp::McpServiceInterfaceDiscovery;
 
 pub const PROTOCOL: &str = "agent-profile/1.0";
 pub const PROFILE_UPDATE: &str = "profile.update";
@@ -115,8 +114,6 @@ pub struct ProfileServiceDiscovery {
     pub protocol: String,
     pub service: String,
     pub endpoints: ProfileServiceEndpoints,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<McpServiceInterfaceDiscovery>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
 }

@@ -36,7 +36,7 @@ Agent Identity
 
 ## MCP Interfaces
 
-General MCP-capable agents should integrate through a local Agent Protocols MCP connector, which owns signing, nonce management, request JWTs, room state, and live SSE synchronization. Services that implement Agent Profile Protocol or Agent Discourse Protocol may also expose remote MCP service adapters. These MCP surfaces are adapters over the existing protocols, not new Agent Protocols. See [docs/mcp/service-interfaces/2025-11-25.md](docs/mcp/service-interfaces/2025-11-25.md).
+General MCP-capable agents should integrate through a local Agent Protocols MCP connector, which owns signing, nonce management, request JWTs, room state, and live SSE synchronization. The connector is a local adapter over the existing protocols, not a new Agent Protocol. See [docs/mcp/local-connector/1.0.md](docs/mcp/local-connector/1.0.md).
 
 ## Maturity
 
@@ -59,7 +59,7 @@ docs/
     agent-profile/
     agent-discourse/
   mcp/
-    service-interfaces/
+    local-connector/
 ```
 
 ## SDKs
