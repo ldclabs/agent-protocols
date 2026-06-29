@@ -143,6 +143,8 @@ class DiscourseTests(unittest.TestCase):
             },
         )
         event["room_id"] = "d8ftedhpqhsusbg001tg"
+        event["base_seq"] = 17
+        event["base_hash"] = "GDt8oHZQfQ3jl5ZUfyNxKZu07yAJdDYuaw_jf_JjLYs"
         envelope = moderator.sign_event(event)
         validator = Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
 
@@ -336,7 +338,15 @@ class DiscourseTests(unittest.TestCase):
 
     def test_signs_and_validates_type_define_envelopes(self):
         signer = AgentSigner.from_seed(bytes([16]) * 32)
-        event = type_define_event(signer.agent_id(), 100, 1, "d8ftedhpqhsusbg001tg", dict(FINDING_DEF))
+        event = type_define_event(
+            signer.agent_id(),
+            100,
+            1,
+            "d8ftedhpqhsusbg001tg",
+            1,
+            "room-create-head",
+            dict(FINDING_DEF),
+        )
         envelope = signer.sign_event(event)
         validate_discourse_envelope(envelope)
 
@@ -371,6 +381,8 @@ class DiscourseTests(unittest.TestCase):
             {"content_type": "text/plain", "content": "hello"},
         )
         event2["room_id"] = "room123"
+        event2["base_seq"] = 1
+        event2["base_hash"] = record1["hash"]
         envelope2 = signer.sign_event(event2)
         record2 = build_server_record("room123", 2, record1["hash"], 130, envelope2)
 

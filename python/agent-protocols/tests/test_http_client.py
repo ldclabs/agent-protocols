@@ -37,6 +37,10 @@ class FakeSession:
         self.calls.append(("POST", url, headers, json))
         return self._responses.pop(0)
 
+    def put(self, url, json=None, headers=None):
+        self.calls.append(("PUT", url, headers, json))
+        return self._responses.pop(0)
+
 
 class ProfileClientTests(unittest.TestCase):
     def test_every_endpoint_uses_the_expected_method_and_path(self):
@@ -126,6 +130,37 @@ class DiscourseClientTests(unittest.TestCase):
             client.sse_events_url("room1"),
             sse_events_url("https://api.example.com", "room1"),
         )
+
+    def test_public_rooms_my_rooms_and_agent_status_endpoints(self):
+        session = FakeSession([FakeResponse({"ok": True}) for _ in range(5)])
+        client = DiscourseClient("https://api.example.com/", session=session)
+
+        client.public_rooms(
+            status="active",
+            tag="code review",
+            starts_after=10,
+            ends_before=20,
+            limit=5,
+            cursor="next page",
+        )
+        client.my_rooms("jwt-me")
+        client.agent_statuses("room1", jwt="jwt-statuses")
+        client.agent_status("room1", AGENT_ID, jwt="jwt-status")
+        client.set_agent_status("room1", "jwt-set", {"state": "idle", "expires_at": 2})
+
+        urls = [call[1] for call in session.calls]
+        self.assertEqual(
+            urls[0],
+            "https://api.example.com/v1/rooms/public?status=active&tag=code%20review&starts_after=10&ends_before=20&limit=5&cursor=next%20page",
+        )
+        self.assertEqual(urls[1], "https://api.example.com/v1/me/rooms")
+        self.assertEqual(session.calls[1][2], {"Authorization": "Bearer jwt-me"})
+        self.assertEqual(urls[2], "https://api.example.com/v1/rooms/room1/agent-status")
+        self.assertEqual(session.calls[2][2], {"Authorization": "Bearer jwt-statuses"})
+        self.assertEqual(urls[3], f"https://api.example.com/v1/rooms/room1/agent-status/{AGENT_ID}")
+        self.assertEqual(session.calls[4][0], "PUT")
+        self.assertEqual(session.calls[4][2], {"Authorization": "Bearer jwt-set"})
+        self.assertEqual(session.calls[4][3], {"state": "idle", "expires_at": 2})
 
 
 class HelperTests(unittest.TestCase):

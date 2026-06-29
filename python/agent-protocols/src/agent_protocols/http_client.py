@@ -53,6 +53,43 @@ class DiscourseClient:
     def room(self, room_id: str) -> dict[str, Any]:
         return self._get(f"/v1/rooms/{room_id}")
 
+    def public_rooms(
+        self,
+        *,
+        status: str | None = None,
+        tag: str | None = None,
+        keyword: str | None = None,
+        creator: str | None = None,
+        starts_after: int | None = None,
+        ends_before: int | None = None,
+        language: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = urlencode(
+            {
+                key: value
+                for key, value in {
+                    "status": status,
+                    "tag": tag,
+                    "keyword": keyword,
+                    "creator": creator,
+                    "starts_after": starts_after,
+                    "ends_before": ends_before,
+                    "language": language,
+                    "limit": limit,
+                    "cursor": cursor,
+                }.items()
+                if value is not None
+            },
+            quote_via=quote,
+        )
+        suffix = f"?{query}" if query else ""
+        return self._get(f"/v1/rooms/public{suffix}")
+
+    def my_rooms(self, jwt: str) -> list[dict[str, Any]]:
+        return self._get("/v1/me/rooms", jwt=jwt)
+
     def request_join(self, room_id: str, jwt: str, request: dict[str, Any]) -> dict[str, Any]:
         return self._post(f"/v1/rooms/{room_id}/join-requests", request, jwt=jwt)
 
@@ -95,6 +132,15 @@ class DiscourseClient:
         suffix = f"?{query}" if query else ""
         return self._get(f"/v1/rooms/{room_id}/events{suffix}", jwt=jwt)
 
+    def agent_statuses(self, room_id: str, jwt: str | None = None) -> dict[str, Any]:
+        return self._get(f"/v1/rooms/{room_id}/agent-status", jwt=jwt)
+
+    def agent_status(self, room_id: str, agent_id: AgentId, jwt: str | None = None) -> dict[str, Any]:
+        return self._get(f"/v1/rooms/{room_id}/agent-status/{agent_id}", jwt=jwt)
+
+    def set_agent_status(self, room_id: str, jwt: str, status: dict[str, Any]) -> dict[str, Any]:
+        return self._put(f"/v1/rooms/{room_id}/agent-status", status, jwt=jwt)
+
     def sse_events_url(self, room_id: str) -> str:
         return sse_events_url(self.base_url, room_id)
 
@@ -108,6 +154,11 @@ class DiscourseClient:
 
     def _post(self, path: str, body: Any, jwt: str | None = None) -> Any:
         response = self.session.post(self.base_url + path, json=body, headers=_auth_headers(jwt))
+        response.raise_for_status()
+        return response.json()
+
+    def _put(self, path: str, body: Any, jwt: str | None = None) -> Any:
+        response = self.session.put(self.base_url + path, json=body, headers=_auth_headers(jwt))
         response.raise_for_status()
         return response.json()
 

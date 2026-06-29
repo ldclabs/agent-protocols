@@ -29,6 +29,10 @@
     "./http-client": {
       "types": "./dist/http-client.d.ts",
       "import": "./dist/http-client.js"
+    },
+    "./local-connector": {
+      "types": "./dist/local-connector.d.ts",
+      "import": "./dist/local-connector.js"
     }
   },
   "files": [

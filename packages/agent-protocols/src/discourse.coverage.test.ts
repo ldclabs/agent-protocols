@@ -85,6 +85,14 @@ test("validateTypeDef rejects each malformed field", () => {
   );
   assert.throws(() => validateTypeDef({ ...findingDef, roles: [] }), /roles/);
   assert.throws(
+    () => validateTypeDef({ ...findingDef, roles: ["owner" as never] }),
+    /role list/,
+  );
+  assert.throws(
+    () => validateTypeDef({ ...findingDef, status: "bogus" as never }),
+    /type status/,
+  );
+  assert.throws(
     () => validateTypeDef({ ...findingDef, rate_hint: 0 }),
     /positive integers/,
   );
@@ -213,10 +221,19 @@ test("validateDiscourseEnvelope rejects a foreign protocol", () => {
 test("validateRoomPath matches, mismatches, and requires room ids", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(42));
   const inRoom = signer.signEvent(
-    discourseEvent(eventType.MESSAGE_CREATE, signer.agentId(), 1, 1, "room1", {
-      content_type: "text/plain",
-      content: "hi",
-    }),
+    discourseEvent(
+      eventType.MESSAGE_CREATE,
+      signer.agentId(),
+      1,
+      1,
+      "room1",
+      1,
+      "room-create-head",
+      {
+        content_type: "text/plain",
+        content: "hi",
+      },
+    ),
   );
   assert.doesNotThrow(() => validateRoomPath(inRoom, "room1"));
   assert.throws(() => validateRoomPath(inRoom, "room2"), /expected room2/);
@@ -230,6 +247,8 @@ test("validateRoomPath matches, mismatches, and requires room ids", () => {
       actor: signer.agentId(),
       created_at: 1,
       nonce: 1,
+      base_seq: 1,
+      base_hash: "room-create-head",
       payload: {},
     },
     signature: "s",
@@ -241,10 +260,19 @@ test("verifyServerRecordChain rejects structural violations", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(43));
   const make = (seq: number, nonce: number, preHash: string | null) => {
     const envelope = signer.signEvent(
-      discourseEvent(eventType.MESSAGE_CREATE, signer.agentId(), 100, nonce, "room1", {
-        content_type: "text/plain",
-        content: "hi",
-      }),
+      discourseEvent(
+        eventType.MESSAGE_CREATE,
+        signer.agentId(),
+        100,
+        nonce,
+        "room1",
+        seq === 1 ? 1 : seq - 1,
+        preHash ?? "room-create-head",
+        {
+          content_type: "text/plain",
+          content: "hi",
+        },
+      ),
     );
     return buildServerRecord("room1", seq, preHash, 100 + seq, envelope);
   };

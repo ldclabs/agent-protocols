@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use agent_protocols::discourse::{
-    build_server_record, discourse_event, event_type, room_create_event, Role, RoomCreatePayload,
-    RoomJoinPayload, RoomJoinRequestInput, RoomLeavePayload, Visibility,
+    build_server_record, discourse_event, event_type, room_create_event, AgentStatusInput, Role,
+    RoomCreatePayload, RoomJoinPayload, RoomJoinRequestInput, RoomLeavePayload, Visibility,
 };
 use agent_protocols::error::SdkError;
 use agent_protocols::http_client::{
@@ -171,6 +171,8 @@ fn server_record_body() -> String {
             1,
             1,
             "room1",
+            1,
+            "room-head-hash",
             RoomJoinPayload {
                 request_id: "jr1".to_owned(),
                 role: Role::Speaker,
@@ -258,6 +260,9 @@ fn discourse_client_round_trips_every_endpoint() {
     );
     let room_body =
         r#"{"id":"room1","status":"active","url":"http://x","seq":1,"hash":"h","received_at":1}"#;
+    let status_body = format!(
+        r#"{{"room_id":"room1","agent_id":"{aid}","state":"idle","expires_at":2,"updated_at":1}}"#
+    );
 
     server.enqueue(
         200,
@@ -275,6 +280,9 @@ fn discourse_client_round_trips_every_endpoint() {
     server.enqueue(200, record_body.clone()); // submit_event
     server.enqueue(200, "[]"); // events
     server.enqueue(200, "[]"); // events_with_options
+    server.enqueue(200, r#"{"statuses":[]}"#); // agent_statuses
+    server.enqueue(200, format!(r#"{{"status":{status_body}}}"#)); // agent_status
+    server.enqueue(200, status_body); // set_agent_status
     server.enqueue(200, r#"{"manifest":true}"#); // archive
 
     block_on(async {
@@ -318,6 +326,8 @@ fn discourse_client_round_trips_every_endpoint() {
                 1,
                 1,
                 "room1",
+                1,
+                "room-head-hash",
                 RoomJoinPayload {
                     request_id: "jr1".to_owned(),
                     role: Role::Speaker,
@@ -333,6 +343,8 @@ fn discourse_client_round_trips_every_endpoint() {
                 1,
                 2,
                 "room1",
+                1,
+                "room-head-hash",
                 RoomLeavePayload::default(),
             ))
             .unwrap();
@@ -345,6 +357,8 @@ fn discourse_client_round_trips_every_endpoint() {
                 1,
                 3,
                 "room1",
+                1,
+                "room-head-hash",
                 serde_json::json!({"content_type": "text/plain", "content": "hi"}),
             ))
             .unwrap();
@@ -366,6 +380,23 @@ fn discourse_client_round_trips_every_endpoint() {
             )
             .await
             .unwrap();
+
+        let agent_id: AgentId = aid.parse().unwrap();
+        let statuses = client
+            .agent_statuses("room1", Some("jwt-status-list"))
+            .await
+            .unwrap();
+        assert!(statuses.statuses.is_empty());
+        let status = client
+            .agent_status("room1", &agent_id, Some("jwt-status-get"))
+            .await
+            .unwrap();
+        assert_eq!(status.status.state, "idle");
+        let status = client
+            .set_agent_status("room1", "jwt-status-set", &AgentStatusInput::new("idle", 2))
+            .await
+            .unwrap();
+        assert_eq!(status.agent_id, agent_id);
 
         assert_eq!(
             client.sse_events_url("room1"),
@@ -395,7 +426,27 @@ fn discourse_client_round_trips_every_endpoint() {
         "/v1/rooms/room1/events?after_seq=7&limit=10&cursor=a%20b"
     );
     assert_eq!(requests[12].authorization.as_deref(), Some("Bearer jwt-d"));
-    assert_eq!(requests[13].path, "/v1/rooms/room1/archive");
+    assert_eq!(requests[13].path, "/v1/rooms/room1/agent-status");
+    assert_eq!(
+        requests[13].authorization.as_deref(),
+        Some("Bearer jwt-status-list")
+    );
+    assert_eq!(
+        requests[14].path,
+        format!("/v1/rooms/room1/agent-status/{aid}")
+    );
+    assert_eq!(
+        requests[14].authorization.as_deref(),
+        Some("Bearer jwt-status-get")
+    );
+    assert_eq!(requests[15].method, "PUT");
+    assert_eq!(requests[15].path, "/v1/rooms/room1/agent-status");
+    assert_eq!(
+        requests[15].authorization.as_deref(),
+        Some("Bearer jwt-status-set")
+    );
+    assert!(requests[15].body.contains("\"state\":\"idle\""));
+    assert_eq!(requests[16].path, "/v1/rooms/room1/archive");
 }
 
 #[test]

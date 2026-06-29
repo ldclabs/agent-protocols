@@ -142,6 +142,8 @@ test("validates room.join.review envelopes with canonical requests", () => {
     payload,
   );
   event.room_id = "d8ftedhpqhsusbg001tg";
+  event.base_seq = 17;
+  event.base_hash = "previous-record-hash";
   const envelope = moderator.signEvent(event);
 
   assert.doesNotThrow(() => validateDiscourseEnvelope(envelope));
@@ -410,6 +412,8 @@ test("signs and validates type.define envelopes", () => {
     100,
     1,
     "d8ftedhpqhsusbg001tg",
+    1,
+    "room-create-head",
     findingDef,
   );
   const envelope = signer.signEvent(event);
@@ -439,17 +443,18 @@ test("builds and verifies server record chains", () => {
     }),
   );
   const record1 = buildServerRecord("room123", 1, null, 110, envelope1);
-  const envelope2 = signer.signEvent(
-    createEvent(
-      "agent-discourse/1.0",
-      eventType.MESSAGE_CREATE,
-      signer.agentId(),
-      120,
-      2,
-      { content_type: "text/plain", content: "hello" },
-    ),
+  const event2 = createEvent(
+    "agent-discourse/1.0",
+    eventType.MESSAGE_CREATE,
+    signer.agentId(),
+    120,
+    2,
+    { content_type: "text/plain", content: "hello" },
   );
-  envelope2.event.room_id = "room123";
+  event2.room_id = "room123";
+  event2.base_seq = 1;
+  event2.base_hash = record1.hash;
+  const envelope2 = signer.signEvent(event2);
   const record2 = buildServerRecord(
     "room123",
     2,

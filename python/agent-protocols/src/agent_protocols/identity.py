@@ -171,6 +171,31 @@ def with_room_id(event: Event, room_id: str) -> Event:
     return next_event
 
 
+def with_room_head(event: Event, base_seq: int, base_hash: str) -> Event:
+    validate_nonce(base_seq)
+    if not isinstance(base_hash, str) or not base_hash.strip():
+        raise AgentProtocolError("invalid_event", "base_hash must not be empty")
+    next_event = dict(event)
+    next_event["base_seq"] = base_seq
+    next_event["base_hash"] = base_hash
+    return next_event
+
+
+def with_mentions(event: Event, mentions: list[AgentId]) -> Event:
+    for mention in mentions:
+        validate_agent_id(mention)
+    next_event = dict(event)
+    next_event["mentions"] = list(mentions)
+    return next_event
+
+
+def with_mention(event: Event, agent_id: AgentId) -> Event:
+    validate_agent_id(agent_id)
+    next_event = dict(event)
+    next_event["mentions"] = [*next_event.get("mentions", []), agent_id]
+    return next_event
+
+
 def canonical_event_bytes(event: Event) -> bytes:
     canonical = rfc8785.dumps(event)
     return canonical if isinstance(canonical, bytes) else canonical.encode()

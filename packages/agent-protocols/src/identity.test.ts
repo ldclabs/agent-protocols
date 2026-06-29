@@ -28,6 +28,8 @@ import {
   verifyLiveEnvelope,
   verifyRequestJwt,
   verifyTimestamp,
+  withMention,
+  withRoomHead,
   withRoomId,
 } from "./identity.js";
 
@@ -214,8 +216,9 @@ test("agent id helpers validate prefix, length, and encoding", () => {
   assert.throws(() => publicKeyBytes(`${AGENT_ID_PREFIX}AAAA`), /32 bytes/);
 });
 
-test("createEvent and withRoomId build events", () => {
+test("createEvent and room helpers build room-scoped events", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(43));
+  const target = AgentSigner.fromSeed(new Uint8Array(32).fill(44));
   const event = createEvent(
     "agent-discourse/1.0",
     "message.create",
@@ -225,6 +228,16 @@ test("createEvent and withRoomId build events", () => {
     { content: "hi" },
   );
   assert.equal(withRoomId(event, "room1").room_id, "room1");
+  const roomEvent = withMention(
+    withRoomHead(withRoomId(event, "room1"), 1, "room-create-head"),
+    target.agentId(),
+  );
+  assert.equal(roomEvent.base_seq, 1);
+  assert.equal(roomEvent.base_hash, "room-create-head");
+  assert.deepEqual(roomEvent.mentions, [target.agentId()]);
+  assert.doesNotThrow(() => verifyEnvelope(signer.signEvent(roomEvent)));
+  assert.throws(() => withRoomHead(event, 0, "head"), /nonce|base_seq/);
+  assert.throws(() => withMention(event, "bad-agent"), /did:agent:/);
   assert.throws(() => createEvent("p", "t", "bad-actor", 1, 1, {}), /did:agent:/);
 });
 

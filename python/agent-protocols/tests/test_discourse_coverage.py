@@ -40,13 +40,15 @@ class HelperBranchTests(unittest.TestCase):
         signer = AgentSigner.from_seed(bytes([60]) * 32)
         self.assertTrue(event_requires_room_id(MESSAGE_CREATE))
         self.assertFalse(event_requires_room_id(ROOM_CREATE))
-        event = discourse_event(MESSAGE_CREATE, signer.agent_id(), 1, 1, "room1", {"a": 1})
+        event = discourse_event(MESSAGE_CREATE, signer.agent_id(), 1, 1, "room1", 1, "room-create-head", {"a": 1})
         self.assertEqual(event["room_id"], "room1")
+        self.assertEqual(event["base_seq"], 1)
+        self.assertEqual(event["base_hash"], "room-create-head")
         self.assertEqual(event["protocol"], DISCOURSE_PROTOCOL)
 
     def test_validate_discourse_envelope_rejects_foreign_protocol(self):
         signer = AgentSigner.from_seed(bytes([61]) * 32)
-        event = discourse_event(MESSAGE_CREATE, signer.agent_id(), 1, 1, "room1", {"a": 1})
+        event = discourse_event(MESSAGE_CREATE, signer.agent_id(), 1, 1, "room1", 1, "room-create-head", {"a": 1})
         event["protocol"] = "other/1.0"
         envelope = signer.sign_event(event)
         with self.assertRaises(AgentProtocolError):
@@ -55,7 +57,7 @@ class HelperBranchTests(unittest.TestCase):
     def test_validate_room_path_matches_mismatches_and_requires_room_id(self):
         signer = AgentSigner.from_seed(bytes([62]) * 32)
         in_room = signer.sign_event(
-            discourse_event(MESSAGE_CREATE, signer.agent_id(), 1, 1, "room1", {"a": 1})
+            discourse_event(MESSAGE_CREATE, signer.agent_id(), 1, 1, "room1", 1, "room-create-head", {"a": 1})
         )
         validate_room_path(in_room, "room1")
         with self.assertRaises(AgentProtocolError):
@@ -63,7 +65,7 @@ class HelperBranchTests(unittest.TestCase):
 
         no_room = {
             "hash": "h",
-            "event": {"type": MESSAGE_CREATE, "protocol": DISCOURSE_PROTOCOL},
+            "event": {"type": MESSAGE_CREATE, "protocol": DISCOURSE_PROTOCOL, "base_seq": 1, "base_hash": "room-create-head"},
             "signature": "s",
         }
         with self.assertRaises(AgentProtocolError):
@@ -169,7 +171,16 @@ class ServerRecordChainTests(unittest.TestCase):
 
         def make(seq, nonce, pre_hash):
             envelope = signer.sign_event(
-                discourse_event(MESSAGE_CREATE, signer.agent_id(), 100, nonce, "room1", {"a": 1})
+                discourse_event(
+                    MESSAGE_CREATE,
+                    signer.agent_id(),
+                    100,
+                    nonce,
+                    "room1",
+                    1 if seq == 1 else seq - 1,
+                    pre_hash or "room-create-head",
+                    {"a": 1},
+                )
             )
             return build_server_record("room1", seq, pre_hash, 100 + seq, envelope)
 

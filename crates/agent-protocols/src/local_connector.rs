@@ -14,10 +14,11 @@ use std::collections::BTreeMap;
 
 use crate::discourse::{
     discourse_event, event_type, room_create_event, validate_discourse_envelope,
-    validate_room_path, verify_server_record, JoinDecision, JoinRequestStatus,
-    MessageCreatePayload, ReasonPayload, Role, RoleUpdatePayload, RoomCreatePayload,
-    RoomJoinPayload, RoomJoinRequestInput, RoomJoinRequestStatus, RoomJoinReviewPayload,
-    RoomResponse, RoomState, ServerRecord, TypeDeclaration, TypeDef, Visibility,
+    validate_room_path, verify_server_record, AgentStatus, AgentStatusInput, JoinDecision,
+    JoinRequestStatus, MessageCreatePayload, ReasonPayload, Role, RoleUpdatePayload,
+    RoomCreatePayload, RoomJoinPayload, RoomJoinRequestInput, RoomJoinRequestStatus,
+    RoomJoinReviewPayload, RoomResponse, RoomState, ServerRecord, TypeDeclaration, TypeDef,
+    Visibility,
 };
 use crate::error::{Result, SdkError};
 use crate::http_client::{DiscourseClient, ProfileClient, PublicRoomsOptions, RoomEventsOptions};
@@ -36,6 +37,10 @@ pub const TOOL_ROOM_OPEN: &str = "agent_protocols_room_open";
 pub const TOOL_ROOM_STATE: &str = "agent_protocols_room_state";
 pub const TOOL_ROOM_MEMBERS_LIST: &str = "agent_protocols_room_members_list";
 pub const TOOL_ROOM_MEMBER_GET: &str = "agent_protocols_room_member_get";
+pub const TOOL_AGENT_STATUS_LIST: &str = "agent_protocols_agent_status_list";
+pub const TOOL_AGENT_STATUS_GET: &str = "agent_protocols_agent_status_get";
+pub const TOOL_AGENT_STATUS_SET: &str = "agent_protocols_agent_status_set";
+pub const TOOL_AGENT_STATUS_CLEAR: &str = "agent_protocols_agent_status_clear";
 pub const TOOL_ROOM_TIMELINE: &str = "agent_protocols_room_timeline";
 pub const TOOL_ROOM_UNREAD: &str = "agent_protocols_room_unread";
 pub const TOOL_ROOM_MARK_READ: &str = "agent_protocols_room_mark_read";
@@ -60,6 +65,7 @@ pub const RESOURCE_HOSTS: &str = "agent-protocols://hosts";
 pub const RESOURCE_ROOMS: &str = "agent-protocols://rooms";
 pub const RESOURCE_INBOX_PENDING: &str = "agent-protocols://inbox/pending";
 pub const RESOURCE_DRAFTS_HELD: &str = "agent-protocols://drafts/held";
+pub const RESOURCE_ROOM_AGENT_STATUS_SUFFIX: &str = "/agent-status";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -143,6 +149,34 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
             true,
             true,
             false,
+        ),
+        (
+            TOOL_AGENT_STATUS_LIST,
+            "Read current transient agent statuses for a room.",
+            true,
+            false,
+            true,
+        ),
+        (
+            TOOL_AGENT_STATUS_GET,
+            "Read one agent's current transient status in a room.",
+            true,
+            false,
+            true,
+        ),
+        (
+            TOOL_AGENT_STATUS_SET,
+            "Update the active local agent's transient status in a room.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_AGENT_STATUS_CLEAR,
+            "Clear the active local agent's transient status in a room.",
+            false,
+            true,
+            true,
         ),
         (
             TOOL_ROOM_TIMELINE,
@@ -293,8 +327,8 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
 pub struct SyncState {
     pub host: String,
     pub room_id: String,
-    pub local_seq: u64,
-    pub remote_seq: u64,
+    pub head_seq: u64,
+    pub remote_head_seq: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_hash: Option<String>,
     pub subscribed: bool,
@@ -436,13 +470,13 @@ pub struct InboxItem {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum FreshnessPolicy {
+pub enum HeadMismatchPolicy {
     Hold,
     Reject,
     SendAnyway,
 }
 
-impl Default for FreshnessPolicy {
+impl Default for HeadMismatchPolicy {
     fn default() -> Self {
         Self::Hold
     }
@@ -471,9 +505,9 @@ pub struct HeldDraft {
     pub kind: HeldDraftKind,
     pub created_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub based_on_seq: Option<u64>,
+    pub base_seq: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub based_on_head_hash: Option<String>,
+    pub base_hash: Option<String>,
     pub current_sync: SyncState,
     pub draft: Value,
     pub reason: String,
@@ -560,6 +594,7 @@ pub struct LocalConnectorState {
     rooms: BTreeMap<String, LocalRoomState>,
     profiles: BTreeMap<AgentId, AgentProfile>,
     join_requests: BTreeMap<String, Vec<RoomJoinRequestStatus>>,
+    agent_statuses: BTreeMap<String, BTreeMap<AgentId, AgentStatus>>,
     inbox: BTreeMap<String, InboxEntry>,
     drafts: BTreeMap<String, HeldDraftEntry>,
 }
@@ -574,8 +609,8 @@ impl LocalConnectorState {
 struct LocalRoomState {
     host: String,
     room: RoomResponse,
-    local_seq: u64,
-    local_head_hash: Option<String>,
+    head_seq: u64,
+    head_hash: Option<String>,
     subscribed: bool,
     members: BTreeMap<AgentId, RoomMemberView>,
     timeline: Vec<TimelineItem>,
@@ -589,8 +624,8 @@ impl LocalRoomState {
         Self {
             host,
             room,
-            local_seq: 0,
-            local_head_hash: None,
+            head_seq: 0,
+            head_hash: None,
             subscribed: false,
             members: BTreeMap::new(),
             timeline: Vec::new(),
@@ -634,7 +669,7 @@ enum HeldDraftRequest {
     Event(RoomSubmitEventInput),
 }
 
-struct StaleWriteState {
+struct HeadMismatchState {
     sync: SyncState,
     changes: Vec<TimelineItem>,
 }
@@ -696,8 +731,8 @@ impl LocalConnector {
         let room_id = room.id.clone();
         self.observe_room(host, room);
         if let Some(entry) = self.state.rooms.get_mut(&room_id) {
-            entry.local_seq = entry.room.seq;
-            entry.local_head_hash = Some(entry.room.hash.clone());
+            entry.head_seq = entry.room.seq;
+            entry.head_hash = Some(entry.room.hash.clone());
         }
     }
 
@@ -720,8 +755,8 @@ impl LocalConnector {
 
             let item = TimelineItem::from_record(&record);
             apply_record_projection(room, &record, &item, &active_agent, &mut new_inbox)?;
-            room.local_seq = record.seq;
-            room.local_head_hash = Some(record.hash.clone());
+            room.head_seq = record.seq;
+            room.head_hash = Some(record.hash.clone());
             room.records.push(record);
             room.timeline.push(item);
         }
@@ -742,6 +777,10 @@ impl LocalConnector {
             TOOL_ROOM_STATE => self.room_state(parse_input(input)?).await,
             TOOL_ROOM_MEMBERS_LIST => self.room_members_list(parse_input(input)?),
             TOOL_ROOM_MEMBER_GET => self.room_member_get(parse_input(input)?),
+            TOOL_AGENT_STATUS_LIST => self.agent_status_list(parse_input(input)?).await,
+            TOOL_AGENT_STATUS_GET => self.agent_status_get(parse_input(input)?).await,
+            TOOL_AGENT_STATUS_SET => self.agent_status_set(parse_input(input)?).await,
+            TOOL_AGENT_STATUS_CLEAR => self.agent_status_clear(parse_input(input)?).await,
             TOOL_ROOM_TIMELINE => self.room_timeline(parse_input(input)?),
             TOOL_ROOM_UNREAD => self.room_unread(parse_input(input)?),
             TOOL_ROOM_MARK_READ => self.room_mark_read(parse_input(input)?),
@@ -863,7 +902,7 @@ impl LocalConnector {
             .state
             .rooms
             .get(&input.room_id)
-            .map(|room| room.local_seq)
+            .map(|room| room.head_seq)
             .unwrap_or(0);
         if input.refresh || previous_seq == 0 {
             let client = DiscourseClient::new(&host);
@@ -988,6 +1027,107 @@ impl LocalConnector {
             "member": member,
             "recent": recent,
             "sync": self.sync_state(&input.room_id)?
+        }))
+    }
+
+    async fn agent_status_list(&mut self, input: AgentStatusListInput) -> Result<Value> {
+        if !input.refresh {
+            if let Some(statuses) = self.state.agent_statuses.get(&input.room_id) {
+                return json_result(json!({
+                    "statuses": statuses.values().collect::<Vec<_>>(),
+                    "sync": self.sync_state(&input.room_id)?
+                }));
+            }
+        }
+        let host = self.allowed_room_host(&input.room_id)?;
+        let jwt = self.request_jwt(&host)?;
+        let response = DiscourseClient::new(&host)
+            .agent_statuses(&input.room_id, Some(&jwt))
+            .await?;
+        let statuses = response
+            .statuses
+            .into_iter()
+            .map(|status| (status.agent_id.clone(), status))
+            .collect::<BTreeMap<_, _>>();
+        let values = statuses.values().cloned().collect::<Vec<_>>();
+        self.state
+            .agent_statuses
+            .insert(input.room_id.clone(), statuses);
+        json_result(json!({
+            "statuses": values,
+            "sync": self.sync_state(&input.room_id)?
+        }))
+    }
+
+    async fn agent_status_get(&mut self, input: AgentStatusGetInput) -> Result<Value> {
+        if !input.refresh {
+            if let Some(status) = self
+                .state
+                .agent_statuses
+                .get(&input.room_id)
+                .and_then(|statuses| statuses.get(&input.agent_id))
+                .cloned()
+            {
+                return json_result(json!({
+                    "status": status,
+                    "sync": self.sync_state(&input.room_id)?
+                }));
+            }
+        }
+        let host = self.allowed_room_host(&input.room_id)?;
+        let jwt = self.request_jwt(&host)?;
+        let response = DiscourseClient::new(&host)
+            .agent_status(&input.room_id, &input.agent_id, Some(&jwt))
+            .await?;
+        self.state
+            .agent_statuses
+            .entry(input.room_id.clone())
+            .or_default()
+            .insert(response.status.agent_id.clone(), response.status.clone());
+        json_result(json!({
+            "status": response.status,
+            "sync": self.sync_state(&input.room_id)?
+        }))
+    }
+
+    async fn agent_status_set(&mut self, input: AgentStatusSetInput) -> Result<Value> {
+        let host = self.allowed_room_host(&input.room_id)?;
+        let jwt = self.request_jwt(&host)?;
+        let mut request = AgentStatusInput::new(input.state, input.expires_at);
+        request.summary = input.summary;
+        request.seen_seq = input.seen_seq;
+        request.seen_hash = input.seen_hash;
+        request.claim_id = input.claim_id;
+        request.activity = input.activity;
+        request.extra = input.extra;
+        let status = DiscourseClient::new(&host)
+            .set_agent_status(&input.room_id, &jwt, &request)
+            .await?;
+        self.state
+            .agent_statuses
+            .entry(input.room_id.clone())
+            .or_default()
+            .insert(status.agent_id.clone(), status.clone());
+        json_result(json!({
+            "status": status,
+            "sync": self.sync_state(&input.room_id)?
+        }))
+    }
+
+    async fn agent_status_clear(&mut self, input: AgentStatusClearInput) -> Result<Value> {
+        let host = self.allowed_room_host(&input.room_id)?;
+        let jwt = self.request_jwt(&host)?;
+        let request = AgentStatusInput::new("away", unix_ms().saturating_sub(1));
+        let _ = DiscourseClient::new(&host)
+            .set_agent_status(&input.room_id, &jwt, &request)
+            .await?;
+        let active_agent = self.agent_id();
+        if let Some(statuses) = self.state.agent_statuses.get_mut(&input.room_id) {
+            statuses.remove(&active_agent);
+        }
+        json_result(json!({
+            "cleared": true,
+            "room_id": input.room_id
         }))
     }
 
@@ -1173,7 +1313,7 @@ impl LocalConnector {
             .drafts
             .get(&input.draft_id)
             .ok_or_else(|| SdkError::InvalidPayload("draft not found".to_owned()))?;
-        let changes = self.room_changes_since(&entry.draft.room_id, entry.draft.based_on_seq)?;
+        let changes = self.room_changes_since(&entry.draft.room_id, entry.draft.base_seq)?;
         json_result(json!({
             "draft": entry.draft,
             "changes": changes,
@@ -1214,21 +1354,21 @@ impl LocalConnector {
                 if let Some(extra) = input.extra {
                     request.extra = extra;
                 }
-                request.expected_seq = input.expected_seq;
-                request.expected_head_hash = input.expected_head_hash;
-                request.on_stale = input.on_stale;
+                request.base_seq = input.base_seq;
+                request.base_hash = input.base_hash;
+                request.on_head_mismatch = input.on_head_mismatch;
                 self.room_send_message(request).await?
             }
             (HeldDraftRequest::Message(mut request), DraftAction::SendAsIs) => {
-                request.expected_seq = input.expected_seq;
-                request.expected_head_hash = input.expected_head_hash;
-                request.on_stale = input.on_stale;
+                request.base_seq = input.base_seq;
+                request.base_hash = input.base_hash;
+                request.on_head_mismatch = input.on_head_mismatch;
                 self.room_send_message(request).await?
             }
             (HeldDraftRequest::Message(mut request), DraftAction::SendAnyway) => {
-                request.expected_seq = None;
-                request.expected_head_hash = None;
-                request.on_stale = FreshnessPolicy::SendAnyway;
+                request.base_seq = None;
+                request.base_hash = None;
+                request.on_head_mismatch = HeadMismatchPolicy::SendAnyway;
                 self.submit_message_unchecked(request).await?
             }
             (HeldDraftRequest::Event(mut request), DraftAction::Revise) => {
@@ -1244,21 +1384,21 @@ impl LocalConnector {
                 if let Some(references) = input.references {
                     request.references = references;
                 }
-                request.expected_seq = input.expected_seq;
-                request.expected_head_hash = input.expected_head_hash;
-                request.on_stale = input.on_stale;
+                request.base_seq = input.base_seq;
+                request.base_hash = input.base_hash;
+                request.on_head_mismatch = input.on_head_mismatch;
                 self.room_submit_event(request).await?
             }
             (HeldDraftRequest::Event(mut request), DraftAction::SendAsIs) => {
-                request.expected_seq = input.expected_seq;
-                request.expected_head_hash = input.expected_head_hash;
-                request.on_stale = input.on_stale;
+                request.base_seq = input.base_seq;
+                request.base_hash = input.base_hash;
+                request.on_head_mismatch = input.on_head_mismatch;
                 self.room_submit_event(request).await?
             }
             (HeldDraftRequest::Event(mut request), DraftAction::SendAnyway) => {
-                request.expected_seq = None;
-                request.expected_head_hash = None;
-                request.on_stale = FreshnessPolicy::SendAnyway;
+                request.base_seq = None;
+                request.base_hash = None;
+                request.on_head_mismatch = HeadMismatchPolicy::SendAnyway;
                 self.submit_event_unchecked(request).await?
             }
             (_, DraftAction::StaySilent) => unreachable!(),
@@ -1315,7 +1455,10 @@ impl LocalConnector {
         payload.policy = input.policy;
         payload.types = input.types;
         let envelope = self.sign_room_create(payload)?;
-        let room = DiscourseClient::new(&host).create_room(&envelope).await?;
+        let mut room = DiscourseClient::new(&host).create_room(&envelope).await?;
+        if room.envelope.is_none() {
+            room.envelope = Some(envelope.clone());
+        }
         self.accept_room_response(&host, room.clone());
         json_result(json!({
             "room": self.room_state_view(self.local_room(&room.id)?),
@@ -1344,7 +1487,7 @@ impl LocalConnector {
     }
 
     async fn room_join_when_approved(&mut self, input: RoomJoinWhenApprovedInput) -> Result<Value> {
-        let host = self.local_room(&input.room_id)?.host.clone();
+        let host = self.allowed_room_host(&input.room_id)?;
         let jwt = self.request_jwt(&host)?;
         let status = DiscourseClient::new(&host)
             .join_request(&input.room_id, &input.request_id, &jwt)
@@ -1364,7 +1507,14 @@ impl LocalConnector {
             request_id: input.request_id,
             role,
         };
-        let envelope = self.sign_room_event(event_type::ROOM_JOIN, &input.room_id, payload)?;
+        let envelope = self.sign_room_event(
+            event_type::ROOM_JOIN,
+            &input.room_id,
+            None,
+            None,
+            Vec::new(),
+            payload,
+        )?;
         let record = DiscourseClient::new(&host)
             .join_room(&input.room_id, &envelope)
             .await?;
@@ -1384,13 +1534,20 @@ impl LocalConnector {
     }
 
     async fn room_leave(&mut self, input: RoomLeaveInput) -> Result<Value> {
-        let host = self.local_room(&input.room_id)?.host.clone();
+        let host = self.allowed_room_host(&input.room_id)?;
         let payload = ReasonPayload {
             reason: input.reason,
             references: Vec::new(),
             extra: BTreeMap::new(),
         };
-        let envelope = self.sign_room_event(event_type::ROOM_LEAVE, &input.room_id, payload)?;
+        let envelope = self.sign_room_event(
+            event_type::ROOM_LEAVE,
+            &input.room_id,
+            None,
+            None,
+            Vec::new(),
+            payload,
+        )?;
         let record = DiscourseClient::new(&host)
             .leave_room(&input.room_id, &envelope)
             .await?;
@@ -1399,15 +1556,15 @@ impl LocalConnector {
         json_result(json!({ "record": record, "sync": self.sync_state(&input.room_id)? }))
     }
 
-    async fn room_send_message(&mut self, input: RoomSendMessageInput) -> Result<Value> {
-        if let Some(result) = self.stale_message_result(&input)? {
+    async fn room_send_message(&mut self, mut input: RoomSendMessageInput) -> Result<Value> {
+        if let Some(result) = self.head_mismatch_message_result(&mut input)? {
             return Ok(result);
         }
         self.submit_message_unchecked(input).await
     }
 
     async fn submit_message_unchecked(&mut self, input: RoomSendMessageInput) -> Result<Value> {
-        let host = self.local_room(&input.room_id)?.host.clone();
+        let host = self.allowed_room_host(&input.room_id)?;
         let mut payload = MessageCreatePayload::new(
             input
                 .content_type
@@ -1416,13 +1573,14 @@ impl LocalConnector {
         );
         payload.references = input.references;
         payload.extra = input.extra;
-        if !input.mentions.is_empty() {
-            payload.extra.insert(
-                "mentions".to_owned(),
-                serde_json::to_value(input.mentions.clone())?,
-            );
-        }
-        let envelope = self.sign_room_event(event_type::MESSAGE_CREATE, &input.room_id, payload)?;
+        let envelope = self.sign_room_event(
+            event_type::MESSAGE_CREATE,
+            &input.room_id,
+            input.base_seq,
+            input.base_hash.clone(),
+            input.mentions,
+            payload,
+        )?;
         let record = DiscourseClient::new(&host)
             .submit_event(&input.room_id, &envelope)
             .await?;
@@ -1436,17 +1594,24 @@ impl LocalConnector {
         }))
     }
 
-    async fn room_submit_event(&mut self, input: RoomSubmitEventInput) -> Result<Value> {
-        if let Some(result) = self.stale_event_result(&input)? {
+    async fn room_submit_event(&mut self, mut input: RoomSubmitEventInput) -> Result<Value> {
+        if let Some(result) = self.head_mismatch_event_result(&mut input)? {
             return Ok(result);
         }
         self.submit_event_unchecked(input).await
     }
 
     async fn submit_event_unchecked(&mut self, input: RoomSubmitEventInput) -> Result<Value> {
-        let host = self.local_room(&input.room_id)?.host.clone();
-        let payload = payload_with_attention(input.payload, input.mentions, input.references)?;
-        let envelope = self.sign_room_event(input.event_type, &input.room_id, payload)?;
+        let host = self.allowed_room_host(&input.room_id)?;
+        let payload = payload_with_references(input.payload, input.references)?;
+        let envelope = self.sign_room_event(
+            input.event_type,
+            &input.room_id,
+            input.base_seq,
+            input.base_hash.clone(),
+            input.mentions,
+            payload,
+        )?;
         let record = DiscourseClient::new(&host)
             .submit_event(&input.room_id, &envelope)
             .await?;
@@ -1461,7 +1626,7 @@ impl LocalConnector {
     }
 
     async fn join_requests_list(&mut self, input: JoinRequestsListInput) -> Result<Value> {
-        let host = self.local_room(&input.room_id)?.host.clone();
+        let host = self.allowed_room_host(&input.room_id)?;
         let jwt = self.request_jwt(&host)?;
         let mut requests = DiscourseClient::new(&host)
             .join_requests(&input.room_id, &jwt)
@@ -1490,7 +1655,7 @@ impl LocalConnector {
     }
 
     async fn join_request_review(&mut self, input: JoinRequestReviewInput) -> Result<Value> {
-        let host = self.local_room(&input.room_id)?.host.clone();
+        let host = self.allowed_room_host(&input.room_id)?;
         let jwt = self.request_jwt(&host)?;
         let status = DiscourseClient::new(&host)
             .join_request(&input.room_id, &input.request_id, &jwt)
@@ -1502,8 +1667,14 @@ impl LocalConnector {
             reason: input.reason,
             extra: BTreeMap::new(),
         };
-        let envelope =
-            self.sign_room_event(event_type::ROOM_JOIN_REVIEW, &input.room_id, payload)?;
+        let envelope = self.sign_room_event(
+            event_type::ROOM_JOIN_REVIEW,
+            &input.room_id,
+            None,
+            None,
+            Vec::new(),
+            payload,
+        )?;
         let record = DiscourseClient::new(&host)
             .submit_event(&input.room_id, &envelope)
             .await?;
@@ -1534,27 +1705,69 @@ impl LocalConnector {
             self.nonce_manager.next_nonce()?,
             payload,
         );
-        self.signer.sign_event(event)
+        let envelope = self.signer.sign_event(event)?;
+        validate_discourse_envelope(&envelope)?;
+        Ok(envelope)
     }
 
     fn sign_room_event<P>(
         &mut self,
         event_type: impl Into<String>,
         room_id: &str,
+        base_seq: Option<u64>,
+        base_hash: Option<String>,
+        mentions: Vec<AgentId>,
         payload: P,
     ) -> Result<Envelope<P>>
     where
         P: Serialize,
     {
+        let host = self.local_room(room_id)?.host.clone();
+        self.require_allowed_host(&host)?;
+        let (base_seq, base_hash) = self.room_head_for_write(room_id, base_seq, base_hash)?;
         let event = discourse_event(
             event_type,
             self.agent_id(),
             unix_ms(),
             self.nonce_manager.next_nonce()?,
             room_id,
+            base_seq,
+            base_hash,
             payload,
-        );
-        self.signer.sign_event(event)
+        )
+        .with_mentions(mentions);
+        let envelope = self.signer.sign_event(event)?;
+        validate_discourse_envelope(&envelope)?;
+        Ok(envelope)
+    }
+
+    fn room_head_for_write(
+        &self,
+        room_id: &str,
+        base_seq: Option<u64>,
+        base_hash: Option<String>,
+    ) -> Result<(u64, String)> {
+        match (base_seq, base_hash) {
+            (Some(seq), Some(hash)) if seq > 0 && !hash.trim().is_empty() => Ok((seq, hash)),
+            (Some(_), Some(_)) => Err(SdkError::InvalidPayload(
+                "base_seq and base_hash must identify a valid room head".to_owned(),
+            )),
+            (None, None) => {
+                let sync = self.sync_state(room_id)?;
+                let hash = sync.head_hash.ok_or_else(|| {
+                    SdkError::InvalidPayload("room head hash is not known locally".to_owned())
+                })?;
+                if sync.head_seq == 0 || hash.trim().is_empty() {
+                    return Err(SdkError::InvalidPayload(
+                        "current room head is not known locally".to_owned(),
+                    ));
+                }
+                Ok((sync.head_seq, hash))
+            }
+            _ => Err(SdkError::InvalidPayload(
+                "base_seq and base_hash must be provided together".to_owned(),
+            )),
+        }
     }
 
     fn request_jwt(&self, audience: &str) -> Result<String> {
@@ -1567,80 +1780,102 @@ impl LocalConnector {
         self.signer.sign_request_jwt(&claims)
     }
 
-    fn stale_message_result(&mut self, input: &RoomSendMessageInput) -> Result<Option<Value>> {
-        let Some(stale) = self.stale_write_state(
+    fn head_mismatch_message_result(
+        &mut self,
+        input: &mut RoomSendMessageInput,
+    ) -> Result<Option<Value>> {
+        let Some(head_mismatch) = self.head_mismatch_write_state(
             &input.room_id,
-            input.expected_seq,
-            input.expected_head_hash.as_deref(),
+            input.base_seq,
+            input.base_hash.as_deref(),
         )?
         else {
             return Ok(None);
         };
 
-        match input.on_stale {
-            FreshnessPolicy::SendAnyway => Ok(None),
-            FreshnessPolicy::Reject => Ok(Some(self.rejected_stale_result(stale))),
-            FreshnessPolicy::Hold => Ok(Some(self.hold_message_draft(input.clone(), stale)?)),
+        match input.on_head_mismatch {
+            HeadMismatchPolicy::SendAnyway => {
+                input.base_seq = None;
+                input.base_hash = None;
+                Ok(None)
+            }
+            HeadMismatchPolicy::Reject => {
+                Ok(Some(self.rejected_head_mismatch_result(head_mismatch)))
+            }
+            HeadMismatchPolicy::Hold => {
+                Ok(Some(self.hold_message_draft(input.clone(), head_mismatch)?))
+            }
         }
     }
 
-    fn stale_event_result(&mut self, input: &RoomSubmitEventInput) -> Result<Option<Value>> {
-        let Some(stale) = self.stale_write_state(
+    fn head_mismatch_event_result(
+        &mut self,
+        input: &mut RoomSubmitEventInput,
+    ) -> Result<Option<Value>> {
+        let Some(head_mismatch) = self.head_mismatch_write_state(
             &input.room_id,
-            input.expected_seq,
-            input.expected_head_hash.as_deref(),
+            input.base_seq,
+            input.base_hash.as_deref(),
         )?
         else {
             return Ok(None);
         };
 
-        match input.on_stale {
-            FreshnessPolicy::SendAnyway => Ok(None),
-            FreshnessPolicy::Reject => Ok(Some(self.rejected_stale_result(stale))),
-            FreshnessPolicy::Hold => Ok(Some(self.hold_event_draft(input.clone(), stale)?)),
+        match input.on_head_mismatch {
+            HeadMismatchPolicy::SendAnyway => {
+                input.base_seq = None;
+                input.base_hash = None;
+                Ok(None)
+            }
+            HeadMismatchPolicy::Reject => {
+                Ok(Some(self.rejected_head_mismatch_result(head_mismatch)))
+            }
+            HeadMismatchPolicy::Hold => {
+                Ok(Some(self.hold_event_draft(input.clone(), head_mismatch)?))
+            }
         }
     }
 
-    fn stale_write_state(
+    fn head_mismatch_write_state(
         &self,
         room_id: &str,
-        expected_seq: Option<u64>,
-        expected_head_hash: Option<&str>,
-    ) -> Result<Option<StaleWriteState>> {
-        if expected_seq.is_none() && expected_head_hash.is_none() {
+        base_seq: Option<u64>,
+        base_hash: Option<&str>,
+    ) -> Result<Option<HeadMismatchState>> {
+        if base_seq.is_none() && base_hash.is_none() {
             return Ok(None);
         }
 
         let sync = self.sync_state(room_id)?;
-        let seq_stale = expected_seq
-            .map(|expected_seq| expected_seq != sync.local_seq)
+        let seq_mismatch = base_seq
+            .map(|base_seq| base_seq != sync.head_seq)
             .unwrap_or(false);
-        let hash_stale = expected_head_hash
+        let hash_mismatch = base_hash
             .map(|expected_hash| sync.head_hash.as_deref() != Some(expected_hash))
             .unwrap_or(false);
-        if !seq_stale && !hash_stale {
+        if !seq_mismatch && !hash_mismatch {
             return Ok(None);
         }
 
-        Ok(Some(StaleWriteState {
+        Ok(Some(HeadMismatchState {
             sync,
-            changes: self.room_changes_since(room_id, expected_seq)?,
+            changes: self.room_changes_since(room_id, base_seq)?,
         }))
     }
 
-    fn rejected_stale_result(&self, stale: StaleWriteState) -> Value {
+    fn rejected_head_mismatch_result(&self, head_mismatch: HeadMismatchState) -> Value {
         json!({
             "status": "rejected",
-            "reason": "stale_room",
-            "changes": stale.changes,
-            "sync": stale.sync
+            "reason": "room_head_mismatch",
+            "changes": head_mismatch.changes,
+            "sync": head_mismatch.sync
         })
     }
 
     fn hold_message_draft(
         &mut self,
         input: RoomSendMessageInput,
-        stale: StaleWriteState,
+        head_mismatch: HeadMismatchState,
     ) -> Result<Value> {
         let draft_id = self.next_draft_id(&input.room_id);
         let draft = HeldDraft {
@@ -1648,11 +1883,11 @@ impl LocalConnector {
             room_id: input.room_id.clone(),
             kind: HeldDraftKind::Message,
             created_at: unix_ms(),
-            based_on_seq: input.expected_seq,
-            based_on_head_hash: input.expected_head_hash.clone(),
-            current_sync: stale.sync.clone(),
+            base_seq: input.base_seq,
+            base_hash: input.base_hash.clone(),
+            current_sync: head_mismatch.sync.clone(),
             draft: message_draft_value(&input)?,
-            reason: "stale_room".to_owned(),
+            reason: "room_head_mismatch".to_owned(),
             options: held_draft_options(),
         };
         self.state.drafts.insert(
@@ -1664,17 +1899,17 @@ impl LocalConnector {
         );
         json_result(json!({
             "status": "held",
-            "reason": "stale_room",
+            "reason": "room_head_mismatch",
             "draft": draft,
-            "changes": stale.changes,
-            "sync": stale.sync
+            "changes": head_mismatch.changes,
+            "sync": head_mismatch.sync
         }))
     }
 
     fn hold_event_draft(
         &mut self,
         input: RoomSubmitEventInput,
-        stale: StaleWriteState,
+        head_mismatch: HeadMismatchState,
     ) -> Result<Value> {
         let draft_id = self.next_draft_id(&input.room_id);
         let draft = HeldDraft {
@@ -1682,11 +1917,11 @@ impl LocalConnector {
             room_id: input.room_id.clone(),
             kind: HeldDraftKind::Event,
             created_at: unix_ms(),
-            based_on_seq: input.expected_seq,
-            based_on_head_hash: input.expected_head_hash.clone(),
-            current_sync: stale.sync.clone(),
+            base_seq: input.base_seq,
+            base_hash: input.base_hash.clone(),
+            current_sync: head_mismatch.sync.clone(),
             draft: event_draft_value(&input)?,
-            reason: "stale_room".to_owned(),
+            reason: "room_head_mismatch".to_owned(),
             options: held_draft_options(),
         };
         self.state.drafts.insert(
@@ -1698,20 +1933,20 @@ impl LocalConnector {
         );
         json_result(json!({
             "status": "held",
-            "reason": "stale_room",
+            "reason": "room_head_mismatch",
             "draft": draft,
-            "changes": stale.changes,
-            "sync": stale.sync
+            "changes": head_mismatch.changes,
+            "sync": head_mismatch.sync
         }))
     }
 
     fn room_changes_since(
         &self,
         room_id: &str,
-        expected_seq: Option<u64>,
+        base_seq: Option<u64>,
     ) -> Result<Vec<TimelineItem>> {
         let room = self.local_room(room_id)?;
-        let changes = match expected_seq {
+        let changes = match base_seq {
             Some(seq) => room
                 .timeline
                 .iter()
@@ -1752,10 +1987,10 @@ impl LocalConnector {
         Ok(SyncState {
             host: room.host.clone(),
             room_id: room_id.to_owned(),
-            local_seq: room.local_seq,
-            remote_seq: room.room.seq,
+            head_seq: room.head_seq,
+            remote_head_seq: room.room.seq,
             head_hash: room
-                .local_head_hash
+                .head_hash
                 .clone()
                 .or_else(|| Some(room.room.hash.clone())),
             subscribed: room.subscribed,
@@ -1770,10 +2005,10 @@ impl LocalConnector {
             host: room.host.clone(),
             room_id: room.room.id.clone(),
             status: room.room.status,
-            visibility: room.room.visibility,
-            topic: room.room.topic.clone(),
-            agenda: room_create_payload(&room.room).and_then(|payload| payload.agenda.clone()),
-            guidance: room.room.guidance.clone(),
+            visibility: room_visibility(&room.room),
+            topic: room_topic(&room.room),
+            agenda: room_agenda(&room.room),
+            guidance: room_guidance(&room.room),
             creator: room
                 .room
                 .envelope
@@ -1784,13 +2019,11 @@ impl LocalConnector {
                 .envelope
                 .as_ref()
                 .map(|envelope| envelope.event.created_at),
-            start_time: room.room.start_time,
-            end_time: room.room.end_time,
-            tags: room_create_payload(&room.room)
-                .map(|payload| payload.tags.clone())
-                .unwrap_or_default(),
-            language: room_create_payload(&room.room).and_then(|payload| payload.language.clone()),
-            policy: room.room.policy.clone(),
+            start_time: room_start_time(&room.room),
+            end_time: room_end_time(&room.room),
+            tags: room_tags(&room.room),
+            language: room_language(&room.room),
+            policy: room_policy(&room.room),
             types: room.room.types.clone(),
             self_member,
             members_count: room.members.len(),
@@ -1805,15 +2038,13 @@ impl LocalConnector {
         RoomSummary {
             room_id: room.room.id.clone(),
             host: room.host.clone(),
-            topic: room.room.topic.clone(),
+            topic: room_topic(&room.room),
             status: room.room.status,
-            visibility: room.room.visibility,
-            start_time: room.room.start_time,
-            end_time: room.room.end_time,
-            tags: room_create_payload(&room.room)
-                .map(|payload| payload.tags.clone())
-                .unwrap_or_default(),
-            language: room_create_payload(&room.room).and_then(|payload| payload.language.clone()),
+            visibility: room_visibility(&room.room),
+            start_time: room_start_time(&room.room),
+            end_time: room_end_time(&room.room),
+            tags: room_tags(&room.room),
+            language: room_language(&room.room),
             role: self_member.map(|member| member.role),
             unread_count: room.unread_count(),
             pending_inbox_count: self.pending_inbox_count(Some(&room.room.id)),
@@ -1828,15 +2059,13 @@ impl LocalConnector {
             .unwrap_or_else(|| RoomSummary {
                 room_id: room.id.clone(),
                 host: host.to_owned(),
-                topic: room.topic.clone(),
+                topic: room_topic(room),
                 status: room.status,
-                visibility: room.visibility,
-                start_time: room.start_time,
-                end_time: room.end_time,
-                tags: room_create_payload(room)
-                    .map(|payload| payload.tags.clone())
-                    .unwrap_or_default(),
-                language: room_create_payload(room).and_then(|payload| payload.language.clone()),
+                visibility: room_visibility(room),
+                start_time: room_start_time(room),
+                end_time: room_end_time(room),
+                tags: room_tags(room),
+                language: room_language(room),
                 role: None,
                 unread_count: 0,
                 pending_inbox_count: 0,
@@ -1873,6 +2102,12 @@ impl LocalConnector {
         }
     }
 
+    fn allowed_room_host(&self, room_id: &str) -> Result<String> {
+        let host = self.local_room(room_id)?.host.clone();
+        self.require_allowed_host(&host)?;
+        Ok(host)
+    }
+
     fn ensure_host(&mut self, host: &str) {
         self.state
             .hosts
@@ -1880,7 +2115,7 @@ impl LocalConnector {
             .or_insert_with(|| AgentProtocolsHost {
                 host: host.to_owned(),
                 label: None,
-                allowed: true,
+                allowed: false,
                 features: Vec::new(),
                 profile_service: None,
                 last_checked_at: None,
@@ -1919,13 +2154,11 @@ impl TimelineItem {
         let mut content_type = None;
         let mut content = None;
         let mut references = Vec::new();
-        let mut mentions = Vec::new();
         if event.kind == event_type::MESSAGE_CREATE {
             if let Ok(message) = serde_json::from_value::<MessageCreatePayload>(payload.clone()) {
                 content_type = Some(message.content_type);
                 content = Some(message.content);
                 references = message.references;
-                mentions = extract_mentions_from_extra(&message.extra);
             }
         }
         Self {
@@ -1940,7 +2173,7 @@ impl TimelineItem {
             summary: summarize_payload(&event.kind, &payload),
             content_type,
             content,
-            mentions,
+            mentions: event.mentions.clone(),
             references,
             payload,
         }
@@ -2046,6 +2279,45 @@ struct RoomMemberGetInput {
 }
 
 #[derive(Deserialize)]
+struct AgentStatusListInput {
+    room_id: String,
+    #[serde(default)]
+    refresh: bool,
+}
+
+#[derive(Deserialize)]
+struct AgentStatusGetInput {
+    room_id: String,
+    agent_id: AgentId,
+    #[serde(default)]
+    refresh: bool,
+}
+
+#[derive(Deserialize)]
+struct AgentStatusSetInput {
+    room_id: String,
+    state: String,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    seen_seq: Option<u64>,
+    #[serde(default)]
+    seen_hash: Option<String>,
+    #[serde(default)]
+    claim_id: Option<String>,
+    #[serde(default)]
+    activity: Option<String>,
+    expires_at: i64,
+    #[serde(default)]
+    extra: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct AgentStatusClearInput {
+    room_id: String,
+}
+
+#[derive(Deserialize)]
 struct RoomTimelineInput {
     room_id: String,
     #[serde(default)]
@@ -2145,11 +2417,11 @@ struct DraftCommitInput {
     #[serde(default)]
     payload: Option<Value>,
     #[serde(default)]
-    expected_seq: Option<u64>,
+    base_seq: Option<u64>,
     #[serde(default)]
-    expected_head_hash: Option<String>,
+    base_hash: Option<String>,
     #[serde(default)]
-    on_stale: FreshnessPolicy,
+    on_head_mismatch: HeadMismatchPolicy,
 }
 
 #[derive(Deserialize)]
@@ -2223,11 +2495,11 @@ struct RoomSendMessageInput {
     #[serde(default)]
     extra: BTreeMap<String, Value>,
     #[serde(default)]
-    expected_seq: Option<u64>,
+    base_seq: Option<u64>,
     #[serde(default)]
-    expected_head_hash: Option<String>,
+    base_hash: Option<String>,
     #[serde(default)]
-    on_stale: FreshnessPolicy,
+    on_head_mismatch: HeadMismatchPolicy,
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -2241,11 +2513,11 @@ struct RoomSubmitEventInput {
     #[serde(default)]
     references: Vec<String>,
     #[serde(default)]
-    expected_seq: Option<u64>,
+    base_seq: Option<u64>,
     #[serde(default)]
-    expected_head_hash: Option<String>,
+    base_hash: Option<String>,
     #[serde(default)]
-    on_stale: FreshnessPolicy,
+    on_head_mismatch: HeadMismatchPolicy,
 }
 
 #[derive(Deserialize)]
@@ -2295,6 +2567,61 @@ fn room_create_payload(room: &RoomResponse) -> Option<&RoomCreatePayload> {
         .map(|envelope| &envelope.event.payload)
 }
 
+fn room_topic(room: &RoomResponse) -> Option<String> {
+    room.topic
+        .clone()
+        .or_else(|| room_create_payload(room).map(|payload| payload.topic.clone()))
+}
+
+fn room_agenda(room: &RoomResponse) -> Option<String> {
+    room.agenda
+        .clone()
+        .or_else(|| room_create_payload(room).and_then(|payload| payload.agenda.clone()))
+}
+
+fn room_guidance(room: &RoomResponse) -> Option<String> {
+    room.guidance
+        .clone()
+        .or_else(|| room_create_payload(room).and_then(|payload| payload.guidance.clone()))
+}
+
+fn room_visibility(room: &RoomResponse) -> Option<Visibility> {
+    room.visibility
+        .or_else(|| room_create_payload(room).map(|payload| payload.visibility))
+}
+
+fn room_start_time(room: &RoomResponse) -> Option<i64> {
+    room.start_time
+        .or_else(|| room_create_payload(room).map(|payload| payload.start_time))
+}
+
+fn room_end_time(room: &RoomResponse) -> Option<i64> {
+    room.end_time
+        .or_else(|| room_create_payload(room).map(|payload| payload.end_time))
+}
+
+fn room_tags(room: &RoomResponse) -> Vec<String> {
+    if room.tags.is_empty() {
+        room_create_payload(room)
+            .map(|payload| payload.tags.clone())
+            .unwrap_or_default()
+    } else {
+        room.tags.clone()
+    }
+}
+
+fn room_language(room: &RoomResponse) -> Option<String> {
+    room.language
+        .clone()
+        .or_else(|| room_create_payload(room).and_then(|payload| payload.language.clone()))
+}
+
+fn room_policy(room: &RoomResponse) -> Option<crate::discourse::RoomPolicy> {
+    room.policy
+        .clone()
+        .or_else(|| room_create_payload(room).and_then(|payload| payload.policy.clone()))
+}
+
 fn materialize_creator(room: &mut LocalRoomState) {
     let Some(envelope) = &room.room.envelope else {
         return;
@@ -2308,16 +2635,16 @@ fn materialize_creator(room: &mut LocalRoomState) {
             status: RoomMemberStatus::Active,
             is_creator: true,
             perspective: None,
-            joined_seq: Some(room.room.seq),
+            joined_seq: Some(1),
             left_seq: None,
-            last_event_seq: Some(room.room.seq),
+            last_event_seq: Some(1),
             profile: None,
             extra: BTreeMap::new(),
         });
 }
 
 fn is_duplicate_record(room: &LocalRoomState, record: &ServerRecord) -> bool {
-    record.seq <= room.local_seq
+    record.seq <= room.head_seq
         && room
             .records
             .iter()
@@ -2325,7 +2652,7 @@ fn is_duplicate_record(room: &LocalRoomState, record: &ServerRecord) -> bool {
 }
 
 fn validate_next_record(room: &LocalRoomState, record: &ServerRecord) -> Result<()> {
-    if room.local_seq == 0 {
+    if room.head_seq == 0 {
         if record.seq != 1 || record.pre_hash.is_some() {
             return Err(SdkError::InvalidPayload(
                 "first local record must have seq 1 and null pre_hash".to_owned(),
@@ -2333,12 +2660,12 @@ fn validate_next_record(room: &LocalRoomState, record: &ServerRecord) -> Result<
         }
         return Ok(());
     }
-    if record.seq != room.local_seq + 1 {
+    if record.seq != room.head_seq + 1 {
         return Err(SdkError::InvalidPayload(
             "record seq must continue local chain".to_owned(),
         ));
     }
-    if record.pre_hash.as_deref() != room.local_head_hash.as_deref() {
+    if record.pre_hash.as_deref() != room.head_hash.as_deref() {
         return Err(SdkError::InvalidPayload(
             "record pre_hash mismatch".to_owned(),
         ));
@@ -2572,17 +2899,6 @@ fn inbox_entry_ready(entry: &InboxEntry, now_ms: i64) -> bool {
     }
 }
 
-fn extract_mentions_from_extra(extra: &BTreeMap<String, Value>) -> Vec<AgentId> {
-    extra
-        .get("mentions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .filter_map(|value| value.parse().ok())
-        .collect()
-}
-
 fn summarize_payload(event_type: &str, payload: &Value) -> String {
     if event_type == event_type::MESSAGE_CREATE {
         if let Some(content) = payload.get("content") {
@@ -2637,12 +2953,8 @@ fn membership_filter(
     }
 }
 
-fn payload_with_attention(
-    mut payload: Value,
-    mentions: Vec<AgentId>,
-    references: Vec<String>,
-) -> Result<Value> {
-    if mentions.is_empty() && references.is_empty() {
+fn payload_with_references(mut payload: Value, references: Vec<String>) -> Result<Value> {
+    if references.is_empty() {
         return Ok(payload);
     }
     let object = payload
@@ -2654,12 +2966,7 @@ fn payload_with_attention(
     let extra = extra
         .as_object_mut()
         .ok_or_else(|| SdkError::InvalidPayload("payload.extra must be an object".to_owned()))?;
-    if !mentions.is_empty() {
-        extra.insert("mentions".to_owned(), serde_json::to_value(mentions)?);
-    }
-    if !references.is_empty() {
-        extra.insert("references".to_owned(), serde_json::to_value(references)?);
-    }
+    extra.insert("references".to_owned(), serde_json::to_value(references)?);
     Ok(payload)
 }
 
@@ -2729,15 +3036,18 @@ mod tests {
             status: RoomState::Active,
             url: format!("https://api.example.test/v1/rooms/{room_id}"),
             topic: Some("Room".to_owned()),
+            agenda: None,
             guidance: None,
             visibility: Some(Visibility::Public),
             start_time: Some(1),
             end_time: Some(2),
+            tags: Vec::new(),
+            language: None,
             policy: None,
             types: Vec::new(),
-            seq: 0,
+            seq: 1,
             pre_hash: None,
-            hash: String::new(),
+            hash: "room-create-head".to_owned(),
             received_at: 100,
             envelope: Some(envelope),
         }
@@ -2765,6 +3075,73 @@ mod tests {
     }
 
     #[test]
+    fn observed_hosts_do_not_bypass_allowlist_for_signing() {
+        let active = signer(1);
+        let creator = signer(5);
+        let mut connector = LocalConnector::new(active);
+        connector.accept_room_response(
+            "https://untrusted.example.test",
+            room_response("room1", &creator),
+        );
+
+        assert_eq!(
+            connector
+                .state
+                .hosts
+                .get("https://untrusted.example.test")
+                .unwrap()
+                .allowed,
+            false
+        );
+        let result = connector.sign_room_event(
+            event_type::MESSAGE_CREATE,
+            "room1",
+            None,
+            None,
+            Vec::new(),
+            MessageCreatePayload::text("hi"),
+        );
+        assert!(matches!(result, Err(SdkError::PermissionDenied)));
+    }
+
+    #[test]
+    fn room_views_fall_back_to_room_create_payload_metadata() {
+        let active = signer(1);
+        let creator = signer(5);
+        let mut connector = LocalConnector::new(active);
+        let mut room = room_response("room1", &creator);
+        let payload = &mut room.envelope.as_mut().unwrap().event.payload;
+        payload.agenda = Some("Review the proposal".to_owned());
+        payload.guidance = Some("Stay concise".to_owned());
+        payload.tags = vec!["review".to_owned()];
+        payload.language = Some("en".to_owned());
+        room.topic = None;
+        room.agenda = None;
+        room.guidance = None;
+        room.visibility = None;
+        room.start_time = None;
+        room.end_time = None;
+        room.tags.clear();
+        room.language = None;
+
+        connector.observe_room("https://api.example.test", room);
+        let room = connector.local_room("room1").unwrap();
+        let view = connector.room_state_view(room);
+        let summary = connector.summary_for_room(room);
+
+        assert_eq!(view.topic.as_deref(), Some("Room"));
+        assert_eq!(view.agenda.as_deref(), Some("Review the proposal"));
+        assert_eq!(view.guidance.as_deref(), Some("Stay concise"));
+        assert_eq!(view.visibility, Some(Visibility::Public));
+        assert_eq!(view.start_time, Some(1));
+        assert_eq!(view.end_time, Some(2));
+        assert_eq!(view.tags, vec!["review"]);
+        assert_eq!(view.language.as_deref(), Some("en"));
+        assert_eq!(summary.topic.as_deref(), Some("Room"));
+        assert_eq!(summary.tags, vec!["review"]);
+    }
+
+    #[test]
     fn applies_room_records_into_members_timeline_and_inbox() {
         let active = signer(1);
         let speaker = signer(2);
@@ -2778,7 +3155,8 @@ mod tests {
             profile_service: None,
             last_checked_at: None,
         });
-        connector.observe_room("https://api.example.test", room_response("room1", &creator));
+        connector
+            .accept_room_response("https://api.example.test", room_response("room1", &creator));
 
         let join_envelope = speaker
             .sign_event(discourse_event(
@@ -2787,47 +3165,51 @@ mod tests {
                 110,
                 1,
                 "room1",
+                1,
+                "room-create-head",
                 RoomJoinPayload {
                     request_id: "jr1".to_owned(),
                     role: Role::Speaker,
                 },
             ))
             .unwrap();
-        let join = build_server_record("room1", 1, None, 111, join_envelope).unwrap();
+        let join = build_server_record(
+            "room1",
+            2,
+            Some("room-create-head".to_owned()),
+            111,
+            join_envelope,
+        )
+        .unwrap();
         connector
             .apply_record(typed_record_to_value(join).unwrap())
             .unwrap();
 
-        let mut message = MessageCreatePayload::text("please review this");
-        message.extra.insert(
-            "mentions".to_owned(),
-            serde_json::to_value(vec![connector.agent_id()]).unwrap(),
-        );
-        let message_envelope = speaker
-            .sign_event(discourse_event(
-                event_type::MESSAGE_CREATE,
-                speaker.agent_id(),
-                120,
-                2,
-                "room1",
-                message,
-            ))
+        let message = MessageCreatePayload::text("please review this");
+        let message_base_hash = connector
+            .local_room("room1")
+            .unwrap()
+            .head_hash
+            .clone()
             .unwrap();
-        let message = build_server_record(
-            "room1",
-            2,
-            Some(
-                connector
-                    .local_room("room1")
-                    .unwrap()
-                    .local_head_hash
-                    .clone()
-                    .unwrap(),
-            ),
-            121,
-            message_envelope,
-        )
-        .unwrap();
+        let message_envelope = speaker
+            .sign_event(
+                discourse_event(
+                    event_type::MESSAGE_CREATE,
+                    speaker.agent_id(),
+                    120,
+                    2,
+                    "room1",
+                    2,
+                    message_base_hash.clone(),
+                    message,
+                )
+                .with_mention(connector.agent_id()),
+            )
+            .unwrap();
+        let message =
+            build_server_record("room1", 3, Some(message_base_hash), 121, message_envelope)
+                .unwrap();
         connector
             .apply_record(typed_record_to_value(message).unwrap())
             .unwrap();
@@ -2859,12 +3241,13 @@ mod tests {
     }
 
     #[test]
-    fn stale_room_write_holds_message_draft_before_network_submit() {
+    fn room_head_mismatch_holds_message_draft_before_network_submit() {
         let active = signer(1);
         let speaker = signer(2);
         let creator = signer(5);
         let mut connector = LocalConnector::new(active);
-        connector.observe_room("https://api.example.test", room_response("room1", &creator));
+        connector
+            .accept_room_response("https://api.example.test", room_response("room1", &creator));
 
         let message = MessageCreatePayload::text("new context");
         let message_envelope = speaker
@@ -2874,10 +3257,19 @@ mod tests {
                 120,
                 1,
                 "room1",
+                1,
+                "room-create-head",
                 message,
             ))
             .unwrap();
-        let message = build_server_record("room1", 1, None, 121, message_envelope).unwrap();
+        let message = build_server_record(
+            "room1",
+            2,
+            Some("room-create-head".to_owned()),
+            121,
+            message_envelope,
+        )
+        .unwrap();
         connector
             .apply_record(typed_record_to_value(message).unwrap())
             .unwrap();
@@ -2894,15 +3286,15 @@ mod tests {
                 mentions: Vec::new(),
                 references: Vec::new(),
                 extra: BTreeMap::new(),
-                expected_seq: Some(0),
-                expected_head_hash: None,
-                on_stale: FreshnessPolicy::Hold,
+                base_seq: Some(1),
+                base_hash: Some("room-create-head".to_owned()),
+                on_head_mismatch: HeadMismatchPolicy::Hold,
             }))
             .unwrap();
 
         assert_eq!(result["status"], "held");
         assert_eq!(result["draft"]["kind"], "message");
-        assert_eq!(result["draft"]["based_on_seq"], 0);
+        assert_eq!(result["draft"]["base_seq"], 1);
         assert_eq!(result["changes"].as_array().unwrap().len(), 1);
         assert_eq!(connector.state.drafts.len(), 1);
 
@@ -2940,15 +3332,10 @@ mod tests {
     }
 
     #[test]
-    fn payload_with_attention_stores_mentions_under_extra() {
-        let target = signer(4).agent_id();
-        let payload = payload_with_attention(
-            json!({"instruction": "answer"}),
-            vec![target.clone()],
-            vec!["abc".to_owned()],
-        )
-        .unwrap();
-        assert_eq!(payload["extra"]["mentions"][0], target.to_string());
+    fn payload_with_references_stores_references_under_extra() {
+        let payload =
+            payload_with_references(json!({"instruction": "answer"}), vec!["abc".to_owned()])
+                .unwrap();
         assert_eq!(payload["extra"]["references"][0], "abc");
     }
 }

@@ -16,8 +16,11 @@ import {
   AgentId,
   Envelope,
   Event,
+  MAX_SAFE_NONCE,
   createEvent,
+  validateAgentId,
   verifyEnvelope,
+  withRoomHead,
   withRoomId,
 } from "./identity.js";
 
@@ -62,6 +65,10 @@ export type TypeKind = "message" | "signal" | "control";
 export type TypeStatus = "active" | "deprecated" | "disabled";
 export type JoinRequestStatus = "pending" | "approved" | "rejected" | "expired";
 export type JoinDecision = "approve" | "reject";
+
+const ROLES = ["moderator", "speaker", "observer"] as const;
+const TYPE_KINDS = ["message", "signal", "control"] as const;
+const TYPE_STATUSES = ["active", "deprecated", "disabled"] as const;
 
 export interface RoomCreatePayload {
   topic: string;
@@ -149,10 +156,13 @@ export interface RoomResponse {
   status: RoomState;
   url: string;
   topic?: string;
+  agenda?: string;
   guidance?: string;
   visibility?: Visibility;
   start_time?: number;
   end_time?: number;
+  tags?: string[];
+  language?: string;
   policy?: RoomPolicy;
   /** Materialized type registry served by the host. */
   types?: TypeDef[];
@@ -194,6 +204,39 @@ export interface RoomJoinRequestStatus {
   review_reason?: string;
   reviewed_by?: AgentId | null;
   reviewed_at?: number | null;
+}
+
+export interface AgentStatusInput {
+  state: string;
+  summary?: string;
+  seen_seq?: number;
+  seen_hash?: string;
+  claim_id?: string;
+  activity?: string;
+  expires_at: number;
+  extra?: Record<string, unknown>;
+}
+
+export interface AgentStatus {
+  room_id: string;
+  agent_id: AgentId;
+  state: string;
+  summary?: string;
+  seen_seq?: number;
+  seen_hash?: string;
+  claim_id?: string;
+  activity?: string;
+  expires_at: number;
+  updated_at: number;
+  extra?: Record<string, unknown>;
+}
+
+export interface AgentStatusListResponse {
+  statuses: AgentStatus[];
+}
+
+export interface AgentStatusGetResponse {
+  status: AgentStatus;
 }
 
 export interface RoomJoinReviewPayload {
@@ -291,7 +334,14 @@ export function roomCreateEvent(
   nonce: number,
   payload: RoomCreatePayload,
 ): Event<RoomCreatePayload> {
-  return createEvent(DISCOURSE_PROTOCOL, eventType.ROOM_CREATE, actor, createdAt, nonce, payload);
+  return createEvent(
+    DISCOURSE_PROTOCOL,
+    eventType.ROOM_CREATE,
+    actor,
+    createdAt,
+    nonce,
+    payload,
+  );
 }
 
 export function typeDefineEvent(
@@ -299,18 +349,24 @@ export function typeDefineEvent(
   createdAt: number,
   nonce: number,
   roomId: string,
+  baseSeq: number,
+  baseHash: string,
   declaration: TypeDeclaration,
 ): Event<TypeDeclaration> {
-  return withRoomId(
-    createEvent(
-      DISCOURSE_PROTOCOL,
-      eventType.TYPE_DEFINE,
-      actor,
-      createdAt,
-      nonce,
-      declaration,
+  return withRoomHead(
+    withRoomId(
+      createEvent(
+        DISCOURSE_PROTOCOL,
+        eventType.TYPE_DEFINE,
+        actor,
+        createdAt,
+        nonce,
+        declaration,
+      ),
+      roomId,
     ),
-    roomId,
+    baseSeq,
+    baseHash,
   );
 }
 
@@ -320,11 +376,17 @@ export function discourseEvent<P>(
   createdAt: number,
   nonce: number,
   roomId: string,
+  baseSeq: number,
+  baseHash: string,
   payload: P,
 ): Event<P> {
-  return withRoomId(
-    createEvent(DISCOURSE_PROTOCOL, type, actor, createdAt, nonce, payload),
-    roomId,
+  return withRoomHead(
+    withRoomId(
+      createEvent(DISCOURSE_PROTOCOL, type, actor, createdAt, nonce, payload),
+      roomId,
+    ),
+    baseSeq,
+    baseHash,
   );
 }
 
@@ -346,14 +408,13 @@ export function validateDiscourseEnvelope(envelope: Envelope<unknown>): void {
     );
   }
   if (envelope.event.type === eventType.ROOM_CREATE) {
-    if (envelope.event.room_id !== undefined) {
-      throw protocolError(
-        "invalid_event",
-        "room.create must not include room_id",
-      );
+    validateRoomCreateEventFields(envelope.event);
+  } else {
+    if (envelope.event.room_id === undefined) {
+      throw protocolError("missing_room_id", "event requires a room_id");
     }
-  } else if (envelope.event.room_id === undefined) {
-    throw protocolError("missing_room_id", "event requires a room_id");
+    validateRoomHeadPrecondition(envelope.event);
+    validateMentions(envelope.event.mentions);
   }
 }
 
@@ -363,14 +424,11 @@ export function validateRoomPath(
 ): void {
   const actual = envelope.event.room_id;
   if (envelope.event.type === eventType.ROOM_CREATE) {
-    if (actual !== undefined) {
-      throw protocolError(
-        "invalid_event",
-        "room.create must not include room_id",
-      );
-    }
+    validateRoomCreateEventFields(envelope.event);
     return;
   }
+  validateRoomHeadPrecondition(envelope.event);
+  validateMentions(envelope.event.mentions);
   if (actual === undefined)
     throw protocolError("missing_room_id", "event requires a room_id");
   if (actual !== pathRoomId)
@@ -378,6 +436,46 @@ export function validateRoomPath(
       "room_id_mismatch",
       `expected ${pathRoomId}, got ${actual}`,
     );
+}
+
+function validateRoomCreateEventFields(event: Event<unknown>): void {
+  if (
+    event.room_id !== undefined ||
+    event.base_seq !== undefined ||
+    event.base_hash !== undefined ||
+    Object.prototype.hasOwnProperty.call(event, "mentions")
+  ) {
+    throw protocolError(
+      "invalid_event",
+      "room.create must not include room_id, base_seq, base_hash, or mentions",
+    );
+  }
+}
+
+export function validateRoomHeadPrecondition(event: Event<unknown>): void {
+  const baseSeq = event.base_seq;
+  const baseHash = event.base_hash;
+  if (
+    !Number.isSafeInteger(baseSeq) ||
+    (baseSeq as number) < 1 ||
+    (baseSeq as number) > MAX_SAFE_NONCE
+  ) {
+    throw protocolError(
+      "invalid_event",
+      "base_seq must be a positive safe JSON integer",
+    );
+  }
+  if (typeof baseHash !== "string" || baseHash.trim() === "") {
+    throw protocolError("invalid_event", "base_hash must not be empty");
+  }
+}
+
+function validateMentions(mentions: AgentId[] | undefined): void {
+  if (mentions === undefined) return;
+  if (!Array.isArray(mentions)) {
+    throw protocolError("invalid_event", "mentions must be an Agent ID array");
+  }
+  for (const mention of mentions) validateAgentId(mention);
 }
 
 /**
@@ -421,7 +519,7 @@ export function isTypeDef(declaration: TypeDeclaration): declaration is TypeDef 
 
 export function validateTypeDef(def: TypeDef): void {
   validateCustomEventTypeName(def.type);
-  if (!["message", "signal", "control"].includes(def.kind)) {
+  if (!includes(TYPE_KINDS, def.kind)) {
     throw protocolError("invalid_event", `invalid type kind: ${def.kind}`);
   }
   if (typeof def.title !== "string" || def.title.trim() === "") {
@@ -441,11 +539,20 @@ export function validateTypeDef(def: TypeDef): void {
     );
   }
   compileSchema(def.schema);
-  if (def.roles !== undefined && def.roles.length === 0) {
-    throw protocolError(
-      "invalid_event",
-      "type definition roles must not be empty",
-    );
+  if (def.roles !== undefined) {
+    if (
+      !Array.isArray(def.roles) ||
+      def.roles.length === 0 ||
+      def.roles.some((role) => !includes(ROLES, role))
+    ) {
+      throw protocolError(
+        "invalid_event",
+        "type definition roles must be a non-empty role list",
+      );
+    }
+  }
+  if (def.status !== undefined && !includes(TYPE_STATUSES, def.status)) {
+    throw protocolError("invalid_event", `invalid type status: ${def.status}`);
   }
   for (const hint of [def.rate_hint, def.max_payload_hint]) {
     if (hint !== undefined && (!Number.isInteger(hint) || hint < 1)) {
@@ -455,6 +562,13 @@ export function validateTypeDef(def: TypeDef): void {
       );
     }
   }
+}
+
+function includes<const T extends readonly string[]>(
+  values: T,
+  value: unknown,
+): value is T[number] {
+  return values.includes(value as T[number]);
 }
 
 export function validatePackImport(declaration: PackImport): void {

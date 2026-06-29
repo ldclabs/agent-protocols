@@ -18,7 +18,17 @@ import rfc8785
 from jsonschema.validators import Draft202012Validator
 
 from .errors import AgentProtocolError
-from .identity import AgentId, Envelope, Event, create_event, verify_envelope, with_room_id
+from .identity import (
+    AgentId,
+    Envelope,
+    Event,
+    MAX_SAFE_NONCE,
+    create_event,
+    validate_agent_id,
+    verify_envelope,
+    with_room_head,
+    with_room_id,
+)
 
 DISCOURSE_PROTOCOL = "agent-discourse/1.0"
 
@@ -68,6 +78,8 @@ Role = Literal["moderator", "speaker", "observer"]
 TypeKind = Literal["message", "signal", "control"]
 TypeStatus = Literal["active", "deprecated", "disabled"]
 JoinRequestStatus = Literal["pending", "approved", "rejected", "expired"]
+JoinDecision = Literal["approve", "reject"]
+Visibility = Literal["public", "restricted", "private"]
 
 ROLES = ("moderator", "speaker", "observer")
 TYPE_KINDS = ("message", "signal", "control")
@@ -85,21 +97,69 @@ class PermissionContext(TypedDict, total=False):
     join_request_approved: bool
 
 
+class AgentStatusInput(TypedDict, total=False):
+    state: str
+    summary: str
+    seen_seq: int
+    seen_hash: str
+    claim_id: str
+    activity: str
+    expires_at: int
+    extra: dict[str, Any]
+
+
+class AgentStatus(TypedDict, total=False):
+    room_id: str
+    agent_id: AgentId
+    state: str
+    summary: str
+    seen_seq: int
+    seen_hash: str
+    claim_id: str
+    activity: str
+    expires_at: int
+    updated_at: int
+    extra: dict[str, Any]
+
+
 def room_create_event(actor: AgentId, created_at: int, nonce: int, payload: dict[str, Any]) -> Event:
     return create_event(DISCOURSE_PROTOCOL, ROOM_CREATE, actor, created_at, nonce, payload)
 
 
 def type_define_event(
-    actor: AgentId, created_at: int, nonce: int, room_id: str, declaration: dict[str, Any]
+    actor: AgentId,
+    created_at: int,
+    nonce: int,
+    room_id: str,
+    base_seq: int,
+    base_hash: str,
+    declaration: dict[str, Any],
 ) -> Event:
-    return with_room_id(
-        create_event(DISCOURSE_PROTOCOL, TYPE_DEFINE, actor, created_at, nonce, declaration),
-        room_id,
+    return with_room_head(
+        with_room_id(
+            create_event(DISCOURSE_PROTOCOL, TYPE_DEFINE, actor, created_at, nonce, declaration),
+            room_id,
+        ),
+        base_seq,
+        base_hash,
     )
 
 
-def discourse_event(event_type: str, actor: AgentId, created_at: int, nonce: int, room_id: str, payload: Any) -> Event:
-    return with_room_id(create_event(DISCOURSE_PROTOCOL, event_type, actor, created_at, nonce, payload), room_id)
+def discourse_event(
+    event_type: str,
+    actor: AgentId,
+    created_at: int,
+    nonce: int,
+    room_id: str,
+    base_seq: int,
+    base_hash: str,
+    payload: Any,
+) -> Event:
+    return with_room_head(
+        with_room_id(create_event(DISCOURSE_PROTOCOL, event_type, actor, created_at, nonce, payload), room_id),
+        base_seq,
+        base_hash,
+    )
 
 
 def is_builtin_event_type(event_type: str) -> bool:
@@ -117,23 +177,52 @@ def validate_discourse_envelope(envelope: Envelope) -> None:
     if protocol != DISCOURSE_PROTOCOL:
         raise AgentProtocolError("invalid_event_protocol", f"expected {DISCOURSE_PROTOCOL}, got {protocol}")
     if event["type"] == ROOM_CREATE:
-        if "room_id" in event:
-            raise AgentProtocolError("invalid_event", "room.create must not include room_id")
-    elif "room_id" not in event:
-        raise AgentProtocolError("missing_room_id", "event requires a room_id")
+        _validate_room_create_event_fields(event)
+    else:
+        if "room_id" not in event:
+            raise AgentProtocolError("missing_room_id", "event requires a room_id")
+        validate_room_head_precondition(event)
+        _validate_mentions(event.get("mentions"))
 
 
 def validate_room_path(envelope: Envelope, path_room_id: str) -> None:
     event = envelope["event"]
     actual = event.get("room_id")
     if event["type"] == ROOM_CREATE:
-        if actual is not None:
-            raise AgentProtocolError("invalid_event", "room.create must not include room_id")
+        _validate_room_create_event_fields(event)
         return
+    validate_room_head_precondition(event)
+    _validate_mentions(event.get("mentions"))
     if actual is None:
         raise AgentProtocolError("missing_room_id", "event requires a room_id")
     if actual != path_room_id:
         raise AgentProtocolError("room_id_mismatch", f"expected {path_room_id}, got {actual}")
+
+
+def _validate_room_create_event_fields(event: Event) -> None:
+    if any(field in event for field in ("room_id", "base_seq", "base_hash", "mentions")):
+        raise AgentProtocolError(
+            "invalid_event",
+            "room.create must not include room_id, base_seq, base_hash, or mentions",
+        )
+
+
+def validate_room_head_precondition(event: Event) -> None:
+    base_seq = event.get("base_seq")
+    base_hash = event.get("base_hash")
+    if not isinstance(base_seq, int) or base_seq < 1 or base_seq > MAX_SAFE_NONCE:
+        raise AgentProtocolError("invalid_event", "base_seq must be a positive safe JSON integer")
+    if not isinstance(base_hash, str) or not base_hash.strip():
+        raise AgentProtocolError("invalid_event", "base_hash must not be empty")
+
+
+def _validate_mentions(mentions: Any) -> None:
+    if mentions is None:
+        return
+    if not isinstance(mentions, list):
+        raise AgentProtocolError("invalid_event", "mentions must be an Agent ID array")
+    for mention in mentions:
+        validate_agent_id(mention)
 
 
 def validate_custom_event_type_name(name: str) -> None:

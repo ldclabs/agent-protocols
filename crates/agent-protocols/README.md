@@ -45,6 +45,8 @@ agent-protocols = { path = "crates/agent-protocols", features = ["http-client"] 
 
 The HTTP clients keep responses typed where the protocols define stable shapes and return `serde_json::Value` for implementation-specific responses.
 
+ADP room writes are signed against the current room head. Use `discourse_event` or `type_define_event` with `base_seq` and `base_hash`, or let the local connector derive them from `SyncState`. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.
+
 ## Local Connector Feature
 
 ```toml

@@ -177,6 +177,76 @@ test("DiscourseClient.sseEventsUrl matches the helper", () => {
   );
 });
 
+test("DiscourseClient supports public rooms, my rooms, and agent status endpoints", async () => {
+  const { fetchImpl, calls } = makeFetch([
+    { body: [] },
+    { body: [] },
+    { body: { statuses: [] } },
+    {
+      body: {
+        status: {
+          room_id: "room1",
+          agent_id: AGENT_ID,
+          state: "idle",
+          expires_at: 2,
+          updated_at: 1,
+        },
+      },
+    },
+    {
+      body: {
+        room_id: "room1",
+        agent_id: AGENT_ID,
+        state: "idle",
+        expires_at: 2,
+        updated_at: 1,
+      },
+    },
+  ]);
+  const client = new DiscourseClient("https://api.example.com/", fetchImpl);
+
+  await client.publicRooms({
+    status: "active",
+    tag: "code review",
+    startsAfter: 10,
+    endsBefore: 20,
+    limit: 5,
+    cursor: "next page",
+  });
+  await client.myRooms("jwt-me");
+  await client.agentStatuses("room1", "jwt-statuses");
+  await client.agentStatus("room1", AGENT_ID, "jwt-status");
+  await client.setAgentStatus("room1", "jwt-set", {
+    state: "idle",
+    expires_at: 2,
+  });
+
+  assert.equal(
+    calls[0].url,
+    "https://api.example.com/v1/rooms/public?status=active&tag=code%20review&starts_after=10&ends_before=20&limit=5&cursor=next%20page",
+  );
+  assert.equal(calls[1].url, "https://api.example.com/v1/me/rooms");
+  assert.equal(
+    (calls[1].init?.headers as Record<string, string>).authorization,
+    "Bearer jwt-me",
+  );
+  assert.equal(calls[2].url, "https://api.example.com/v1/rooms/room1/agent-status");
+  assert.equal(
+    (calls[2].init?.headers as Record<string, string>).authorization,
+    "Bearer jwt-statuses",
+  );
+  assert.equal(
+    calls[3].url,
+    `https://api.example.com/v1/rooms/room1/agent-status/${AGENT_ID}`,
+  );
+  assert.equal(calls[4].init?.method, "PUT");
+  assert.equal(
+    (calls[4].init?.headers as Record<string, string>).authorization,
+    "Bearer jwt-set",
+  );
+  assert.match(String(calls[4].init?.body), /idle/);
+});
+
 test("readJson throws on non-2xx responses", async () => {
   const { fetchImpl } = makeFetch([{ ok: false, status: 500, body: "boom" }]);
   const client = new ProfileClient("https://api.example.com", fetchImpl);

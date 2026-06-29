@@ -16,7 +16,7 @@ use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 
 use crate::error::{Result, SdkError};
-use crate::identity::{verify_envelope, AgentId, Envelope, Event};
+use crate::identity::{verify_envelope, AgentId, Envelope, Event, MAX_SAFE_NONCE};
 
 pub const PROTOCOL: &str = "agent-discourse/1.0";
 
@@ -308,6 +308,8 @@ pub struct RoomResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agenda: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guidance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<Visibility>,
@@ -315,6 +317,10 @@ pub struct RoomResponse {
     pub start_time: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_time: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<RoomPolicy>,
     /// Materialized type registry served by the host.
@@ -385,6 +391,70 @@ pub struct RoomJoinRequestStatus {
     pub reviewed_by: Option<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentStatusInput {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
+    pub expires_at: i64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl AgentStatusInput {
+    pub fn new(state: impl Into<String>, expires_at: i64) -> Self {
+        Self {
+            state: state.into(),
+            summary: None,
+            seen_seq: None,
+            seen_hash: None,
+            claim_id: None,
+            activity: None,
+            expires_at,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentStatus {
+    pub room_id: String,
+    pub agent_id: AgentId,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
+    pub expires_at: i64,
+    pub updated_at: i64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentStatusListResponse {
+    pub statuses: Vec<AgentStatus>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentStatusGetResponse {
+    pub status: AgentStatus,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -518,6 +588,8 @@ pub fn type_define_event(
     created_at: i64,
     nonce: u64,
     room_id: impl Into<String>,
+    base_seq: u64,
+    base_hash: impl Into<String>,
     declaration: TypeDeclaration,
 ) -> Event<TypeDeclaration> {
     Event::new(
@@ -529,6 +601,7 @@ pub fn type_define_event(
         declaration,
     )
     .with_room_id(room_id)
+    .with_room_head(base_seq, base_hash)
 }
 
 pub fn discourse_event<P>(
@@ -537,9 +610,13 @@ pub fn discourse_event<P>(
     created_at: i64,
     nonce: u64,
     room_id: impl Into<String>,
+    base_seq: u64,
+    base_hash: impl Into<String>,
     payload: P,
 ) -> Event<P> {
-    Event::new(PROTOCOL, kind, actor, created_at, nonce, payload).with_room_id(room_id)
+    Event::new(PROTOCOL, kind, actor, created_at, nonce, payload)
+        .with_room_id(room_id)
+        .with_room_head(base_seq, base_hash)
 }
 
 pub fn is_builtin_event_type(event_type: &str) -> bool {
@@ -568,21 +645,41 @@ where
                 "room.create must not include room_id".to_owned(),
             ));
         }
-    } else if envelope.event.room_id.is_none() {
-        return Err(SdkError::MissingRoomId);
+        if envelope.event.base_seq.is_some()
+            || envelope.event.base_hash.is_some()
+            || !envelope.event.mentions.is_empty()
+        {
+            return Err(SdkError::InvalidPayload(
+                "room.create must not include base_seq, base_hash, or mentions".to_owned(),
+            ));
+        }
+    } else {
+        if envelope.event.room_id.is_none() {
+            return Err(SdkError::MissingRoomId);
+        }
+        validate_room_head_precondition(&envelope.event)?;
     }
     Ok(())
 }
 
 pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Result<()> {
     if envelope.event.kind == event_type::ROOM_CREATE {
-        return match envelope.event.room_id.as_deref() {
-            None => Ok(()),
-            Some(_) => Err(SdkError::InvalidPayload(
+        if envelope.event.room_id.is_some() {
+            return Err(SdkError::InvalidPayload(
                 "room.create must not include room_id".to_owned(),
-            )),
-        };
+            ));
+        }
+        if envelope.event.base_seq.is_some()
+            || envelope.event.base_hash.is_some()
+            || !envelope.event.mentions.is_empty()
+        {
+            return Err(SdkError::InvalidPayload(
+                "room.create must not include base_seq, base_hash, or mentions".to_owned(),
+            ));
+        }
+        return Ok(());
     }
+    validate_room_head_precondition(&envelope.event)?;
     match envelope.event.room_id.as_deref() {
         Some(actual) if actual == path_room_id => Ok(()),
         Some(actual) => Err(SdkError::RoomIdMismatch {
@@ -590,6 +687,26 @@ pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Resu
             actual: actual.to_owned(),
         }),
         None => Err(SdkError::MissingRoomId),
+    }
+}
+
+fn validate_room_head_precondition<P>(event: &Event<P>) -> Result<()> {
+    match (event.base_seq, event.base_hash.as_deref()) {
+        (Some(seq), Some(hash)) if seq > 0 && seq <= MAX_SAFE_NONCE && !hash.trim().is_empty() => {
+            Ok(())
+        }
+        (Some(0), _) => Err(SdkError::InvalidPayload(
+            "base_seq must be a positive safe JSON integer".to_owned(),
+        )),
+        (Some(_), Some(hash)) if hash.trim().is_empty() => Err(SdkError::InvalidPayload(
+            "base_hash must not be empty".to_owned(),
+        )),
+        (Some(seq), _) if seq > MAX_SAFE_NONCE => Err(SdkError::InvalidPayload(
+            "base_seq must be a safe JSON integer".to_owned(),
+        )),
+        _ => Err(SdkError::InvalidPayload(
+            "room event requires base_seq and base_hash".to_owned(),
+        )),
     }
 }
 
@@ -1282,6 +1399,8 @@ mod tests {
             100,
             1,
             "room1",
+            1,
+            "room-head-hash",
             MessageCreatePayload::text("hello"),
         );
         let mut envelope = signer.sign_event(event).unwrap();
@@ -1318,6 +1437,8 @@ mod tests {
                 1_779_757_250_000,
                 1,
                 "d8ftedhpqhsusbg001tg",
+                1,
+                "room-head-hash",
                 payload.clone(),
             ))
             .unwrap();
@@ -1340,6 +1461,36 @@ mod tests {
         );
         assert!(serde_json::from_str::<Role>("\"expert\"").is_err());
         assert!(serde_json::from_str::<Role>("\"participant\"").is_err());
+    }
+
+    #[test]
+    fn room_response_retains_room_metadata_fields() {
+        let room: RoomResponse = serde_json::from_value(json!({
+            "id": "room1",
+            "status": "active",
+            "url": "https://api.example.test/v1/rooms/room1",
+            "topic": "Room",
+            "agenda": "Review the proposal",
+            "guidance": "Stay concise",
+            "visibility": "public",
+            "start_time": 1,
+            "end_time": 2,
+            "tags": ["review"],
+            "language": "en",
+            "seq": 7,
+            "pre_hash": "previous",
+            "hash": "current",
+            "received_at": 3
+        }))
+        .unwrap();
+
+        assert_eq!(room.agenda.as_deref(), Some("Review the proposal"));
+        assert_eq!(room.tags, vec!["review"]);
+        assert_eq!(room.language.as_deref(), Some("en"));
+        assert_eq!(
+            serde_json::to_value(&room).unwrap()["agenda"],
+            json!("Review the proposal")
+        );
     }
 
     #[test]
@@ -1751,6 +1902,8 @@ mod tests {
                 120,
                 2,
                 "room123",
+                1,
+                record1.hash.clone(),
                 json!({"content_type": "text/plain", "content": "hello"}),
             ))
             .unwrap();
@@ -1830,6 +1983,8 @@ mod tests {
             1,
             1,
             "room1",
+            1,
+            "room-head-hash",
             TypeDeclaration::Def(finding_def()),
         );
         assert_eq!(event.protocol, PROTOCOL);
@@ -1903,7 +2058,8 @@ mod tests {
                     4,
                     room_payload,
                 )
-                .with_room_id("room1"),
+                .with_room_id("room1")
+                .with_room_head(1, "room-head-hash"),
             )
             .unwrap();
         validate_discourse_envelope(&room_payload_as_message).unwrap();
@@ -1942,6 +2098,8 @@ mod tests {
                 100,
                 7,
                 "room1",
+                1,
+                "room-head-hash",
                 review_payload.clone(),
             ))
             .unwrap();
@@ -1998,6 +2156,8 @@ mod tests {
                 100,
                 1,
                 "room1",
+                1,
+                "room-head-hash",
                 MessageCreatePayload::text("hi"),
             ))
             .unwrap();
@@ -2031,7 +2191,8 @@ mod tests {
                     1,
                     room_payload.clone(),
                 )
-                .with_room_id("room1"),
+                .with_room_id("room1")
+                .with_room_head(1, "room-head-hash"),
             )
             .unwrap();
         validate_room_path(&in_room, "room1").unwrap();
@@ -2368,6 +2529,8 @@ mod tests {
                     100,
                     nonce,
                     "room1",
+                    1,
+                    "room-head-hash",
                     json!({"content_type": "text/plain", "content": "hi"}),
                 ))
                 .unwrap();

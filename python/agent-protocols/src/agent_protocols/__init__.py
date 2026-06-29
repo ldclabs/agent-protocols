@@ -26,6 +26,9 @@ from .identity import (
     verify_request_jwt,
     verify_signature,
     verify_timestamp,
+    with_mention,
+    with_mentions,
+    with_room_head,
     with_room_id,
 )
 from .profile import PROFILE_PROTOCOL, PROFILE_UPDATE, materialize_profile, profile_update_event, validate_profile_update
@@ -63,5 +66,8 @@ __all__ = [
     "verify_request_jwt",
     "verify_signature",
     "verify_timestamp",
+    "with_mention",
+    "with_mentions",
+    "with_room_head",
     "with_room_id",
 ]

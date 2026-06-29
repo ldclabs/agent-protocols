@@ -2,6 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::discourse::{
+    AgentStatus, AgentStatusGetResponse, AgentStatusInput, AgentStatusListResponse,
     DiscourseProtocolDiscovery, RoomCreatePayload, RoomJoinPayload, RoomJoinRequestInput,
     RoomJoinRequestStatus, RoomLeavePayload, RoomResponse, ServerRecord,
 };
@@ -312,6 +313,53 @@ impl DiscourseClient {
             request = request.bearer_auth(jwt);
         }
         Ok(request.send().await?.error_for_status()?.json().await?)
+    }
+
+    pub async fn agent_statuses(
+        &self,
+        room_id: &str,
+        jwt: Option<&str>,
+    ) -> Result<AgentStatusListResponse> {
+        let mut request = self
+            .inner
+            .get(self.url(&format!("/v1/rooms/{room_id}/agent-status")));
+        if let Some(jwt) = jwt {
+            request = request.bearer_auth(jwt);
+        }
+        Ok(request.send().await?.error_for_status()?.json().await?)
+    }
+
+    pub async fn agent_status(
+        &self,
+        room_id: &str,
+        agent_id: &AgentId,
+        jwt: Option<&str>,
+    ) -> Result<AgentStatusGetResponse> {
+        let mut request = self
+            .inner
+            .get(self.url(&format!("/v1/rooms/{room_id}/agent-status/{agent_id}")));
+        if let Some(jwt) = jwt {
+            request = request.bearer_auth(jwt);
+        }
+        Ok(request.send().await?.error_for_status()?.json().await?)
+    }
+
+    pub async fn set_agent_status(
+        &self,
+        room_id: &str,
+        jwt: &str,
+        status: &AgentStatusInput,
+    ) -> Result<AgentStatus> {
+        Ok(self
+            .inner
+            .put(self.url(&format!("/v1/rooms/{room_id}/agent-status")))
+            .bearer_auth(jwt)
+            .json(status)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     pub fn sse_events_url(&self, room_id: &str) -> String {

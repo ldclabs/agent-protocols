@@ -20,4 +20,10 @@ test("index re-exports the public surface of every module", () => {
   assert.equal(typeof sdk.ProfileClient, "function");
   assert.equal(typeof sdk.DiscourseClient, "function");
   assert.equal(typeof sdk.sseEventsUrl, "function");
+  // local-connector
+  assert.equal(typeof sdk.standardToolDefinitions, "function");
+  assert.equal(
+    sdk.TOOL_ROOM_SEND_MESSAGE,
+    "agent_protocols_room_send_message",
+  );
 });

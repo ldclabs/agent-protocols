@@ -21,9 +21,12 @@ from agent_protocols.identity import (
     unix_ms,
     unix_secs,
     validate_agent_id,
+    verify_envelope,
     verify_event_hash_signature,
     verify_request_jwt,
     verify_timestamp,
+    with_mention,
+    with_room_head,
     with_room_id,
 )
 from agent_protocols.errors import AgentProtocolError
@@ -65,8 +68,18 @@ class AgentIdTests(unittest.TestCase):
 class EventTests(unittest.TestCase):
     def test_create_event_and_with_room_id(self):
         signer = AgentSigner.from_seed(bytes([21]) * 32)
+        target = AgentSigner.from_seed(bytes([22]) * 32)
         event = create_event("p", "t", signer.agent_id(), 1000, 1, {"a": 1})
         self.assertEqual(with_room_id(event, "room1")["room_id"], "room1")
+        room_event = with_mention(with_room_head(with_room_id(event, "room1"), 1, "room-create-head"), target.agent_id())
+        self.assertEqual(room_event["base_seq"], 1)
+        self.assertEqual(room_event["base_hash"], "room-create-head")
+        self.assertEqual(room_event["mentions"], [target.agent_id()])
+        verify_envelope(signer.sign_event(room_event))
+        with self.assertRaises(AgentProtocolError):
+            with_room_head(event, 0, "head")
+        with self.assertRaises(AgentProtocolError):
+            with_mention(event, "bad-agent")
         with self.assertRaises(AgentProtocolError):
             create_event("p", "t", "bad-actor", 1, 1, {})
 

@@ -20,6 +20,9 @@ export interface Event<P = unknown> {
   created_at: number;
   nonce: number;
   room_id?: string;
+  base_seq?: number;
+  base_hash?: string;
+  mentions?: AgentId[];
   payload: P;
   [key: string]: unknown;
 }
@@ -216,6 +219,41 @@ export function withRoomId<P>(event: Event<P>, roomId: string): Event<P> {
   return {
     ...event,
     room_id: roomId,
+  };
+}
+
+export function withRoomHead<P>(
+  event: Event<P>,
+  baseSeq: number,
+  baseHash: string,
+): Event<P> {
+  validateNonce(baseSeq);
+  if (baseHash.trim() === "") {
+    throw protocolError("invalid_event", "base_hash must not be empty");
+  }
+  return {
+    ...event,
+    base_seq: baseSeq,
+    base_hash: baseHash,
+  };
+}
+
+export function withMentions<P>(
+  event: Event<P>,
+  mentions: AgentId[],
+): Event<P> {
+  for (const mention of mentions) validateAgentId(mention);
+  return {
+    ...event,
+    mentions: [...mentions],
+  };
+}
+
+export function withMention<P>(event: Event<P>, agentId: AgentId): Event<P> {
+  validateAgentId(agentId);
+  return {
+    ...event,
+    mentions: [...(event.mentions ?? []), agentId],
   };
 }
 

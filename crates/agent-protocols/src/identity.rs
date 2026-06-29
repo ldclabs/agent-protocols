@@ -177,6 +177,12 @@ pub struct Event<P = Value> {
     pub nonce: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_seq: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<AgentId>,
     pub payload: P,
     #[serde(default, flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -198,6 +204,9 @@ impl<P> Event<P> {
             created_at,
             nonce,
             room_id: None,
+            base_seq: None,
+            base_hash: None,
+            mentions: Vec::new(),
             payload,
             extra: BTreeMap::new(),
         }
@@ -205,6 +214,22 @@ impl<P> Event<P> {
 
     pub fn with_room_id(mut self, room_id: impl Into<String>) -> Self {
         self.room_id = Some(room_id.into());
+        self
+    }
+
+    pub fn with_room_head(mut self, base_seq: u64, base_hash: impl Into<String>) -> Self {
+        self.base_seq = Some(base_seq);
+        self.base_hash = Some(base_hash.into());
+        self
+    }
+
+    pub fn with_mentions(mut self, mentions: Vec<AgentId>) -> Self {
+        self.mentions = mentions;
+        self
+    }
+
+    pub fn with_mention(mut self, agent_id: AgentId) -> Self {
+        self.mentions.push(agent_id);
         self
     }
 }

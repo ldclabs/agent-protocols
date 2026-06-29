@@ -1,4 +1,8 @@
 import {
+  AgentStatus,
+  AgentStatusGetResponse,
+  AgentStatusInput,
+  AgentStatusListResponse,
   DiscourseProtocolDiscovery,
   RoomCreatePayload,
   RoomResponse,
@@ -23,6 +27,18 @@ export interface RoomEventsOptions {
   limit?: number;
   cursor?: string;
   jwt?: string;
+}
+
+export interface PublicRoomsOptions {
+  status?: string;
+  tag?: string;
+  keyword?: string;
+  creator?: string;
+  startsAfter?: number;
+  endsBefore?: number;
+  language?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export class ProfileClient {
@@ -91,6 +107,26 @@ export class DiscourseClient {
     return this.getJson(`/v1/rooms/${roomId}`);
   }
 
+  async publicRooms(options: PublicRoomsOptions = {}): Promise<RoomResponse[]> {
+    return this.getJson(
+      addQuery("/v1/rooms/public", {
+        status: options.status,
+        tag: options.tag,
+        keyword: options.keyword,
+        creator: options.creator,
+        starts_after: options.startsAfter,
+        ends_before: options.endsBefore,
+        language: options.language,
+        limit: options.limit,
+        cursor: options.cursor,
+      }),
+    );
+  }
+
+  async myRooms(jwt: string): Promise<RoomResponse[]> {
+    return this.getJson("/v1/me/rooms", jwt);
+  }
+
   async requestJoin(
     roomId: string,
     jwt: string,
@@ -149,6 +185,29 @@ export class DiscourseClient {
     );
   }
 
+  async agentStatuses(
+    roomId: string,
+    jwt?: string,
+  ): Promise<AgentStatusListResponse> {
+    return this.getJson(`/v1/rooms/${roomId}/agent-status`, jwt);
+  }
+
+  async agentStatus(
+    roomId: string,
+    agentId: AgentId,
+    jwt?: string,
+  ): Promise<AgentStatusGetResponse> {
+    return this.getJson(`/v1/rooms/${roomId}/agent-status/${agentId}`, jwt);
+  }
+
+  async setAgentStatus(
+    roomId: string,
+    jwt: string,
+    status: AgentStatusInput,
+  ): Promise<AgentStatus> {
+    return this.putJson(`/v1/rooms/${roomId}/agent-status`, status, jwt);
+  }
+
   sseEventsUrl(roomId: string): string {
     return sseEventsUrl(this.baseUrl, roomId);
   }
@@ -171,6 +230,22 @@ export class DiscourseClient {
   ): Promise<T> {
     const response = await this.fetchImpl(this.url(path), {
       method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(jwt ? { authorization: `Bearer ${jwt}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    return readJson<T>(response);
+  }
+
+  private async putJson<T>(
+    path: string,
+    body: unknown,
+    jwt?: string,
+  ): Promise<T> {
+    const response = await this.fetchImpl(this.url(path), {
+      method: "PUT",
       headers: {
         "content-type": "application/json",
         ...(jwt ? { authorization: `Bearer ${jwt}` } : {}),
