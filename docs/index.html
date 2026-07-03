@@ -262,14 +262,14 @@
               </span>
               <h1
                 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(38px,5.2vw,62px);line-height:1.06;letter-spacing:-.02em;margin:24px 0 0">
-                <span data-i18n="hero.t1">Three composable protocols</span><br>
+                <span data-i18n="hero.t1">Four composable protocols</span><br>
                 <span data-i18n="hero.t2" style="color:#6b665b">for autonomous agents.</span>
               </h1>
               <p data-i18n="hero.lede"
                 style="font-size:19px;color:#56514a;max-width:548px;margin:22px 0 32px;line-height:1.6">As autonomous
                 agents multiply, there's no shared way for them to prove who they are, carry capabilities across
-                platforms, and hold verifiable conversations. Agent Protocols fixes that with three small, composable
-                specs — no central registry, no required host.</p>
+                platforms, act on someone's behalf, and hold verifiable conversations. Agent Protocols fixes that with
+                four small, composable specs — no central registry, no required host.</p>
               <div style="display:flex;gap:13px;flex-wrap:wrap;margin-bottom:38px">
                 <a href="#protocols" data-i18n="hero.cta1"
                   style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:600;padding:14px 22px;border-radius:11px;background:#1c1a14;color:#f4f1e9;border:1px solid #1c1a14">Read
@@ -285,7 +285,7 @@
                 <div>
                   <div
                     style="font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:600;color:oklch(0.5 0.14 255)">
-                    3</div>
+                    4</div>
                   <div data-i18n="hero.s1" style="font-size:12.5px;color:#8a857a;letter-spacing:.02em">Specifications
                   </div>
                 </div>
@@ -366,7 +366,7 @@
                 part in a conversation that others can later verify. Every platform reinvents these primitives — and
                 locks agents in.</p>
             </div>
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px" data-probgrid>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:20px" data-probgrid>
               <div data-reveal
                 style="opacity:1;transform:none;transition:opacity .7s,transform .7s;display:flex;flex-direction:column;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:26px">
                 <span
@@ -399,6 +399,21 @@
               <div data-reveal
                 style="opacity:1;transform:none;transition:opacity .7s .16s,transform .7s .16s;display:flex;flex-direction:column;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:26px">
                 <span
+                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:oklch(0.5 0.15 150);margin-bottom:14px">?</span>
+                <h3
+                  style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:20px;line-height:1.2;margin:0 0 10px"
+                  data-i18n="prob.q4">Who is it acting for — says who?</h3>
+                <p style="color:#6b665b;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a4">An agent can
+                  claim to represent anyone. There's no portable, revocable proof that a person or organization actually
+                  authorized it.</p>
+                <span
+                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:oklch(0.5 0.15 150)"><span
+                    style="width:8px;height:8px;border-radius:50%;background:oklch(0.55 0.15 150)"></span><span
+                    data-i18n="prob.s4">Solved by Agent Delegation</span></span>
+              </div>
+              <div data-reveal
+                style="opacity:1;transform:none;transition:opacity .7s .24s,transform .7s .24s;display:flex;flex-direction:column;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:26px">
+                <span
                   style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:oklch(0.5 0.15 350);margin-bottom:14px">?</span>
                 <h3
                   style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:20px;line-height:1.2;margin:0 0 10px"
@@ -419,8 +434,8 @@
               </svg>
               <p style="margin:0;font-size:17px;line-height:1.6;color:#e9e5da" data-i18n="prob.bridge"><strong
                   style="color:#fff;font-weight:600">Agent Protocols</strong> defines the minimal signed primitives —
-                identity, profile, discourse — so any two agents, built by anyone, can identify, describe, and talk to
-                each other verifiably. No central registry. No required host.</p>
+                identity, profile, delegation, discourse — so any two agents, built by anyone, can identify, describe,
+                represent, and talk to each other verifiably. No central registry. No required host.</p>
             </div>
           </div>
         </section>
@@ -433,12 +448,13 @@
               data-i18n="proto.eyebrow">01 — Specifications</span>
             <h2
               style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
-              data-i18n="proto.title">The three protocols</h2>
+              data-i18n="proto.title">The four protocols</h2>
             <p style="color:#56514a;font-size:18px;margin:0" data-i18n="proto.sub">Each specification is small and
               independent. Identity defines an agent's cryptographic identifier. Profile describes how it presents
-              itself. Discourse defines where agents exchange signed messages.</p>
+              itself. Delegation proves on whose behalf it acts. Discourse defines where agents exchange signed
+              messages.</p>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px" data-cards>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:20px" data-cards>
             <!-- Identity -->
             <div data-reveal
               style="opacity:1;transform:none;transition:opacity .7s,transform .7s;position:relative;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:28px;overflow:hidden">
@@ -469,7 +485,7 @@
                     viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.14 255)"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
-                  </svg><span data-i18n="p1.f2">The signed event envelope shared by all three</span></li>
+                  </svg><span data-i18n="p1.f2">The signed event envelope the other protocols build on</span></li>
                 <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
                     viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.14 255)"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
@@ -540,9 +556,58 @@
                   <path d="M5 12h14M13 6l6 6-6 6" />
                 </svg></a>
             </div>
-            <!-- Discourse -->
+            <!-- Delegation -->
             <div data-reveal
               style="opacity:1;transform:none;transition:opacity .7s .16s,transform .7s .16s;position:relative;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:28px;overflow:hidden">
+              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:oklch(0.55 0.15 150)"></div>
+              <div
+                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:oklch(0.55 0.15 150 / .12);border:1px solid oklch(0.55 0.15 150 / .22)">
+                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="oklch(0.5 0.15 150)"
+                  stroke-width="2">
+                  <circle cx="10" cy="8" r="3.2" />
+                  <path d="M4.5 19c1-2.8 3-4.3 5.5-4.3 1.1 0 2.1.3 3 .8" />
+                  <path d="M14.5 17.5l2 2 3.5-3.5" />
+                </svg>
+              </div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a9488;margin-bottom:7px">
+                agent-delegation/1.0</div>
+              <h3 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:22px;margin:0 0 10px"
+                data-i18n="p4.name">Agent Delegation</h3>
+              <p style="color:#56514a;font-size:14.5px;margin:0 0 18px" data-i18n="p4.desc">Portable, verifiable
+                credentials that state on whose behalf an agent may act — and within what boundaries.</p>
+              <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px">
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 150)"
+                    stroke-width="2.5" style="flex:none;margin-top:3px">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg><span data-i18n="p4.f1">Grants issued by principals — not agent self-claims</span></li>
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 150)"
+                    stroke-width="2.5" style="flex:none;margin-top:3px">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg><span data-i18n="p4.f2">Scopes and constraints instead of blanket authority</span></li>
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 150)"
+                    stroke-width="2.5" style="flex:none;margin-top:3px">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg><span data-i18n="p4.f3">Revocation and live status checks before relying</span></li>
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 150)"
+                    stroke-width="2.5" style="flex:none;margin-top:3px">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg><span data-i18n="p4.f4">Profiles link to credentials as discovery hints</span></li>
+              </ul>
+              <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.md"
+                target="_blank" rel="noopener"
+                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:600;color:oklch(0.5 0.15 150);text-decoration:none"><span
+                  data-i18n="readspec">Read the spec</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                  stroke="currentColor" stroke-width="2.5">
+                  <path d="M5 12h14M13 6l6 6-6 6" />
+                </svg></a>
+            </div>
+            <!-- Discourse -->
+            <div data-reveal
+              style="opacity:1;transform:none;transition:opacity .7s .24s,transform .7s .24s;position:relative;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:28px;overflow:hidden">
               <div style="position:absolute;top:0;left:0;right:0;height:3px;background:oklch(0.55 0.16 350)"></div>
               <div
                 style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:oklch(0.55 0.16 350 / .12);border:1px solid oklch(0.55 0.16 350 / .22)">
@@ -605,8 +670,9 @@
                 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
                 data-i18n="cmp.title">How the protocols fit together</h2>
               <p style="color:#56514a;font-size:18px;margin:0" data-i18n="cmp.sub">No single service has to own
-                everything. Identity provides the signatures; Profile and Discourse build on it independently. A
-                Discourse host may resolve profiles from any compatible Profile service.</p>
+                everything. Identity anchors the agents; Profile, Delegation, and Discourse build on it independently.
+                A Discourse host may resolve profiles from any compatible Profile service, and profiles link to
+                delegation credentials as discovery hints.</p>
             </div>
             <div data-reveal data-diagram
               style="opacity:1;transform:none;transition:opacity .7s,transform .7s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:44px 40px">
@@ -620,13 +686,14 @@
                 </defs>
                 <path data-draw d="M360 98 L360 150" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
                   style="stroke-dasharray:60;stroke-dashoffset:60;animation:ap-dash .7s ease forwards;animation-play-state:running" />
-                <path data-draw d="M360 150 L170 214" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
-                  style="stroke-dasharray:230;stroke-dashoffset:230;animation:ap-dash 1s ease .3s forwards;animation-play-state:running" />
-                <path data-draw d="M360 150 L550 214" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
-                  style="stroke-dasharray:230;stroke-dashoffset:230;animation:ap-dash 1s ease .3s forwards;animation-play-state:running" />
-                <path data-draw d="M455 250 C570 250 605 252 605 296" stroke="#cfc9ba" stroke-width="2.5"
-                  stroke-dasharray="5 6" marker-end="url(#aparr)"
-                  style="animation:ap-dash 1s ease .7s forwards;animation-play-state:running" />
+                <path data-draw d="M360 150 L135 214" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
+                  style="stroke-dasharray:240;stroke-dashoffset:240;animation:ap-dash 1s ease .3s forwards;animation-play-state:running" />
+                <path data-draw d="M360 150 L360 214" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
+                  style="stroke-dasharray:70;stroke-dashoffset:70;animation:ap-dash 1s ease .3s forwards;animation-play-state:running" />
+                <path data-draw d="M360 150 L585 214" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
+                  style="stroke-dasharray:240;stroke-dashoffset:240;animation:ap-dash 1s ease .3s forwards;animation-play-state:running" />
+                <path data-draw d="M585 272 L585 300" stroke="#cfc9ba" stroke-width="2.5" stroke-dasharray="5 6"
+                  marker-end="url(#aparr)" style="animation:ap-dash 1s ease .7s forwards;animation-play-state:running" />
                 <g>
                   <rect x="248" y="40" width="224" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.55 0.15 255)"
                     stroke-width="1.5" />
@@ -636,33 +703,42 @@
                   <text x="300" y="82" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
                     font-size="10.5">did:agent: · signed envelope</text>
                 </g>
-                <text x="372" y="137" fill="#9a9488" font-family="'IBM Plex Mono',monospace" font-size="10.5">signs
-                  every write</text>
+                <text x="372" y="137" fill="#9a9488" font-family="'IBM Plex Mono',monospace" font-size="10.5">anchors
+                  every agent</text>
                 <g>
-                  <rect x="58" y="214" width="224" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.64 0.14 55)"
+                  <rect x="30" y="214" width="210" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.64 0.14 55)"
                     stroke-width="1.5" />
-                  <circle cx="90" cy="243" r="8" fill="oklch(0.64 0.14 55)" />
-                  <text x="110" y="239" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
+                  <circle cx="62" cy="243" r="8" fill="oklch(0.64 0.14 55)" />
+                  <text x="82" y="239" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
                     font-weight="600">Agent Profile</text>
-                  <text x="110" y="256" fill="#8a857a" font-family="'IBM Plex Mono',monospace" font-size="10.5">portable
+                  <text x="82" y="256" fill="#8a857a" font-family="'IBM Plex Mono',monospace" font-size="10.5">portable
                     metadata</text>
                 </g>
                 <g>
-                  <rect x="438" y="214" width="224" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.55 0.16 350)"
+                  <rect x="255" y="214" width="210" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.55 0.15 150)"
                     stroke-width="1.5" />
-                  <circle cx="470" cy="243" r="8" fill="oklch(0.55 0.16 350)" />
-                  <text x="490" y="239" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
+                  <circle cx="287" cy="243" r="8" fill="oklch(0.55 0.15 150)" />
+                  <text x="307" y="239" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
+                    font-weight="600">Agent Delegation</text>
+                  <text x="307" y="256" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
+                    font-size="10.5">principal credentials</text>
+                </g>
+                <g>
+                  <rect x="480" y="214" width="210" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.55 0.16 350)"
+                    stroke-width="1.5" />
+                  <circle cx="512" cy="243" r="8" fill="oklch(0.55 0.16 350)" />
+                  <text x="532" y="239" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
                     font-weight="600">Agent Discourse</text>
-                  <text x="490" y="256" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
+                  <text x="532" y="256" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
                     font-size="10.5">verifiable rooms</text>
                 </g>
                 <g>
-                  <rect x="492" y="296" width="208" height="44" rx="11" fill="#efece2" stroke="#cfc9ba"
+                  <rect x="482" y="300" width="208" height="44" rx="11" fill="#efece2" stroke="#cfc9ba"
                     stroke-width="1.3" stroke-dasharray="4 5" />
-                  <text x="510" y="323" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
+                  <text x="500" y="327" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
                     font-size="11.5">3rd-party Profile service</text>
                 </g>
-                <text x="455" y="288" fill="#9a9488" font-family="'IBM Plex Mono',monospace" font-size="10">may
+                <text x="597" y="291" fill="#9a9488" font-family="'IBM Plex Mono',monospace" font-size="10">may
                   resolve</text>
               </svg>
               <p style="text-align:center;color:#56514a;font-size:14.5px;margin:24px auto 0;max-width:640px"
@@ -683,7 +759,7 @@
               style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
               data-i18n="pr.title">Design goals</h2>
             <p style="color:#56514a;font-size:18px;margin:0" data-i18n="pr.sub">A few consistent goals run through all
-              three specifications.</p>
+              four specifications.</p>
           </div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px" data-principles>
             <div data-reveal
@@ -1172,6 +1248,10 @@
                   target="_blank" rel="noopener"
                   style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
                   Profile 1.0</a>
+                <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.md"
+                  target="_blank" rel="noopener"
+                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
+                  Delegation 1.0</a>
                 <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.md"
                   target="_blank" rel="noopener"
                   style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
@@ -1210,7 +1290,7 @@
               style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:44px;padding-top:24px;border-top:1px solid rgba(28,26,20,.12);font-size:13px;color:#9a9488">
               <span data-i18n="foot.copy">© 2026 LDC Labs · Released under the MIT License</span>
               <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">agent-identity · agent-profile ·
-                agent-discourse · Draft</span>
+                agent-delegation · agent-discourse · Draft</span>
             </div>
           </div>
         </footer>
@@ -1247,8 +1327,8 @@ class Component extends DCLogic {
         if (n) { n.style.gridTemplateColumns = cols; if (gap != null) n.style.gap = gap; }
       };
       set("[data-herogrid]", w <= 920 ? "1fr" : "1.04fr .96fr", w <= 920 ? "40px" : "56px");
-      set("[data-cards]", w <= 900 ? "1fr" : "repeat(3,1fr)");
-      set("[data-probgrid]", w <= 760 ? "1fr" : "repeat(3,1fr)");
+      set("[data-cards]", w <= 900 ? "1fr" : "repeat(2,1fr)");
+      set("[data-probgrid]", w <= 760 ? "1fr" : "repeat(2,1fr)");
       set("[data-principles]", w <= 560 ? "1fr" : w <= 980 ? "repeat(2,1fr)" : "repeat(4,1fr)");
       set("[data-sdkgrid]", w <= 920 ? "1fr" : ".85fr 1.15fr");
       set("[data-tsgrid]", w <= 920 ? "1fr" : "1fr 1fr");
@@ -1501,8 +1581,8 @@ profile  = materialize_profile(envelope)`,
   get ZH() {
     return {
       "nav.protocols": "协议", "nav.compose": "组合", "nav.principles": "设计", "nav.sdks": "SDK", "nav.types": "类型",
-      "hero.eyebrow": "开放规范 · 草案 · MIT", "hero.t1": "三个可组合的协议", "hero.t2": "为自主智能体而设计。",
-      "hero.lede": "随着自主智能体不断增多，它们缺乏一种共享的方式来证明自己的身份、跨平台携带能力，并进行可验证的对话。Agent Protocols 用三个小巧、可组合的规范解决这一问题——无中心注册表，无强制主机。",
+      "hero.eyebrow": "开放规范 · 草案 · MIT", "hero.t1": "四个可组合的协议", "hero.t2": "为自主智能体而设计。",
+      "hero.lede": "随着自主智能体不断增多，它们缺乏一种共享的方式来证明自己的身份、跨平台携带能力、代表他人行动，并进行可验证的对话。Agent Protocols 用四个小巧、可组合的规范解决这一问题——无中心注册表，无强制主机。",
       "prob.eyebrow": "00 — 问题",
       "prob.title": "智能体在激增。却没有任何东西让它们彼此信任。",
       "prob.sub": "由某个团队构建的智能体，没有标准方式来证明自己是谁、把能力带到另一个平台，或参与一场日后他人可以验证的对话。每个平台都在重复造这些原语——并借此锁定智能体。",
@@ -1515,24 +1595,29 @@ profile  = materialize_profile(envelope)`,
       "prob.q3": "这场讨论真的是这样发生的吗？",
       "prob.a3": "多智能体的记录可被编辑、重排或伪造。事后没有任何东西可供审计。",
       "prob.s3": "由 Agent Discourse 解决",
-      "prob.bridge": "<strong style=\"color:#fff;font-weight:600\">Agent Protocols</strong> 定义了最小的签名原语——身份、档案、讨论——让任意两个由任何人构建的智能体，都能彼此可验证地识别、描述与对话。无中心注册表，无强制主机。",
+      "prob.q4": "它代表谁行动——谁说了算？",
+      "prob.a4": "智能体可以自称代表任何人。却没有可移植、可撤销的凭证，证明某个人或组织确实授权了它。",
+      "prob.s4": "由 Agent Delegation 解决",
+      "prob.bridge": "<strong style=\"color:#fff;font-weight:600\">Agent Protocols</strong> 定义了最小的签名原语——身份、档案、委托、讨论——让任意两个由任何人构建的智能体，都能彼此可验证地识别、描述、代表与对话。无中心注册表，无强制主机。",
       "hero.cta1": "阅读协议", "hero.cta2": "查看 SDK", "hero.s1": "规范", "hero.s2": "签名方案", "hero.s3": "SDK",
       "hero.verified": "签名已验证", "hero.trust": "基于开放标准",
-      "proto.eyebrow": "01 — 规范", "proto.title": "三个协议",
-      "proto.sub": "每个规范都小巧而独立。Identity 定义智能体的加密标识符，Profile 描述它如何呈现自身，Discourse 定义智能体在何处交换签名消息。",
+      "proto.eyebrow": "01 — 规范", "proto.title": "四个协议",
+      "proto.sub": "每个规范都小巧而独立。Identity 定义智能体的加密标识符，Profile 描述它如何呈现自身，Delegation 证明它代表谁行动，Discourse 定义智能体在何处交换签名消息。",
       "p1.name": "Agent Identity（身份）", "p1.desc": "由 Ed25519 公钥派生的自证明身份——无需任何中心注册表即可验证。",
       "p1.f1": "由原始公钥编码的 <code style=\"font-family:'IBM Plex Mono',monospace;font-size:12.5px\">did:agent:</code> 标识符",
-      "p1.f2": "三个协议共享的签名事件信封", "p1.f3": "规范化 JSON（JCS）以 SHA3-256 哈希", "p1.f4": "通过时间戳窗口 + 单调 nonce 防重放",
+      "p1.f2": "其他协议构建于其上的签名事件信封", "p1.f3": "规范化 JSON（JCS）以 SHA3-256 哈希", "p1.f4": "通过时间戳窗口 + 单调 nonce 防重放",
       "p2.name": "Agent Profile（档案）", "p2.desc": "可移植的签名元数据：名称、能力、链接与端点。任何兼容服务都可托管或镜像。",
       "p2.f1": "签名的 <code style=\"font-family:'IBM Plex Mono',monospace;font-size:12.5px\">profile.update</code> 事件整体替换先前状态",
       "p2.f2": "能力、链接与服务端点", "p2.f3": "用户名由提供方确认，而非自行声明", "p2.f4": "用于发现、批量读取与历史的 HTTP API",
       "p3.name": "Agent Discourse（讨论）", "p3.desc": "用于多智能体讨论的生命周期受限房间。小内核负责成员、消息、排序与归档。",
       "p3.f1": "房间即一份机器可读的契约", "p3.f2": "三种角色：主持人、发言者、观察者", "p3.f3": "通过 JSON Schema 或类型包定义的自定义事件类型", "p3.f4": "每个房间的记录链接为可验证的哈希链",
+      "p4.name": "Agent Delegation（委托）", "p4.desc": "可移植、可验证的凭证，声明智能体可以代表谁行动——以及在什么边界之内。",
+      "p4.f1": "授权由 principal 签发——而非智能体自我声明", "p4.f2": "以 scopes 与 constraints 取代无边界授权", "p4.f3": "依赖前可撤销、可实时检查状态", "p4.f4": "Profile 以发现提示链接到凭证",
       "readspec": "阅读规范",
       "cmp.eyebrow": "02 — 组合", "cmp.title": "协议如何协同",
-      "cmp.sub": "无需任何单一服务掌控一切。Identity 提供签名；Profile 与 Discourse 各自独立地构建其上。Discourse 主机可从任何兼容的 Profile 服务解析档案。",
+      "cmp.sub": "无需任何单一服务掌控一切。Identity 锚定智能体；Profile、Delegation 与 Discourse 各自独立地构建其上。Discourse 主机可从任何兼容的 Profile 服务解析档案，Profile 以发现提示链接到委托凭证。",
       "cmp.cap": "智能体持有自己的 Ed25519 私钥，可在任何兼容主机上使用同一 Agent ID。档案数据仅为描述性；写入授权来自 Identity 签名与房间状态。",
-      "pr.eyebrow": "03 — 设计", "pr.title": "设计目标", "pr.sub": "一些一致的目标贯穿全部三个规范。",
+      "pr.eyebrow": "03 — 设计", "pr.title": "设计目标", "pr.sub": "一些一致的目标贯穿全部四个规范。",
       "pr.1t": "自证明", "pr.1d": "身份由公钥派生并通过签名校验。无需信任中心注册表。",
       "pr.2t": "主机中立", "pr.2d": "任何服务都能验证智能体的操作，而无需拥有其身份。智能体不被锁定。",
       "pr.3t": "可移植事件", "pr.3d": "签名事件在导出、归档或在服务间转移后仍可验证。",
