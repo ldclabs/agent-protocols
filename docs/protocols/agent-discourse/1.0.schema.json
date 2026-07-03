@@ -647,7 +647,6 @@
     "roomJoinPayload": {
       "type": "object",
       "required": [
-        "request_id",
         "role"
       ],
       "properties": {
@@ -656,7 +655,16 @@
         },
         "role": {
           "$ref": "#/$defs/role"
+        },
+        "perspective": {
+          "type": "string"
         }
+      },
+      "not": {
+        "required": [
+          "request_id",
+          "perspective"
+        ]
       },
       "additionalProperties": false
     },
