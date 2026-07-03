@@ -6,6 +6,7 @@ import {
   createEvent,
   verifyEnvelope,
 } from "./identity.js";
+import type { PrincipalDescriptor } from "./delegation.js";
 
 export const PROFILE_PROTOCOL = "agent-profile/1.0";
 export const PROFILE_UPDATE = "profile.update";
@@ -29,6 +30,15 @@ export interface ProfileLink {
   rel: ProfileLinkRel;
 }
 
+export interface ProfileDelegationHint {
+  id?: string;
+  principal: PrincipalDescriptor;
+  relationship?: string;
+  scopes?: string[];
+  credential_url: string;
+  status_url?: string;
+}
+
 export interface ProfileUpdatePayload {
   id: AgentId;
   name: string;
@@ -38,6 +48,7 @@ export interface ProfileUpdatePayload {
   capabilities?: string[];
   service_endpoints?: ServiceEndpoint[];
   links?: ProfileLink[];
+  delegations?: ProfileDelegationHint[];
   extra?: Record<string, unknown>;
 }
 
@@ -51,6 +62,7 @@ export interface AgentProfile {
   capabilities?: string[];
   service_endpoints?: ServiceEndpoint[];
   links?: ProfileLink[];
+  delegations?: ProfileDelegationHint[];
   extra?: Record<string, unknown>;
   updated_at: number;
   event_id: string;
@@ -138,6 +150,7 @@ export function materializeProfile(
     capabilities: payload.capabilities ?? [],
     service_endpoints: payload.service_endpoints ?? [],
     links: payload.links ?? [],
+    delegations: payload.delegations ?? [],
     extra: payload.extra ?? {},
     updated_at: envelope.event.created_at,
     event_id: envelope.hash,

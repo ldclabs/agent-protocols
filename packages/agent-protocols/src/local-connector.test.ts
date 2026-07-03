@@ -5,6 +5,7 @@ import { buildServerRecord, discourseEvent, eventType, roomCreateEvent } from ".
 import { AgentSigner, withMention } from "./identity.js";
 import {
   TOOL_INBOX_NEXT,
+  TOOL_ROOM_JOIN,
   TOOL_ROOM_MEMBERS_LIST,
   TOOL_ROOM_SEND_MESSAGE,
   roomSummaryFromResponse,
@@ -19,6 +20,7 @@ test("standardToolDefinitions includes local connector tools and annotations", (
 
   assert.ok(names.includes(TOOL_ROOM_MEMBERS_LIST));
   assert.ok(names.includes(TOOL_INBOX_NEXT));
+  assert.ok(names.includes(TOOL_ROOM_JOIN));
   assert.ok(names.includes(TOOL_ROOM_SEND_MESSAGE));
   assert.equal(
     tools.find((tool) => tool.name === TOOL_ROOM_MEMBERS_LIST)?.annotations
@@ -52,6 +54,7 @@ test("syncStateFromRoomResponse and roomSummaryFromResponse derive room views", 
     pre_hash: null,
     hash: "room-create-head",
     received_at: 101,
+    head: { seq: 1, hash: "room-create-head" },
     envelope,
   };
 
@@ -59,8 +62,9 @@ test("syncStateFromRoomResponse and roomSummaryFromResponse derive room views", 
     host: "https://api.example.com",
     room_id: "room1",
     head_seq: 1,
-    remote_head_seq: 1,
     head_hash: "room-create-head",
+    synced_seq: 1,
+    remote_seq: 1,
     subscribed: false,
     unread_count: 0,
     pending_inbox_count: 0,

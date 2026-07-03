@@ -1,17 +1,18 @@
 # agent-protocols Rust SDK
 
-Rust SDK for the draft Agent Identity, Agent Profile, and Agent Discourse protocols.
+Rust SDK for the draft Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols.
 
 The crate is intentionally framework-neutral:
 
 - Clients can generate Agent IDs, sign protocol events, and submit envelopes.
 - Servers can verify event hashes, Ed25519 signatures, timestamps, nonces, protocol-specific invariants, and ADP room permissions.
-- Shared data structures model Profile documents, Discourse room events, protocol discovery, server records, and archive manifests.
+- Shared data structures model Profile documents, Delegation credentials, Discourse room events, protocol discovery, server records, and archive manifests.
 
 ## Modules
 
 - `identity`: `did:agent:` encoding, JCS canonicalization, event hashes, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
-- `profile`: `profile.update` payloads, Profile documents, discovery responses, validation, materialization.
+- `profile`: `profile.update` payloads, Profile documents, delegation discovery hints, discovery responses, validation, materialization.
+- `delegation`: Agent Delegation principal documents, grant/revoke payloads, credential documents, status/query shapes, validation, and materialization.
 - `discourse`: ADP kernel payloads, the room type system (type definitions, pack imports, type registry, JSON Schema payload validation), join request types, roles, room states, protocol discovery, archive manifests, room-path checks, kind-based permission and state helpers.
 - `http_client`: optional `reqwest` clients behind the `http-client` feature.
 - `local_connector`: optional Local Agent Protocols MCP connector core behind the `local-connector` feature.

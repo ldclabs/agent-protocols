@@ -36,7 +36,10 @@ export const TOOL_DRAFT_COMMIT = "agent_protocols_draft_commit";
 export const TOOL_DRAFT_DROP = "agent_protocols_draft_drop";
 export const TOOL_PROFILE_UPDATE = "agent_protocols_profile_update";
 export const TOOL_ROOM_CREATE = "agent_protocols_room_create";
+export const TOOL_ROOM_JOIN = "agent_protocols_room_join";
+/** @deprecated Use `agent_protocols_room_join`. */
 export const TOOL_ROOM_JOIN_REQUEST = "agent_protocols_room_join_request";
+/** @deprecated Use `agent_protocols_room_join`. */
 export const TOOL_ROOM_JOIN_WHEN_APPROVED =
   "agent_protocols_room_join_when_approved";
 export const TOOL_ROOM_LEAVE = "agent_protocols_room_leave";
@@ -77,6 +80,7 @@ export type LocalConnectorToolName =
   | typeof TOOL_DRAFT_DROP
   | typeof TOOL_PROFILE_UPDATE
   | typeof TOOL_ROOM_CREATE
+  | typeof TOOL_ROOM_JOIN
   | typeof TOOL_ROOM_JOIN_REQUEST
   | typeof TOOL_ROOM_JOIN_WHEN_APPROVED
   | typeof TOOL_ROOM_LEAVE
@@ -186,8 +190,13 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
     [TOOL_DRAFT_DROP, "Drop a local held draft without submitting it.", false, true, false],
     [TOOL_PROFILE_UPDATE, "Sign and submit a profile.update envelope.", false, false, true],
     [TOOL_ROOM_CREATE, "Sign and submit a room.create envelope.", false, false, true],
-    [TOOL_ROOM_JOIN_REQUEST, "Create an authenticated room join request.", false, false, true],
-    [TOOL_ROOM_JOIN_WHEN_APPROVED, "Sign and submit room.join after approval.", false, true, true],
+    [
+      TOOL_ROOM_JOIN,
+      "Create a join request when needed or sign and submit room.join.",
+      false,
+      false,
+      true,
+    ],
     [TOOL_ROOM_LEAVE, "Sign and submit room.leave.", false, false, true],
     [TOOL_ROOM_SEND_MESSAGE, "Sign and submit message.create.", false, false, true],
     [TOOL_ROOM_SUBMIT_EVENT, "Sign and submit a room-defined event.", false, false, true],
@@ -212,8 +221,9 @@ export interface SyncState {
   host: string;
   room_id: string;
   head_seq: number;
-  remote_head_seq: number;
-  head_hash?: string;
+  head_hash: string;
+  synced_seq: number;
+  remote_seq: number;
   subscribed: boolean;
   unread_count: number;
   pending_inbox_count: number;
@@ -412,15 +422,17 @@ export function syncStateFromRoomResponse(
     subscribed?: boolean;
     unreadCount?: number;
     pendingInboxCount?: number;
-    remoteHeadSeq?: number;
+    remoteSeq?: number;
   } = {},
 ): SyncState {
+  const head = room.head ?? { seq: room.seq, hash: room.hash };
   return {
     host: normalizeHost(host),
     room_id: room.id,
-    head_seq: room.seq,
-    remote_head_seq: options.remoteHeadSeq ?? room.seq,
-    head_hash: room.hash,
+    head_seq: head.seq,
+    head_hash: head.hash,
+    synced_seq: room.seq,
+    remote_seq: options.remoteSeq ?? room.seq,
     subscribed: options.subscribed ?? false,
     unread_count: options.unreadCount ?? 0,
     pending_inbox_count: options.pendingInboxCount ?? 0,

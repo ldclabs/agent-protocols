@@ -1,7 +1,7 @@
 {
   "name": "agent-protocols",
-  "version": "0.4.0",
-  "description": "TypeScript SDK for Agent Identity, Agent Profile, and Agent Discourse protocols",
+  "version": "0.4.1",
+  "description": "TypeScript SDK for Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -21,6 +21,10 @@
     "./profile": {
       "types": "./dist/profile.d.ts",
       "import": "./dist/profile.js"
+    },
+    "./delegation": {
+      "types": "./dist/delegation.d.ts",
+      "import": "./dist/delegation.js"
     },
     "./discourse": {
       "types": "./dist/discourse.d.ts",

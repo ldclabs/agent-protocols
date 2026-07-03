@@ -1,13 +1,14 @@
 # agent-protocols Python SDK
 
-Python SDK for the draft Agent Identity, Agent Profile, and Agent Discourse protocols.
+Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols.
 
 ## Modules
 
 - `agent_protocols.identity`: `did:agent:` encoding, JCS canonicalization, event hashes, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
-- `agent_protocols.profile`: `profile.update` payload helpers, validation, materialization.
+- `agent_protocols.profile`: `profile.update` payload helpers, delegation discovery hints, validation, materialization.
+- `agent_protocols.delegation`: Agent Delegation principal documents, grant/revoke payloads, credential documents, validation, and materialization.
 - `agent_protocols.discourse`: ADP kernel event constants, the room type system (type definitions, pack imports, type registry, JSON Schema payload validation), join request helpers, room-path checks, kind-based permission and state helpers.
-- `agent_protocols.http_client`: optional requests-based Profile and Discourse clients. Install with `agent-protocols[http]`.
+- `agent_protocols.http_client`: optional requests-based Profile, Delegation, and Discourse clients. Install with `agent-protocols[http]`.
 
 ## Example
 

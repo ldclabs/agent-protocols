@@ -331,14 +331,26 @@ pub struct RoomResponse {
     pub pre_hash: Option<String>,
     pub hash: String,
     pub received_at: i64,
+    /// Latest accepted non-signal record. Falls back to `seq`/`hash` on older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<RoomHead>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelope: Option<Envelope<RoomCreatePayload>>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RoomHead {
+    pub seq: u64,
+    pub hash: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RoomJoinPayload {
-    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub role: Role,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perspective: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -853,6 +865,20 @@ pub fn validate_message_create_payload(payload: &MessageCreatePayload) -> Result
     Ok(())
 }
 
+pub fn validate_room_join_payload(payload: &RoomJoinPayload) -> Result<()> {
+    if matches!(&payload.request_id, Some(request_id) if request_id.trim().is_empty()) {
+        return Err(SdkError::InvalidPayload(
+            "request_id must not be empty".to_owned(),
+        ));
+    }
+    if payload.request_id.is_some() && payload.perspective.is_some() {
+        return Err(SdkError::InvalidPayload(
+            "room.join payload cannot include both request_id and perspective".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// The effective set of type definitions active in a room.
 #[derive(Clone, Debug, Default)]
 pub struct TypeRegistry {
@@ -1157,6 +1183,7 @@ where
 pub struct PermissionContext {
     pub role: Option<Role>,
     pub is_creator: bool,
+    pub public_join_allowed: bool,
     pub join_request_approved: bool,
 }
 
@@ -1195,7 +1222,7 @@ pub fn can_submit_event(
 ) -> bool {
     match event_type {
         event_type::ROOM_CREATE => true,
-        event_type::ROOM_JOIN => context.join_request_approved,
+        event_type::ROOM_JOIN => context.public_join_allowed || context.join_request_approved,
         event_type::ROOM_LEAVE => context.is_creator || context.role.is_some(),
         event_type::ROOM_JOIN_REVIEW
         | event_type::ROOM_MEMBER_ROLE_UPDATE

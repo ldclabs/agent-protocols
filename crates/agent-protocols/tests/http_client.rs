@@ -11,13 +11,17 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use agent_protocols::delegation::{
+    delegation_revoke_event, DelegationQueryRequest, DelegationRevokePayload, DelegationStatus,
+};
 use agent_protocols::discourse::{
     build_server_record, discourse_event, event_type, room_create_event, AgentStatusInput, Role,
     RoomCreatePayload, RoomJoinPayload, RoomJoinRequestInput, RoomLeavePayload, Visibility,
 };
 use agent_protocols::error::SdkError;
 use agent_protocols::http_client::{
-    sse_events_url, DiscourseClient, ProfileClient, PublicRoomsOptions, RoomEventsOptions,
+    sse_events_url, DelegationClient, DiscourseClient, ProfileClient, PublicRoomsOptions,
+    RoomEventsOptions,
 };
 use agent_protocols::identity::{AgentId, AgentSigner};
 use agent_protocols::profile::{profile_update_event, ProfileUpdatePayload};
@@ -174,8 +178,9 @@ fn server_record_body() -> String {
             1,
             "room-head-hash",
             RoomJoinPayload {
-                request_id: "jr1".to_owned(),
+                request_id: Some("jr1".to_owned()),
                 role: Role::Speaker,
+                perspective: None,
             },
         ))
         .unwrap();
@@ -329,8 +334,9 @@ fn discourse_client_round_trips_every_endpoint() {
                 1,
                 "room-head-hash",
                 RoomJoinPayload {
-                    request_id: "jr1".to_owned(),
+                    request_id: Some("jr1".to_owned()),
                     role: Role::Speaker,
+                    perspective: None,
                 },
             ))
             .unwrap();
@@ -447,6 +453,88 @@ fn discourse_client_round_trips_every_endpoint() {
     );
     assert!(requests[15].body.contains("\"state\":\"idle\""));
     assert_eq!(requests[16].path, "/v1/rooms/room1/archive");
+}
+
+#[test]
+fn delegation_client_round_trips_every_endpoint() {
+    let server = MockServer::start();
+    let aid = sample_agent_id();
+    let credential_body = format!(
+        r#"{{"id":"del_1","protocol":"agent-delegation/1.0","principal":{{"id":"https://al.ink/yan"}},"controller":"{aid}","subject":"{aid}","scopes":["inbox.screen"],"status":"active","updated_at":1,"event_id":"e"}}"#
+    );
+    let status_body = r#"{"id":"del_1","status":"active","checked_at":2,"event_id":"e"}"#;
+
+    server.enqueue(
+        200,
+        r#"{"protocol":"agent-delegation/1.0","service":"https://al.ink","endpoints":{"delegations":"https://al.ink/v1/delegations"}}"#,
+    );
+    server.enqueue(
+        200,
+        format!(r#"{{"id":"https://al.ink/yan","controllers":["{aid}"]}}"#),
+    );
+    server.enqueue(200, credential_body);
+    server.enqueue(200, status_body);
+    server.enqueue(200, r#"{"result":[]}"#);
+    server.enqueue(200, status_body);
+    server.enqueue(200, r#"{"result":[]}"#);
+
+    block_on(async {
+        let client =
+            DelegationClient::with_client(format!("{}/", server.base_url), no_proxy_client());
+        let signer = AgentSigner::from_seed([4; 32]);
+        let agent_id: AgentId = aid.parse().unwrap();
+
+        let discovery = client.protocol().await.unwrap();
+        assert_eq!(discovery.protocol, "agent-delegation/1.0");
+        let principal = client
+            .principal(Some(&format!("{}/yan", server.base_url)))
+            .await
+            .unwrap();
+        assert_eq!(principal.controllers, vec![agent_id.clone()]);
+        let credential = client.delegation("del_1").await.unwrap();
+        assert_eq!(credential.id, "del_1");
+        let status = client.delegation_status("del_1").await.unwrap();
+        assert_eq!(status.status, DelegationStatus::Active);
+        let events = client.delegation_events("del_1").await.unwrap();
+        assert!(events.result.is_empty());
+
+        let envelope = signer
+            .sign_event(delegation_revoke_event(
+                signer.agent_id(),
+                1,
+                1,
+                DelegationRevokePayload {
+                    id: "del_1".to_owned(),
+                    principal_id: "https://al.ink/yan".to_owned(),
+                    reason: None,
+                },
+            ))
+            .unwrap();
+        let response = client.submit_delegation_event(&envelope).await.unwrap();
+        assert_eq!(response["status"], "active");
+        let query = client
+            .query_delegations(&DelegationQueryRequest {
+                subject: Some(agent_id),
+                status: Some(DelegationStatus::Active),
+                limit: Some(20),
+                ..DelegationQueryRequest::default()
+            })
+            .await
+            .unwrap();
+        assert!(query.result.is_empty());
+    });
+
+    let requests = server.requests();
+    assert_eq!(requests[0].path, "/.well-known/agent-delegation");
+    assert_eq!(requests[1].path, "/yan");
+    assert_eq!(requests[2].path, "/v1/delegations/del_1");
+    assert_eq!(requests[3].path, "/v1/delegations/del_1/status");
+    assert_eq!(requests[4].path, "/v1/delegations/del_1/events");
+    assert_eq!(requests[5].method, "POST");
+    assert_eq!(requests[5].path, "/v1/delegations");
+    assert_eq!(requests[6].method, "POST");
+    assert_eq!(requests[6].path, "/v1/delegations/query");
+    assert!(requests[6].body.contains("active"));
 }
 
 #[test]

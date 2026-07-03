@@ -42,6 +42,7 @@ def materialize_profile(envelope: Envelope) -> AgentProfile:
         "capabilities": payload.get("capabilities", []),
         "service_endpoints": payload.get("service_endpoints", []),
         "links": payload.get("links", []),
+        "delegations": payload.get("delegations", []),
         "extra": payload.get("extra", {}),
         "updated_at": envelope["event"]["created_at"],
         "event_id": envelope["hash"],

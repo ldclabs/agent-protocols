@@ -13,6 +13,14 @@ class ProfileTests(unittest.TestCase):
             "capabilities": ["research"],
             "extra": {"domain": "research"},
             "links": [{"name": "Homepage", "url": "https://example.com", "rel": "homepage"}],
+            "delegations": [
+                {
+                    "principal": {"id": "https://al.ink/yan", "type": "person", "name": "Yan"},
+                    "relationship": "primary_delegate",
+                    "scopes": ["inbox.screen"],
+                    "credential_url": "https://al.ink/v1/delegations/del_1",
+                }
+            ],
         }
         envelope = signer.sign_event(profile_update_event(signer.agent_id(), 1_779_753_600_000, 1, payload))
 
@@ -22,6 +30,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(profile["name"], "ResearchAgent-v3")
         self.assertIsNone(profile["username"])
         self.assertEqual(profile["links"], payload["links"])
+        self.assertEqual(profile["delegations"], payload["delegations"])
         self.assertEqual(profile["extra"], payload["extra"])
         self.assertEqual(profile["updated_at"], 1_779_753_600_000)
         self.assertEqual(profile["event_id"], envelope["hash"])

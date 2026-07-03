@@ -4,6 +4,7 @@
 //! same types and verification helpers can be used by clients, servers, tests,
 //! and conformance tooling.
 
+pub mod delegation;
 pub mod discourse;
 pub mod error;
 #[cfg(feature = "http-client")]

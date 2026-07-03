@@ -170,12 +170,20 @@ export interface RoomResponse {
   pre_hash: string | null;
   hash: string;
   received_at: number;
+  /** Latest accepted non-signal record. Falls back to `seq`/`hash` on older hosts. */
+  head?: RoomHead;
   envelope?: Envelope<RoomCreatePayload>;
 }
 
+export interface RoomHead {
+  seq: number;
+  hash: string;
+}
+
 export interface RoomJoinPayload {
-  request_id: string;
+  request_id?: string;
   role: Role;
+  perspective?: string;
 }
 
 export interface RoomJoinRequestInput {
@@ -325,6 +333,7 @@ export interface ArchiveManifest {
 export interface PermissionContext {
   role?: Role;
   isCreator?: boolean;
+  publicJoinAllowed?: boolean;
   joinRequestApproved?: boolean;
 }
 
@@ -656,6 +665,21 @@ export function validateMessageCreatePayload(
   }
 }
 
+export function validateRoomJoinPayload(payload: RoomJoinPayload): void {
+  if (!includes(ROLES, payload.role)) {
+    throw protocolError("invalid_event", `invalid room role: ${payload.role}`);
+  }
+  if (payload.request_id !== undefined && payload.request_id.trim() === "") {
+    throw protocolError("invalid_event", "request_id must not be empty");
+  }
+  if (payload.request_id !== undefined && payload.perspective !== undefined) {
+    throw protocolError(
+      "invalid_event",
+      "room.join payload cannot include both request_id and perspective",
+    );
+  }
+}
+
 /** The effective set of type definitions active in a room. */
 export class TypeRegistry {
   private readonly types = new Map<string, TypeDef>();
@@ -931,7 +955,7 @@ export function canSubmitEvent(
     case eventType.ROOM_CREATE:
       return true;
     case eventType.ROOM_JOIN:
-      return Boolean(context.joinRequestApproved);
+      return Boolean(context.publicJoinAllowed || context.joinRequestApproved);
     case eventType.ROOM_LEAVE:
       return Boolean(context.isCreator) || context.role !== undefined;
     case eventType.ROOM_JOIN_REVIEW:

@@ -116,6 +116,14 @@ test("materializes payloads that carry every optional collection", () => {
     capabilities: ["research"],
     service_endpoints: [{ type: "a2a", url: "https://example.com" }],
     links: [{ name: "Home", url: "https://example.com", rel: "homepage" }],
+    delegations: [
+      {
+        principal: { id: "https://al.ink/yan", type: "person", name: "Yan" },
+        relationship: "primary_delegate",
+        scopes: ["inbox.screen"],
+        credential_url: "https://al.ink/v1/delegations/del_1",
+      },
+    ],
     extra: { domain: "research" },
   };
   const profile = materializeProfile(
@@ -123,4 +131,5 @@ test("materializes payloads that carry every optional collection", () => {
   );
   assert.deepEqual(profile.service_endpoints, payload.service_endpoints);
   assert.deepEqual(profile.capabilities, payload.capabilities);
+  assert.deepEqual(profile.delegations, payload.delegations);
 });

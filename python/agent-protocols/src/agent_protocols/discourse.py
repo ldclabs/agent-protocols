@@ -94,6 +94,7 @@ class PermissionContext(TypedDict, total=False):
 
     role: Role
     is_creator: bool
+    public_join_allowed: bool
     join_request_approved: bool
 
 
@@ -438,6 +439,19 @@ def validate_message_create_payload(payload: dict[str, Any]) -> None:
         raise AgentProtocolError("invalid_event", "content_type must not be empty")
 
 
+def validate_room_join_payload(payload: dict[str, Any]) -> None:
+    if payload.get("role") not in ROLES:
+        raise AgentProtocolError("invalid_event", f"invalid room role: {payload.get('role')}")
+    request_id = payload.get("request_id")
+    if request_id is not None and not str(request_id).strip():
+        raise AgentProtocolError("invalid_event", "request_id must not be empty")
+    if request_id is not None and "perspective" in payload:
+        raise AgentProtocolError(
+            "invalid_event",
+            "room.join payload cannot include both request_id and perspective",
+        )
+
+
 def server_record_hash_payload(
     room_id: str,
     seq: int,
@@ -537,7 +551,7 @@ def can_submit_event(
     if event_type == ROOM_CREATE:
         return True
     if event_type == ROOM_JOIN:
-        return bool(context.get("join_request_approved"))
+        return bool(context.get("public_join_allowed") or context.get("join_request_approved"))
     if event_type == ROOM_LEAVE:
         return is_creator or role is not None
     if event_type in {ROOM_JOIN_REVIEW, ROOM_MEMBER_ROLE_UPDATE, ROOM_CLOSE, ROOM_CANCEL, TYPE_DEFINE}:

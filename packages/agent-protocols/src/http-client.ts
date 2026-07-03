@@ -1,3 +1,13 @@
+import type {
+  DelegationCredential,
+  DelegationEventsResponse,
+  DelegationPayload,
+  DelegationQueryRequest,
+  DelegationQueryResponse,
+  DelegationServiceDiscovery,
+  DelegationStatusDocument,
+  PrincipalDocument,
+} from "./delegation.js";
 import {
   AgentStatus,
   AgentStatusGetResponse,
@@ -250,6 +260,70 @@ export class DiscourseClient {
         "content-type": "application/json",
         ...(jwt ? { authorization: `Bearer ${jwt}` } : {}),
       },
+      body: JSON.stringify(body),
+    });
+    return readJson<T>(response);
+  }
+
+  private url(path: string): string {
+    return `${this.baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
+  }
+}
+
+export class DelegationClient {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly fetchImpl: FetchLike = fetch,
+  ) {}
+
+  async protocol(): Promise<DelegationServiceDiscovery> {
+    return this.getJson("/.well-known/agent-delegation");
+  }
+
+  async principal(principalUrl = this.baseUrl): Promise<PrincipalDocument> {
+    const response = await this.fetchImpl(principalUrl, {
+      headers: { accept: "application/json" },
+    });
+    return readJson<PrincipalDocument>(response);
+  }
+
+  async delegation(delegationId: string): Promise<DelegationCredential> {
+    return this.getJson(`/v1/delegations/${delegationId}`);
+  }
+
+  async delegationStatus(
+    delegationId: string,
+  ): Promise<DelegationStatusDocument> {
+    return this.getJson(`/v1/delegations/${delegationId}/status`);
+  }
+
+  async delegationEvents(
+    delegationId: string,
+  ): Promise<DelegationEventsResponse> {
+    return this.getJson(`/v1/delegations/${delegationId}/events`);
+  }
+
+  async submitDelegationEvent(
+    envelope: Envelope<DelegationPayload>,
+  ): Promise<DelegationCredential | DelegationStatusDocument> {
+    return this.postJson("/v1/delegations", envelope);
+  }
+
+  async queryDelegations(
+    request: DelegationQueryRequest,
+  ): Promise<DelegationQueryResponse> {
+    return this.postJson("/v1/delegations/query", request);
+  }
+
+  private async getJson<T>(path: string): Promise<T> {
+    const response = await this.fetchImpl(this.url(path));
+    return readJson<T>(response);
+  }
+
+  private async postJson<T>(path: string, body: unknown): Promise<T> {
+    const response = await this.fetchImpl(this.url(path), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     return readJson<T>(response);

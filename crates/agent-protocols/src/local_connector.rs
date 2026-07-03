@@ -52,6 +52,7 @@ pub const TOOL_DRAFT_COMMIT: &str = "agent_protocols_draft_commit";
 pub const TOOL_DRAFT_DROP: &str = "agent_protocols_draft_drop";
 pub const TOOL_PROFILE_UPDATE: &str = "agent_protocols_profile_update";
 pub const TOOL_ROOM_CREATE: &str = "agent_protocols_room_create";
+pub const TOOL_ROOM_JOIN: &str = "agent_protocols_room_join";
 pub const TOOL_ROOM_JOIN_REQUEST: &str = "agent_protocols_room_join_request";
 pub const TOOL_ROOM_JOIN_WHEN_APPROVED: &str = "agent_protocols_room_join_when_approved";
 pub const TOOL_ROOM_LEAVE: &str = "agent_protocols_room_leave";
@@ -256,17 +257,10 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
             true,
         ),
         (
-            TOOL_ROOM_JOIN_REQUEST,
-            "Create an authenticated room join request.",
+            TOOL_ROOM_JOIN,
+            "Create a join request when needed or sign and submit room.join.",
             false,
             false,
-            true,
-        ),
-        (
-            TOOL_ROOM_JOIN_WHEN_APPROVED,
-            "Sign and submit room.join after approval.",
-            false,
-            true,
             true,
         ),
         (
@@ -328,9 +322,9 @@ pub struct SyncState {
     pub host: String,
     pub room_id: String,
     pub head_seq: u64,
-    pub remote_head_seq: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub head_hash: Option<String>,
+    pub head_hash: String,
+    pub synced_seq: u64,
+    pub remote_seq: u64,
     pub subscribed: bool,
     pub unread_count: usize,
     pub pending_inbox_count: usize,
@@ -611,6 +605,8 @@ struct LocalRoomState {
     room: RoomResponse,
     head_seq: u64,
     head_hash: Option<String>,
+    synced_seq: u64,
+    synced_hash: Option<String>,
     subscribed: bool,
     members: BTreeMap<AgentId, RoomMemberView>,
     timeline: Vec<TimelineItem>,
@@ -626,6 +622,8 @@ impl LocalRoomState {
             room,
             head_seq: 0,
             head_hash: None,
+            synced_seq: 0,
+            synced_hash: None,
             subscribed: false,
             members: BTreeMap::new(),
             timeline: Vec::new(),
@@ -731,8 +729,11 @@ impl LocalConnector {
         let room_id = room.id.clone();
         self.observe_room(host, room);
         if let Some(entry) = self.state.rooms.get_mut(&room_id) {
-            entry.head_seq = entry.room.seq;
-            entry.head_hash = Some(entry.room.hash.clone());
+            let (head_seq, head_hash) = room_response_head(&entry.room);
+            entry.head_seq = head_seq;
+            entry.head_hash = Some(head_hash);
+            entry.synced_seq = entry.room.seq;
+            entry.synced_hash = Some(entry.room.hash.clone());
         }
     }
 
@@ -752,11 +753,16 @@ impl LocalConnector {
                 return Ok(());
             }
             validate_next_record(room, &record)?;
+            validate_record_base_precondition(room, &record)?;
 
             let item = TimelineItem::from_record(&record);
             apply_record_projection(room, &record, &item, &active_agent, &mut new_inbox)?;
-            room.head_seq = record.seq;
-            room.head_hash = Some(record.hash.clone());
+            if record_advances_room_head(room, &record) {
+                room.head_seq = record.seq;
+                room.head_hash = Some(record.hash.clone());
+            }
+            room.synced_seq = record.seq;
+            room.synced_hash = Some(record.hash.clone());
             room.records.push(record);
             room.timeline.push(item);
         }
@@ -792,6 +798,7 @@ impl LocalConnector {
             TOOL_DRAFT_DROP => self.draft_drop(parse_input(input)?),
             TOOL_PROFILE_UPDATE => self.profile_update(parse_input(input)?).await,
             TOOL_ROOM_CREATE => self.room_create(parse_input(input)?).await,
+            TOOL_ROOM_JOIN => self.room_join(parse_input(input)?).await,
             TOOL_ROOM_JOIN_REQUEST => self.room_join_request(parse_input(input)?).await,
             TOOL_ROOM_JOIN_WHEN_APPROVED => self.room_join_when_approved(parse_input(input)?).await,
             TOOL_ROOM_LEAVE => self.room_leave(parse_input(input)?).await,
@@ -902,7 +909,7 @@ impl LocalConnector {
             .state
             .rooms
             .get(&input.room_id)
-            .map(|room| room.head_seq)
+            .map(|room| room.synced_seq)
             .unwrap_or(0);
         if input.refresh || previous_seq == 0 {
             let client = DiscourseClient::new(&host);
@@ -1467,6 +1474,127 @@ impl LocalConnector {
         }))
     }
 
+    async fn room_join(&mut self, input: RoomJoinInput) -> Result<Value> {
+        let room_id = input.room_id.clone();
+        let host = match input.host.as_deref() {
+            Some(host) => {
+                let host = normalize_host(host);
+                self.require_allowed_host(&host)?;
+                host
+            }
+            None => self.allowed_room_host(&room_id)?,
+        };
+
+        if !self.state.rooms.contains_key(&room_id) {
+            let room = DiscourseClient::new(&host).room(&room_id).await?;
+            self.accept_room_response(&host, room);
+        }
+
+        if let Some(request_id) = input.request_id {
+            let jwt = self.request_jwt(&host)?;
+            let status = DiscourseClient::new(&host)
+                .join_request(&room_id, &request_id, &jwt)
+                .await?;
+            if status.request.applicant != self.agent_id() {
+                return Err(SdkError::InvalidPayload(
+                    "join request belongs to another agent".to_owned(),
+                ));
+            }
+            if status.status != JoinRequestStatus::Approved {
+                return Err(SdkError::InvalidPayload(
+                    "join request is not approved".to_owned(),
+                ));
+            }
+            let role = status.approved_role.unwrap_or(status.request.role);
+            let payload = RoomJoinPayload {
+                request_id: Some(request_id),
+                role,
+                perspective: None,
+            };
+            let envelope = self.sign_room_event(
+                event_type::ROOM_JOIN,
+                &room_id,
+                None,
+                None,
+                Vec::new(),
+                payload,
+            )?;
+            let record = DiscourseClient::new(&host)
+                .join_room(&room_id, &envelope)
+                .await?;
+            let record = typed_record_to_value(record)?;
+            self.apply_record(record.clone())?;
+            let member = self
+                .local_room(&room_id)?
+                .members
+                .get(&self.agent_id())
+                .cloned()
+                .ok_or_else(|| {
+                    SdkError::InvalidPayload("joined member not materialized".to_owned())
+                })?;
+            return json_result(json!({
+                "status": "joined",
+                "record": record,
+                "member": member,
+                "sync": self.sync_state(&room_id)?
+            }));
+        }
+
+        if room_visibility(&self.local_room(&room_id)?.room) == Some(Visibility::Public) {
+            let payload = RoomJoinPayload {
+                request_id: None,
+                role: input.role,
+                perspective: input.perspective,
+            };
+            let envelope = self.sign_room_event(
+                event_type::ROOM_JOIN,
+                &room_id,
+                None,
+                None,
+                Vec::new(),
+                payload,
+            )?;
+            let record = DiscourseClient::new(&host)
+                .join_room(&room_id, &envelope)
+                .await?;
+            let record = typed_record_to_value(record)?;
+            self.apply_record(record.clone())?;
+            let member = self
+                .local_room(&room_id)?
+                .members
+                .get(&self.agent_id())
+                .cloned()
+                .ok_or_else(|| {
+                    SdkError::InvalidPayload("joined member not materialized".to_owned())
+                })?;
+            return json_result(json!({
+                "status": "joined",
+                "record": record,
+                "member": member,
+                "sync": self.sync_state(&room_id)?
+            }));
+        }
+
+        let jwt = self.request_jwt(&host)?;
+        let mut request = RoomJoinRequestInput::new(input.role);
+        request.perspective = input.perspective;
+        request.reason = input.reason;
+        request.extra = input.extra;
+        let status = DiscourseClient::new(&host)
+            .request_join(&room_id, &jwt, &request)
+            .await?;
+        self.state
+            .join_requests
+            .entry(room_id.clone())
+            .or_default()
+            .push(status.clone());
+        json_result(json!({
+            "status": "approval_required",
+            "join_request": status,
+            "sync": self.sync_state(&room_id).ok()
+        }))
+    }
+
     async fn room_join_request(&mut self, input: RoomJoinRequestToolInput) -> Result<Value> {
         let host = normalize_host(&input.host);
         self.require_allowed_host(&host)?;
@@ -1504,8 +1632,9 @@ impl LocalConnector {
         }
         let role = status.approved_role.unwrap_or(status.request.role);
         let payload = RoomJoinPayload {
-            request_id: input.request_id,
+            request_id: Some(input.request_id),
             role,
+            perspective: None,
         };
         let envelope = self.sign_room_event(
             event_type::ROOM_JOIN,
@@ -1754,9 +1883,7 @@ impl LocalConnector {
             )),
             (None, None) => {
                 let sync = self.sync_state(room_id)?;
-                let hash = sync.head_hash.ok_or_else(|| {
-                    SdkError::InvalidPayload("room head hash is not known locally".to_owned())
-                })?;
+                let hash = sync.head_hash;
                 if sync.head_seq == 0 || hash.trim().is_empty() {
                     return Err(SdkError::InvalidPayload(
                         "current room head is not known locally".to_owned(),
@@ -1851,7 +1978,7 @@ impl LocalConnector {
             .map(|base_seq| base_seq != sync.head_seq)
             .unwrap_or(false);
         let hash_mismatch = base_hash
-            .map(|expected_hash| sync.head_hash.as_deref() != Some(expected_hash))
+            .map(|expected_hash| sync.head_hash != expected_hash)
             .unwrap_or(false);
         if !seq_mismatch && !hash_mismatch {
             return Ok(None);
@@ -1984,15 +2111,18 @@ impl LocalConnector {
 
     fn sync_state(&self, room_id: &str) -> Result<SyncState> {
         let room = self.local_room(room_id)?;
+        let head_hash = room
+            .head_hash
+            .clone()
+            .or_else(|| room.room.head.as_ref().map(|head| head.hash.clone()))
+            .unwrap_or_else(|| room.room.hash.clone());
         Ok(SyncState {
             host: room.host.clone(),
             room_id: room_id.to_owned(),
             head_seq: room.head_seq,
-            remote_head_seq: room.room.seq,
-            head_hash: room
-                .head_hash
-                .clone()
-                .or_else(|| Some(room.room.hash.clone())),
+            head_hash,
+            synced_seq: room.synced_seq,
+            remote_seq: room.room.seq.max(room.synced_seq),
             subscribed: room.subscribed,
             unread_count: room.unread_count(),
             pending_inbox_count: self.pending_inbox_count(Some(room_id)),
@@ -2457,6 +2587,22 @@ struct RoomCreateInput {
 }
 
 #[derive(Deserialize)]
+struct RoomJoinInput {
+    #[serde(default)]
+    host: Option<String>,
+    room_id: String,
+    role: Role,
+    #[serde(default)]
+    perspective: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    extra: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
 struct RoomJoinRequestToolInput {
     host: String,
     room_id: String,
@@ -2622,6 +2768,26 @@ fn room_policy(room: &RoomResponse) -> Option<crate::discourse::RoomPolicy> {
         .or_else(|| room_create_payload(room).and_then(|payload| payload.policy.clone()))
 }
 
+fn room_response_head(room: &RoomResponse) -> (u64, String) {
+    room.head
+        .as_ref()
+        .map(|head| (head.seq, head.hash.clone()))
+        .unwrap_or_else(|| (room.seq, room.hash.clone()))
+}
+
+fn record_advances_room_head(room: &LocalRoomState, record: &ServerRecord) -> bool {
+    let event_type = record.envelope.event.kind.as_str();
+    if crate::discourse::is_builtin_event_type(event_type) {
+        return true;
+    }
+    room.room
+        .types
+        .iter()
+        .find(|definition| definition.name == event_type)
+        .map(|definition| definition.kind != crate::discourse::TypeKind::Signal)
+        .unwrap_or(true)
+}
+
 fn materialize_creator(room: &mut LocalRoomState) {
     let Some(envelope) = &room.room.envelope else {
         return;
@@ -2644,7 +2810,7 @@ fn materialize_creator(room: &mut LocalRoomState) {
 }
 
 fn is_duplicate_record(room: &LocalRoomState, record: &ServerRecord) -> bool {
-    record.seq <= room.head_seq
+    record.seq <= room.synced_seq
         && room
             .records
             .iter()
@@ -2652,7 +2818,7 @@ fn is_duplicate_record(room: &LocalRoomState, record: &ServerRecord) -> bool {
 }
 
 fn validate_next_record(room: &LocalRoomState, record: &ServerRecord) -> Result<()> {
-    if room.head_seq == 0 {
+    if room.synced_seq == 0 {
         if record.seq != 1 || record.pre_hash.is_some() {
             return Err(SdkError::InvalidPayload(
                 "first local record must have seq 1 and null pre_hash".to_owned(),
@@ -2660,14 +2826,43 @@ fn validate_next_record(room: &LocalRoomState, record: &ServerRecord) -> Result<
         }
         return Ok(());
     }
-    if record.seq != room.head_seq + 1 {
+    if record.seq != room.synced_seq + 1 {
         return Err(SdkError::InvalidPayload(
             "record seq must continue local chain".to_owned(),
         ));
     }
-    if record.pre_hash.as_deref() != room.head_hash.as_deref() {
+    if record.pre_hash.as_deref() != room.synced_hash.as_deref() {
         return Err(SdkError::InvalidPayload(
             "record pre_hash mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_record_base_precondition(room: &LocalRoomState, record: &ServerRecord) -> Result<()> {
+    if record.envelope.event.kind == event_type::ROOM_CREATE {
+        return Ok(());
+    }
+    let base_seq = record
+        .envelope
+        .event
+        .base_seq
+        .ok_or_else(|| SdkError::InvalidPayload("record event requires base_seq".to_owned()))?;
+    let base_hash =
+        record.envelope.event.base_hash.as_deref().ok_or_else(|| {
+            SdkError::InvalidPayload("record event requires base_hash".to_owned())
+        })?;
+    if base_seq >= record.seq {
+        return Err(SdkError::InvalidPayload(
+            "record base_seq must reference an earlier accepted record".to_owned(),
+        ));
+    }
+    if !record_advances_room_head(room, record) {
+        return Ok(());
+    }
+    if room.head_seq != base_seq || room.head_hash.as_deref() != Some(base_hash) {
+        return Err(SdkError::InvalidPayload(
+            "record base_seq/base_hash must match current room head".to_owned(),
         ));
     }
     Ok(())
@@ -3049,6 +3244,10 @@ mod tests {
             pre_hash: None,
             hash: "room-create-head".to_owned(),
             received_at: 100,
+            head: Some(crate::discourse::RoomHead {
+                seq: 1,
+                hash: "room-create-head".to_owned(),
+            }),
             envelope: Some(envelope),
         }
     }
@@ -3063,6 +3262,8 @@ mod tests {
         assert!(names.contains(&TOOL_ROOM_MEMBERS_LIST));
         assert!(names.contains(&TOOL_INBOX_NEXT));
         assert!(names.contains(&TOOL_DRAFTS_LIST));
+        assert!(names.contains(&TOOL_ROOM_JOIN));
+        assert!(!names.contains(&TOOL_ROOM_JOIN_REQUEST));
         assert!(names.contains(&TOOL_ROOM_SEND_MESSAGE));
         assert!(
             tools
@@ -3168,8 +3369,9 @@ mod tests {
                 1,
                 "room-create-head",
                 RoomJoinPayload {
-                    request_id: "jr1".to_owned(),
+                    request_id: Some("jr1".to_owned()),
                     role: Role::Speaker,
+                    perspective: None,
                 },
             ))
             .unwrap();
@@ -3318,6 +3520,130 @@ mod tests {
         let dropped = connector.draft_drop(DraftDropInput { draft_id }).unwrap();
         assert_eq!(dropped["status"], "dropped");
         assert_eq!(connector.state.drafts.len(), 0);
+    }
+
+    #[test]
+    fn signal_records_do_not_advance_room_head() {
+        let active = signer(1);
+        let speaker = signer(2);
+        let creator = signer(5);
+        let mut connector = LocalConnector::new(active);
+        let mut room = room_response("room1", &creator);
+        room.types.push(TypeDef {
+            name: "reaction.create".to_owned(),
+            kind: crate::discourse::TypeKind::Signal,
+            title: "Reaction".to_owned(),
+            description: None,
+            schema: json!({"type": "object"}),
+            roles: None,
+            instructions: None,
+            version: None,
+            status: None,
+            rate_hint: None,
+            max_payload_hint: None,
+            extra: BTreeMap::new(),
+        });
+        connector.accept_room_response("https://api.example.test", room);
+
+        let signal_envelope = speaker
+            .sign_event(discourse_event(
+                "reaction.create",
+                speaker.agent_id(),
+                120,
+                1,
+                "room1",
+                1,
+                "room-create-head",
+                json!({"emoji": "+1"}),
+            ))
+            .unwrap();
+        let signal = build_server_record(
+            "room1",
+            2,
+            Some("room-create-head".to_owned()),
+            121,
+            signal_envelope,
+        )
+        .unwrap();
+        connector
+            .apply_record(typed_record_to_value(signal).unwrap())
+            .unwrap();
+
+        let sync = connector.sync_state("room1").unwrap();
+        assert_eq!(sync.head_seq, 1);
+        assert_eq!(sync.head_hash, "room-create-head");
+        assert_eq!(sync.synced_seq, 2);
+        assert_eq!(sync.remote_seq, 2);
+    }
+
+    #[test]
+    fn rejects_non_signal_records_not_based_on_room_head() {
+        let active = signer(1);
+        let speaker = signer(2);
+        let creator = signer(5);
+        let mut connector = LocalConnector::new(active);
+        let mut room = room_response("room1", &creator);
+        room.types.push(TypeDef {
+            name: "reaction.create".to_owned(),
+            kind: crate::discourse::TypeKind::Signal,
+            title: "Reaction".to_owned(),
+            description: None,
+            schema: json!({"type": "object"}),
+            roles: None,
+            instructions: None,
+            version: None,
+            status: None,
+            rate_hint: None,
+            max_payload_hint: None,
+            extra: BTreeMap::new(),
+        });
+        connector.accept_room_response("https://api.example.test", room);
+
+        let signal_envelope = speaker
+            .sign_event(discourse_event(
+                "reaction.create",
+                speaker.agent_id(),
+                120,
+                1,
+                "room1",
+                1,
+                "room-create-head",
+                json!({"emoji": "+1"}),
+            ))
+            .unwrap();
+        let signal = build_server_record(
+            "room1",
+            2,
+            Some("room-create-head".to_owned()),
+            121,
+            signal_envelope,
+        )
+        .unwrap();
+        let signal_hash = signal.hash.clone();
+        connector
+            .apply_record(typed_record_to_value(signal).unwrap())
+            .unwrap();
+
+        let stale_message_envelope = speaker
+            .sign_event(discourse_event(
+                event_type::MESSAGE_CREATE,
+                speaker.agent_id(),
+                122,
+                2,
+                "room1",
+                2,
+                signal_hash.clone(),
+                MessageCreatePayload::text("based on signal, not room head"),
+            ))
+            .unwrap();
+        let stale_message =
+            build_server_record("room1", 3, Some(signal_hash), 123, stale_message_envelope)
+                .unwrap();
+
+        let err = connector
+            .apply_record(typed_record_to_value(stale_message).unwrap())
+            .unwrap_err();
+        assert!(err.to_string().contains("must match current room head"));
     }
 
     #[test]

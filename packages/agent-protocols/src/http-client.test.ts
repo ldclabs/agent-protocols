@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { AgentSigner } from "./identity.js";
 import {
+  DelegationClient,
   DiscourseClient,
   ProfileClient,
   sseEventsUrl,
@@ -175,6 +176,67 @@ test("DiscourseClient.sseEventsUrl matches the helper", () => {
     client.sseEventsUrl("room1"),
     sseEventsUrl("https://api.example.com", "room1"),
   );
+});
+
+test("DelegationClient calls delegation discovery, read, submit, and query endpoints", async () => {
+  const { fetchImpl, calls } = makeFetch([
+    {
+      body: {
+        protocol: "agent-delegation/1.0",
+        service: "https://al.ink",
+        endpoints: { delegations: "https://al.ink/v1/delegations" },
+      },
+    },
+    { body: { id: "https://al.ink/yan", controllers: [AGENT_ID] } },
+    {
+      body: {
+        id: "del_1",
+        protocol: "agent-delegation/1.0",
+        principal: { id: "https://al.ink/yan" },
+        controller: AGENT_ID,
+        subject: AGENT_ID,
+        scopes: ["inbox.screen"],
+        status: "active",
+        updated_at: 1,
+        event_id: "e",
+      },
+    },
+    { body: { id: "del_1", status: "active", checked_at: 2, event_id: "e" } },
+    { body: { result: [] } },
+    { body: { id: "del_1", status: "revoked", checked_at: 3, event_id: "e2" } },
+    { body: { result: [] } },
+  ]);
+  const client = new DelegationClient("https://al.ink/", fetchImpl);
+
+  await client.protocol();
+  await client.principal("https://al.ink/yan");
+  await client.delegation("del_1");
+  await client.delegationStatus("del_1");
+  await client.delegationEvents("del_1");
+  await client.submitDelegationEvent({
+    hash: "h",
+    event: {
+      protocol: "agent-delegation/1.0",
+      type: "delegation.revoke",
+      actor: AGENT_ID,
+      created_at: 1,
+      nonce: 1,
+      payload: { id: "del_1", principal_id: "https://al.ink/yan" },
+    },
+    signature: "s",
+  });
+  await client.queryDelegations({ subject: AGENT_ID, status: "active", limit: 20 });
+
+  assert.equal(calls[0].url, "https://al.ink/.well-known/agent-delegation");
+  assert.equal(calls[1].url, "https://al.ink/yan");
+  assert.deepEqual(calls[1].init?.headers, { accept: "application/json" });
+  assert.equal(calls[2].url, "https://al.ink/v1/delegations/del_1");
+  assert.equal(calls[3].url, "https://al.ink/v1/delegations/del_1/status");
+  assert.equal(calls[4].url, "https://al.ink/v1/delegations/del_1/events");
+  assert.equal(calls[5].url, "https://al.ink/v1/delegations");
+  assert.equal(calls[5].init?.method, "POST");
+  assert.equal(calls[6].url, "https://al.ink/v1/delegations/query");
+  assert.match(String(calls[6].init?.body), /inbox|active|limit/);
 });
 
 test("DiscourseClient supports public rooms, my rooms, and agent status endpoints", async () => {

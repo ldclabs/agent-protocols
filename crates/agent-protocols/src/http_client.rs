@@ -1,6 +1,11 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::delegation::{
+    DelegationCredential, DelegationEventsResponse, DelegationQueryRequest,
+    DelegationQueryResponse, DelegationServiceDiscovery, DelegationStatusDocument,
+    PrincipalDocument,
+};
 use crate::discourse::{
     AgentStatus, AgentStatusGetResponse, AgentStatusInput, AgentStatusListResponse,
     DiscourseProtocolDiscovery, RoomCreatePayload, RoomJoinPayload, RoomJoinRequestInput,
@@ -407,6 +412,122 @@ impl RoomEventsOptions {
             pairs.push(format!("cursor={}", encode_query_component(cursor)));
         }
         pairs.join("&")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DelegationClient {
+    base_url: String,
+    inner: reqwest::Client,
+}
+
+impl DelegationClient {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            inner: reqwest::Client::new(),
+        }
+    }
+
+    pub fn with_client(base_url: impl Into<String>, inner: reqwest::Client) -> Self {
+        Self {
+            base_url: base_url.into(),
+            inner,
+        }
+    }
+
+    pub async fn protocol(&self) -> Result<DelegationServiceDiscovery> {
+        Ok(self
+            .inner
+            .get(self.url("/.well-known/agent-delegation"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn principal(&self, principal_url: Option<&str>) -> Result<PrincipalDocument> {
+        Ok(self
+            .inner
+            .get(principal_url.unwrap_or_else(|| self.base_url.trim_end_matches('/')))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn delegation(&self, delegation_id: &str) -> Result<DelegationCredential> {
+        Ok(self
+            .inner
+            .get(self.url(&format!("/v1/delegations/{delegation_id}")))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn delegation_status(&self, delegation_id: &str) -> Result<DelegationStatusDocument> {
+        Ok(self
+            .inner
+            .get(self.url(&format!("/v1/delegations/{delegation_id}/status")))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn delegation_events(&self, delegation_id: &str) -> Result<DelegationEventsResponse> {
+        Ok(self
+            .inner
+            .get(self.url(&format!("/v1/delegations/{delegation_id}/events")))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn submit_delegation_event<P>(&self, envelope: &Envelope<P>) -> Result<Value>
+    where
+        P: Serialize,
+    {
+        Ok(self
+            .inner
+            .post(self.url("/v1/delegations"))
+            .json(envelope)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn query_delegations(
+        &self,
+        request: &DelegationQueryRequest,
+    ) -> Result<DelegationQueryResponse> {
+        Ok(self
+            .inner
+            .post(self.url("/v1/delegations/query"))
+            .json(request)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 }
 

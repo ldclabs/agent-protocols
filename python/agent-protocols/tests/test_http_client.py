@@ -2,6 +2,7 @@ import unittest
 
 import agent_protocols.http_client as http_client
 from agent_protocols.http_client import (
+    DelegationClient,
     DiscourseClient,
     ProfileClient,
     sse_events_url,
@@ -161,6 +162,43 @@ class DiscourseClientTests(unittest.TestCase):
         self.assertEqual(session.calls[4][0], "PUT")
         self.assertEqual(session.calls[4][2], {"Authorization": "Bearer jwt-set"})
         self.assertEqual(session.calls[4][3], {"state": "idle", "expires_at": 2})
+
+
+class DelegationClientTests(unittest.TestCase):
+    def test_every_endpoint_uses_expected_method_and_path(self):
+        session = FakeSession([FakeResponse({"ok": True}) for _ in range(7)])
+        client = DelegationClient("https://al.ink/", session=session)
+        envelope = {
+            "hash": "h",
+            "event": {
+                "protocol": "agent-delegation/1.0",
+                "type": "delegation.revoke",
+                "actor": AGENT_ID,
+                "created_at": 1,
+                "nonce": 1,
+                "payload": {"id": "del_1", "principal_id": "https://al.ink/yan"},
+            },
+            "signature": "s",
+        }
+
+        client.protocol()
+        client.principal("https://al.ink/yan")
+        client.delegation("del_1")
+        client.delegation_status("del_1")
+        client.delegation_events("del_1")
+        client.submit_delegation_event(envelope)
+        client.query_delegations({"subject": AGENT_ID, "status": "active", "limit": 20})
+
+        urls = [call[1] for call in session.calls]
+        self.assertEqual(urls[0], "https://al.ink/.well-known/agent-delegation")
+        self.assertEqual(urls[1], "https://al.ink/yan")
+        self.assertEqual(session.calls[1][2], {"Accept": "application/json"})
+        self.assertEqual(urls[2], "https://al.ink/v1/delegations/del_1")
+        self.assertEqual(urls[3], "https://al.ink/v1/delegations/del_1/status")
+        self.assertEqual(urls[4], "https://al.ink/v1/delegations/del_1/events")
+        self.assertEqual((session.calls[5][0], urls[5]), ("POST", "https://al.ink/v1/delegations"))
+        self.assertEqual((session.calls[6][0], urls[6]), ("POST", "https://al.ink/v1/delegations/query"))
+        self.assertEqual(session.calls[6][3]["status"], "active")
 
 
 class HelperTests(unittest.TestCase):

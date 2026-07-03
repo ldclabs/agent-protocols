@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use crate::delegation::PrincipalDescriptor;
 use crate::error::{Result, SdkError};
 use crate::identity::{verify_envelope, AgentId, Envelope, Event};
 
@@ -35,6 +36,20 @@ pub struct ProfileLink {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ProfileDelegationHint {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub principal: PrincipalDescriptor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<String>,
+    pub credential_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ProfileUpdatePayload {
     pub id: AgentId,
     pub name: String,
@@ -50,6 +65,8 @@ pub struct ProfileUpdatePayload {
     pub service_endpoints: Vec<ServiceEndpoint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<ProfileLink>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegations: Vec<ProfileDelegationHint>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, Value>,
 }
@@ -65,6 +82,7 @@ impl ProfileUpdatePayload {
             capabilities: Vec::new(),
             service_endpoints: Vec::new(),
             links: Vec::new(),
+            delegations: Vec::new(),
             extra: BTreeMap::new(),
         }
     }
@@ -88,6 +106,8 @@ pub struct AgentProfile {
     pub service_endpoints: Vec<ServiceEndpoint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<ProfileLink>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegations: Vec<ProfileDelegationHint>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, Value>,
     pub updated_at: i64,
@@ -169,6 +189,7 @@ pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<
         capabilities: payload.capabilities.clone(),
         service_endpoints: payload.service_endpoints.clone(),
         links: payload.links.clone(),
+        delegations: payload.delegations.clone(),
         extra: payload.extra.clone(),
         updated_at: envelope.event.created_at,
         event_id: envelope.hash.clone(),
@@ -178,6 +199,7 @@ pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delegation::PrincipalDescriptor;
     use crate::identity::AgentSigner;
 
     #[test]
@@ -193,6 +215,18 @@ mod tests {
             url: "https://example.com".to_owned(),
             rel: ProfileLinkRel::Homepage,
         });
+        payload.delegations.push(ProfileDelegationHint {
+            id: None,
+            principal: PrincipalDescriptor {
+                id: "https://al.ink/yan".to_owned(),
+                kind: Some("person".to_owned()),
+                name: Some("Yan".to_owned()),
+            },
+            relationship: Some("primary_delegate".to_owned()),
+            scopes: vec!["inbox.screen".to_owned()],
+            credential_url: "https://al.ink/v1/delegations/del_1".to_owned(),
+            status_url: None,
+        });
         let expected_extra = payload.extra.clone();
         let event = profile_update_event(signer.agent_id(), 1_779_753_600_000, 1, payload);
         let envelope = signer.sign_event(event).unwrap();
@@ -204,6 +238,7 @@ mod tests {
         assert_eq!(profile.username, None);
         assert_eq!(profile.links.len(), 1);
         assert_eq!(profile.links[0].rel, ProfileLinkRel::Homepage);
+        assert_eq!(profile.delegations.len(), 1);
         assert_eq!(profile.extra, expected_extra);
         assert_eq!(profile.updated_at, 1_779_753_600_000);
         assert_eq!(profile.event_id, envelope.hash);

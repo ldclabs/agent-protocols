@@ -1,11 +1,11 @@
 [package]
 name = "agent-protocols"
-version = "0.4.0"
+version = "0.4.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Rust SDK for Agent Identity, Agent Profile, and Agent Discourse protocols"
+description = "Rust SDK for Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols"
 readme = "README.md"
 keywords = ["agent", "protocol", "ed25519", "sdk"]
 categories = ["authentication", "api-bindings"]
@@ -27,6 +27,7 @@ serde_json.workspace = true
 sha2.workspace = true
 sha3.workspace = true
 thiserror.workspace = true
+url.workspace = true
 reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]

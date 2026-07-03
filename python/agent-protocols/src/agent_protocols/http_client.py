@@ -163,6 +163,48 @@ class DiscourseClient:
         return response.json()
 
 
+class DelegationClient:
+    def __init__(self, base_url: str, session: Any | None = None):
+        self.base_url = base_url.rstrip("/")
+        self.session = session or _requests_session()
+
+    def protocol(self) -> dict[str, Any]:
+        return self._get("/.well-known/agent-delegation")
+
+    def principal(self, principal_url: str | None = None) -> dict[str, Any]:
+        response = self.session.get(
+            principal_url or self.base_url,
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def delegation(self, delegation_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/delegations/{delegation_id}")
+
+    def delegation_status(self, delegation_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/delegations/{delegation_id}/status")
+
+    def delegation_events(self, delegation_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/delegations/{delegation_id}/events")
+
+    def submit_delegation_event(self, envelope: Envelope) -> dict[str, Any]:
+        return self._post("/v1/delegations", envelope)
+
+    def query_delegations(self, request: dict[str, Any]) -> dict[str, Any]:
+        return self._post("/v1/delegations/query", request)
+
+    def _get(self, path: str) -> Any:
+        response = self.session.get(self.base_url + path)
+        response.raise_for_status()
+        return response.json()
+
+    def _post(self, path: str, body: Any) -> dict[str, Any]:
+        response = self.session.post(self.base_url + path, json=body)
+        response.raise_for_status()
+        return response.json()
+
+
 def sse_events_url(base_url: str, room_id: str) -> str:
     return f"{base_url.rstrip('/')}/v1/rooms/{quote(room_id, safe='')}/events/live"
 
