@@ -30,7 +30,6 @@ use crate::profile::{profile_update_event, AgentProfile, ProfileUpdatePayload};
 
 pub const TOOL_IDENTITY_CURRENT: &str = "agent_protocols_identity_current";
 pub const TOOL_HOSTS_LIST: &str = "agent_protocols_hosts_list";
-pub const TOOL_HOST_ADD: &str = "agent_protocols_host_add";
 pub const TOOL_ROOMS_SEARCH: &str = "agent_protocols_rooms_search";
 pub const TOOL_ROOMS_LIST: &str = "agent_protocols_rooms_list";
 pub const TOOL_ROOM_OPEN: &str = "agent_protocols_room_open";
@@ -103,13 +102,6 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
             false,
         ),
         (
-            TOOL_HOST_ADD,
-            "Add an allowed Agent Discourse host after discovery.",
-            false,
-            true,
-            true,
-        ),
-        (
             TOOL_ROOMS_SEARCH,
             "Search public rooms on an allowed host.",
             true,
@@ -179,10 +171,13 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
             true,
             true,
         ),
+        // MCP tool annotations are static declarations from tools/list: a pure
+        // read is the degenerate case, so mark_read-capable reads declare
+        // read_only_hint: false.
         (
             TOOL_ROOM_TIMELINE,
             "Read simplified timeline items from the local cache.",
-            true,
+            false,
             true,
             false,
         ),
@@ -344,12 +339,14 @@ pub struct AgentProtocolsHost {
     pub last_checked_at: Option<i64>,
 }
 
+/// `Removed` and `Banned` are produced by accepted `room.member.remove` records.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomMemberStatus {
     Active,
     Left,
     Removed,
+    Banned,
     Unknown,
 }
 
@@ -357,8 +354,6 @@ pub enum RoomMemberStatus {
 pub struct RoomMemberProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -424,6 +419,8 @@ pub enum InboxKind {
     RoomJoinApproved,
     #[serde(rename = "room.role.changed")]
     RoomRoleChanged,
+    #[serde(rename = "room.member.removed")]
+    RoomMemberRemoved,
     #[serde(rename = "room.state.changed")]
     RoomStateChanged,
     #[serde(rename = "room.event.custom")]
@@ -582,13 +579,18 @@ pub struct RoomStateView {
     pub pending_inbox_count: usize,
 }
 
+/// Local room state is keyed by `(host, room_id)`: ADP room IDs are only
+/// RECOMMENDED to be globally unique, and a connector can be configured with
+/// multiple hosts.
+pub type RoomKey = (String, String);
+
 #[derive(Clone, Debug, Default)]
 pub struct LocalConnectorState {
     pub hosts: BTreeMap<String, AgentProtocolsHost>,
-    rooms: BTreeMap<String, LocalRoomState>,
+    rooms: BTreeMap<RoomKey, LocalRoomState>,
     profiles: BTreeMap<AgentId, AgentProfile>,
-    join_requests: BTreeMap<String, Vec<RoomJoinRequestStatus>>,
-    agent_statuses: BTreeMap<String, BTreeMap<AgentId, AgentStatus>>,
+    join_requests: BTreeMap<RoomKey, Vec<RoomJoinRequestStatus>>,
+    agent_statuses: BTreeMap<RoomKey, BTreeMap<AgentId, AgentStatus>>,
     inbox: BTreeMap<String, InboxEntry>,
     drafts: BTreeMap<String, HeldDraftEntry>,
 }
@@ -714,11 +716,11 @@ impl LocalConnector {
     pub fn observe_room(&mut self, host: impl Into<String>, room: RoomResponse) {
         let host = normalize_host(&host.into());
         self.ensure_host(&host);
-        let room_id = room.id.clone();
+        let key = (host.clone(), room.id.clone());
         let entry = self
             .state
             .rooms
-            .entry(room_id)
+            .entry(key)
             .or_insert_with(|| LocalRoomState::new(host.clone(), room.clone()));
         entry.host = host;
         entry.room = room;
@@ -726,9 +728,10 @@ impl LocalConnector {
     }
 
     pub fn accept_room_response(&mut self, host: impl Into<String>, room: RoomResponse) {
-        let room_id = room.id.clone();
+        let host = normalize_host(&host.into());
+        let key = (host.clone(), room.id.clone());
         self.observe_room(host, room);
-        if let Some(entry) = self.state.rooms.get_mut(&room_id) {
+        if let Some(entry) = self.state.rooms.get_mut(&key) {
             let (head_seq, head_hash) = room_response_head(&entry.room);
             entry.head_seq = head_seq;
             entry.head_hash = Some(head_hash);
@@ -737,17 +740,31 @@ impl LocalConnector {
         }
     }
 
+    /// Applies a verified record to the room identified by its `room_id`
+    /// alone. Fails with an ambiguity error when the room ID matches rooms on
+    /// more than one configured host; use [`Self::apply_host_record`] then.
     pub fn apply_record(&mut self, record: ServerRecord) -> Result<()> {
+        let key = self.resolve_room_key(None, &record.room_id)?;
+        self.apply_record_to(&key, record)
+    }
+
+    /// Applies a verified record to the room on the given host.
+    pub fn apply_host_record(&mut self, host: &str, record: ServerRecord) -> Result<()> {
+        let key = (normalize_host(host), record.room_id.clone());
+        self.apply_record_to(&key, record)
+    }
+
+    fn apply_record_to(&mut self, key: &RoomKey, record: ServerRecord) -> Result<()> {
         validate_discourse_envelope(&record.envelope)?;
         validate_room_path(&record.envelope, &record.room_id)?;
         verify_server_record(&record)?;
 
-        let room_id = record.room_id.clone();
         let active_agent = self.agent_id();
         let mut new_inbox = Vec::new();
+        let mut cleared_status: Option<AgentId> = None;
         {
-            let room = self.state.rooms.get_mut(&room_id).ok_or_else(|| {
-                SdkError::InvalidPayload(format!("room is not open locally: {room_id}"))
+            let room = self.state.rooms.get_mut(key).ok_or_else(|| {
+                SdkError::InvalidPayload(format!("room is not open locally: {}", key.1))
             })?;
             if is_duplicate_record(room, &record) {
                 return Ok(());
@@ -757,6 +774,14 @@ impl LocalConnector {
 
             let item = TimelineItem::from_record(&record);
             apply_record_projection(room, &record, &item, &active_agent, &mut new_inbox)?;
+            if record.envelope.event.kind == event_type::ROOM_MEMBER_REMOVE {
+                cleared_status =
+                    serde_json::from_value::<crate::discourse::RoomMemberRemovePayload>(
+                        record.envelope.event.payload.clone(),
+                    )
+                    .ok()
+                    .map(|payload| payload.member);
+            }
             if record_advances_room_head(room, &record) {
                 room.head_seq = record.seq;
                 room.head_hash = Some(record.hash.clone());
@@ -766,17 +791,46 @@ impl LocalConnector {
             room.records.push(record);
             room.timeline.push(item);
         }
+        // Removal ends membership; the host clears the member's transient
+        // agent status, so drop the local cache entry too.
+        if let Some(member) = cleared_status {
+            if let Some(statuses) = self.state.agent_statuses.get_mut(key) {
+                statuses.remove(&member);
+            }
+        }
         for item in new_inbox {
             self.insert_inbox(item);
         }
         Ok(())
     }
 
+    /// Resolves `(host, room_id)` for a tool call. Without a `host` input the
+    /// room ID must match exactly one locally known room; the connector
+    /// returns an ambiguity error instead of guessing between hosts.
+    fn resolve_room_key(&self, host: Option<&str>, room_id: &str) -> Result<RoomKey> {
+        if let Some(host) = host {
+            return Ok((normalize_host(host), room_id.to_owned()));
+        }
+        let mut keys = self
+            .state
+            .rooms
+            .keys()
+            .filter(|(_, known_room_id)| known_room_id == room_id);
+        match (keys.next(), keys.next()) {
+            (Some(key), None) => Ok(key.clone()),
+            (Some(_), Some(_)) => Err(SdkError::InvalidPayload(format!(
+                "room id {room_id} matches rooms on more than one host; pass host"
+            ))),
+            _ => Err(SdkError::InvalidPayload(format!(
+                "room is not open locally: {room_id}"
+            ))),
+        }
+    }
+
     pub async fn call_tool(&mut self, name: &str, input: Value) -> Result<Value> {
         match name {
             TOOL_IDENTITY_CURRENT => self.identity_current(),
             TOOL_HOSTS_LIST => self.hosts_list(),
-            TOOL_HOST_ADD => self.host_add(parse_input(input)?).await,
             TOOL_ROOMS_SEARCH => self.rooms_search(parse_input(input)?).await,
             TOOL_ROOMS_LIST => self.rooms_list(parse_input(input)?),
             TOOL_ROOM_OPEN => self.room_open(parse_input(input)?).await,
@@ -825,24 +879,6 @@ impl LocalConnector {
 
     fn hosts_list(&self) -> Result<Value> {
         json_result(json!({ "hosts": self.state.hosts.values().collect::<Vec<_>>() }))
-    }
-
-    async fn host_add(&mut self, input: HostAddInput) -> Result<Value> {
-        let host = normalize_host(&input.host);
-        let discovery = DiscourseClient::new(&host).protocol().await?;
-        let profile_service = input
-            .profile_service
-            .or_else(|| discovery.profile.and_then(|profile| profile.service));
-        let host_view = AgentProtocolsHost {
-            host: host.clone(),
-            label: input.label,
-            allowed: true,
-            features: discovery.features,
-            profile_service,
-            last_checked_at: Some(unix_ms()),
-        };
-        self.add_host(host_view.clone());
-        json_result(json!({ "host": host_view }))
     }
 
     async fn rooms_search(&mut self, input: RoomsSearchInput) -> Result<Value> {
@@ -905,10 +941,11 @@ impl LocalConnector {
     async fn room_open(&mut self, input: RoomOpenInput) -> Result<Value> {
         let host = normalize_host(&input.host);
         self.require_allowed_host(&host)?;
+        let key = (host.clone(), input.room_id.clone());
         let previous_seq = self
             .state
             .rooms
-            .get(&input.room_id)
+            .get(&key)
             .map(|room| room.synced_seq)
             .unwrap_or(0);
         if input.refresh || previous_seq == 0 {
@@ -932,24 +969,25 @@ impl LocalConnector {
                 )
                 .await?;
             for record in records {
-                self.apply_record(record)?;
+                self.apply_host_record(&host, record)?;
             }
         }
-        if let Some(room) = self.state.rooms.get_mut(&input.room_id) {
+        if let Some(room) = self.state.rooms.get_mut(&key) {
             room.subscribed = input.subscribe.unwrap_or(false);
         }
-        let room = self.local_room(&input.room_id)?;
+        let room = self.local_room(&key)?;
         json_result(json!({
             "room": self.room_state_view(room),
-            "sync": self.sync_state(&input.room_id)?,
+            "sync": self.sync_state(&key)?,
             "active_turn": room.active_turn
         }))
     }
 
     async fn room_state(&mut self, input: RoomStateInput) -> Result<Value> {
         let _ = input.include_types;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
         if input.refresh {
-            let host = self.local_room(&input.room_id)?.host.clone();
+            let host = self.local_room(&key)?.host.clone();
             return self
                 .room_open(RoomOpenInput {
                     host,
@@ -959,15 +997,16 @@ impl LocalConnector {
                 })
                 .await;
         }
-        let room = self.local_room(&input.room_id)?;
+        let room = self.local_room(&key)?;
         json_result(json!({
             "room": self.room_state_view(room),
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     fn room_members_list(&self, input: RoomMembersListInput) -> Result<Value> {
-        let room = self.local_room(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let room = self.local_room(&key)?;
         let mut members = room
             .members
             .values()
@@ -1001,12 +1040,13 @@ impl LocalConnector {
         }
         json_result(json!({
             "members": members,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     fn room_member_get(&self, input: RoomMemberGetInput) -> Result<Value> {
-        let room = self.local_room(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let room = self.local_room(&key)?;
         let member = room
             .members
             .get(&input.agent_id)
@@ -1033,20 +1073,21 @@ impl LocalConnector {
         json_result(json!({
             "member": member,
             "recent": recent,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     async fn agent_status_list(&mut self, input: AgentStatusListInput) -> Result<Value> {
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
         if !input.refresh {
-            if let Some(statuses) = self.state.agent_statuses.get(&input.room_id) {
+            if let Some(statuses) = self.state.agent_statuses.get(&key) {
                 return json_result(json!({
                     "statuses": statuses.values().collect::<Vec<_>>(),
-                    "sync": self.sync_state(&input.room_id)?
+                    "sync": self.sync_state(&key)?
                 }));
             }
         }
-        let host = self.allowed_room_host(&input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let jwt = self.request_jwt(&host)?;
         let response = DiscourseClient::new(&host)
             .agent_statuses(&input.room_id, Some(&jwt))
@@ -1057,50 +1098,51 @@ impl LocalConnector {
             .map(|status| (status.agent_id.clone(), status))
             .collect::<BTreeMap<_, _>>();
         let values = statuses.values().cloned().collect::<Vec<_>>();
-        self.state
-            .agent_statuses
-            .insert(input.room_id.clone(), statuses);
+        self.state.agent_statuses.insert(key.clone(), statuses);
         json_result(json!({
             "statuses": values,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     async fn agent_status_get(&mut self, input: AgentStatusGetInput) -> Result<Value> {
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
         if !input.refresh {
             if let Some(status) = self
                 .state
                 .agent_statuses
-                .get(&input.room_id)
+                .get(&key)
                 .and_then(|statuses| statuses.get(&input.agent_id))
                 .cloned()
             {
                 return json_result(json!({
                     "status": status,
-                    "sync": self.sync_state(&input.room_id)?
+                    "sync": self.sync_state(&key)?
                 }));
             }
         }
-        let host = self.allowed_room_host(&input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let jwt = self.request_jwt(&host)?;
         let response = DiscourseClient::new(&host)
             .agent_status(&input.room_id, &input.agent_id, Some(&jwt))
             .await?;
         self.state
             .agent_statuses
-            .entry(input.room_id.clone())
+            .entry(key.clone())
             .or_default()
             .insert(response.status.agent_id.clone(), response.status.clone());
         json_result(json!({
             "status": response.status,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     async fn agent_status_set(&mut self, input: AgentStatusSetInput) -> Result<Value> {
-        let host = self.allowed_room_host(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let jwt = self.request_jwt(&host)?;
-        let mut request = AgentStatusInput::new(input.state, input.expires_at);
+        let mut request = AgentStatusInput::new(input.state);
+        request.expires_at = input.expires_at;
         request.summary = input.summary;
         request.seen_seq = input.seen_seq;
         request.seen_hash = input.seen_hash;
@@ -1112,24 +1154,25 @@ impl LocalConnector {
             .await?;
         self.state
             .agent_statuses
-            .entry(input.room_id.clone())
+            .entry(key.clone())
             .or_default()
             .insert(status.agent_id.clone(), status.clone());
         json_result(json!({
             "status": status,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     async fn agent_status_clear(&mut self, input: AgentStatusClearInput) -> Result<Value> {
-        let host = self.allowed_room_host(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let jwt = self.request_jwt(&host)?;
-        let request = AgentStatusInput::new("away", unix_ms().saturating_sub(1));
+        let request = AgentStatusInput::new("away").with_expires_at(unix_ms().saturating_sub(1));
         let _ = DiscourseClient::new(&host)
             .set_agent_status(&input.room_id, &jwt, &request)
             .await?;
         let active_agent = self.agent_id();
-        if let Some(statuses) = self.state.agent_statuses.get_mut(&input.room_id) {
+        if let Some(statuses) = self.state.agent_statuses.get_mut(&key) {
             statuses.remove(&active_agent);
         }
         json_result(json!({
@@ -1140,7 +1183,8 @@ impl LocalConnector {
 
     fn room_timeline(&self, input: RoomTimelineInput) -> Result<Value> {
         let _ = (input.refresh, input.include_records);
-        let room = self.local_room(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let room = self.local_room(&key)?;
         let items = room
             .timeline
             .iter()
@@ -1167,13 +1211,14 @@ impl LocalConnector {
         let next_after_seq = items.last().map(|item| item.seq);
         json_result(json!({
             "items": items,
-            "sync": self.sync_state(&input.room_id)?,
+            "sync": self.sync_state(&key)?,
             "next_after_seq": next_after_seq
         }))
     }
 
     fn room_unread(&mut self, input: RoomUnreadInput) -> Result<Value> {
-        let room = self.local_room(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let room = self.local_room(&key)?;
         let mut items = room
             .timeline
             .iter()
@@ -1184,26 +1229,27 @@ impl LocalConnector {
         let through_seq = items.last().map(|item| item.seq);
         if input.mark_read {
             if let Some(through_seq) = through_seq {
-                self.local_room_mut(&input.room_id)?.read_seq = through_seq;
+                self.local_room_mut(&key)?.read_seq = through_seq;
             }
             items = self
-                .local_room(&input.room_id)?
+                .local_room(&key)?
                 .timeline
                 .iter()
                 .filter(|item| through_seq.map(|seq| item.seq <= seq).unwrap_or(false))
                 .cloned()
                 .collect();
         }
-        let unread_count = self.local_room(&input.room_id)?.unread_count();
+        let unread_count = self.local_room(&key)?.unread_count();
         json_result(json!({
             "items": items,
             "unread_count": unread_count,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     fn room_mark_read(&mut self, input: RoomMarkReadInput) -> Result<Value> {
-        let room = self.local_room_mut(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let room = self.local_room_mut(&key)?;
         room.read_seq = room.read_seq.max(input.through_seq);
         let unread_count = room.unread_count();
         json_result(json!({
@@ -1298,6 +1344,13 @@ impl LocalConnector {
                     .map(|room_id| &entry.draft.room_id == room_id)
                     .unwrap_or(true)
             })
+            .filter(|entry| {
+                input
+                    .host
+                    .as_deref()
+                    .map(|host| entry.draft.current_sync.host == normalize_host(host))
+                    .unwrap_or(true)
+            })
             .skip(offset)
             .take(limit + 1)
             .map(|entry| entry.draft.clone())
@@ -1320,11 +1373,15 @@ impl LocalConnector {
             .drafts
             .get(&input.draft_id)
             .ok_or_else(|| SdkError::InvalidPayload("draft not found".to_owned()))?;
-        let changes = self.room_changes_since(&entry.draft.room_id, entry.draft.base_seq)?;
+        let key = (
+            entry.draft.current_sync.host.clone(),
+            entry.draft.room_id.clone(),
+        );
+        let changes = self.room_changes_since(&key, entry.draft.base_seq)?;
         json_result(json!({
             "draft": entry.draft,
             "changes": changes,
-            "sync": self.sync_state(&entry.draft.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
@@ -1434,7 +1491,20 @@ impl LocalConnector {
         let object = profile
             .as_object_mut()
             .ok_or_else(|| SdkError::InvalidPayload("profile must be an object".to_owned()))?;
-        object.insert("id".to_owned(), serde_json::to_value(self.agent_id())?);
+        // payload.id is always the active Agent ID; reject an input that
+        // names a different agent instead of silently rewriting it.
+        let active_id = serde_json::to_value(self.agent_id())?;
+        match object.get("id") {
+            None => {
+                object.insert("id".to_owned(), active_id);
+            }
+            Some(id) if *id == active_id => {}
+            Some(_) => {
+                return Err(SdkError::InvalidPayload(
+                    "profile.id must be the active Agent ID".to_owned(),
+                ));
+            }
+        }
         let payload: ProfileUpdatePayload = serde_json::from_value(profile)?;
         let envelope = self.sign_profile_update(payload)?;
         let materialized = ProfileClient::new(&input.profile_service)
@@ -1467,25 +1537,31 @@ impl LocalConnector {
             room.envelope = Some(envelope.clone());
         }
         self.accept_room_response(&host, room.clone());
+        let key = (host, room.id.clone());
         json_result(json!({
-            "room": self.room_state_view(self.local_room(&room.id)?),
+            "room": self.room_state_view(self.local_room(&key)?),
             "envelope": envelope,
-            "sync": self.sync_state(&room.id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     async fn room_join(&mut self, input: RoomJoinInput) -> Result<Value> {
         let room_id = input.room_id.clone();
-        let host = match input.host.as_deref() {
+        let key = match input.host.as_deref() {
             Some(host) => {
                 let host = normalize_host(host);
                 self.require_allowed_host(&host)?;
-                host
+                (host, room_id.clone())
             }
-            None => self.allowed_room_host(&room_id)?,
+            None => {
+                let key = self.resolve_room_key(None, &room_id)?;
+                self.require_allowed_host(&key.0)?;
+                key
+            }
         };
+        let host = key.0.clone();
 
-        if !self.state.rooms.contains_key(&room_id) {
+        if !self.state.rooms.contains_key(&key) {
             let room = DiscourseClient::new(&host).room(&room_id).await?;
             self.accept_room_response(&host, room);
         }
@@ -1505,27 +1581,29 @@ impl LocalConnector {
                     "join request is not approved".to_owned(),
                 ));
             }
-            let role = status.approved_role.unwrap_or(status.request.role);
+            // The completion call signs room.join with the approved role; a
+            // differing input role is a mismatch error, never a silent
+            // substitution.
+            let approved_role = status.approved_role.unwrap_or(status.request.role);
+            if input.role != approved_role {
+                return Err(SdkError::InvalidPayload(format!(
+                    "join_request_role_mismatch: approved role is {approved_role:?}"
+                )));
+            }
             let payload = RoomJoinPayload {
                 request_id: Some(request_id),
-                role,
+                role: approved_role,
                 perspective: None,
             };
-            let envelope = self.sign_room_event(
-                event_type::ROOM_JOIN,
-                &room_id,
-                None,
-                None,
-                Vec::new(),
-                payload,
-            )?;
+            let envelope =
+                self.sign_room_event(event_type::ROOM_JOIN, &key, None, None, Vec::new(), payload)?;
             let record = DiscourseClient::new(&host)
                 .join_room(&room_id, &envelope)
                 .await?;
             let record = typed_record_to_value(record)?;
-            self.apply_record(record.clone())?;
+            self.apply_host_record(&host, record.clone())?;
             let member = self
-                .local_room(&room_id)?
+                .local_room(&key)?
                 .members
                 .get(&self.agent_id())
                 .cloned()
@@ -1536,31 +1614,25 @@ impl LocalConnector {
                 "status": "joined",
                 "record": record,
                 "member": member,
-                "sync": self.sync_state(&room_id)?
+                "sync": self.sync_state(&key)?
             }));
         }
 
-        if room_visibility(&self.local_room(&room_id)?.room) == Some(Visibility::Public) {
+        if room_visibility(&self.local_room(&key)?.room) == Some(Visibility::Public) {
             let payload = RoomJoinPayload {
                 request_id: None,
                 role: input.role,
                 perspective: input.perspective,
             };
-            let envelope = self.sign_room_event(
-                event_type::ROOM_JOIN,
-                &room_id,
-                None,
-                None,
-                Vec::new(),
-                payload,
-            )?;
+            let envelope =
+                self.sign_room_event(event_type::ROOM_JOIN, &key, None, None, Vec::new(), payload)?;
             let record = DiscourseClient::new(&host)
                 .join_room(&room_id, &envelope)
                 .await?;
             let record = typed_record_to_value(record)?;
-            self.apply_record(record.clone())?;
+            self.apply_host_record(&host, record.clone())?;
             let member = self
-                .local_room(&room_id)?
+                .local_room(&key)?
                 .members
                 .get(&self.agent_id())
                 .cloned()
@@ -1571,7 +1643,7 @@ impl LocalConnector {
                 "status": "joined",
                 "record": record,
                 "member": member,
-                "sync": self.sync_state(&room_id)?
+                "sync": self.sync_state(&key)?
             }));
         }
 
@@ -1585,13 +1657,13 @@ impl LocalConnector {
             .await?;
         self.state
             .join_requests
-            .entry(room_id.clone())
+            .entry(key.clone())
             .or_default()
             .push(status.clone());
         json_result(json!({
             "status": "approval_required",
             "join_request": status,
-            "sync": self.sync_state(&room_id).ok()
+            "sync": self.sync_state(&key).ok()
         }))
     }
 
@@ -1608,14 +1680,15 @@ impl LocalConnector {
             .await?;
         self.state
             .join_requests
-            .entry(input.room_id)
+            .entry((host, input.room_id))
             .or_default()
             .push(status.clone());
         json_result(json!({ "join_request": status }))
     }
 
     async fn room_join_when_approved(&mut self, input: RoomJoinWhenApprovedInput) -> Result<Value> {
-        let host = self.allowed_room_host(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let jwt = self.request_jwt(&host)?;
         let status = DiscourseClient::new(&host)
             .join_request(&input.room_id, &input.request_id, &jwt)
@@ -1636,21 +1709,15 @@ impl LocalConnector {
             role,
             perspective: None,
         };
-        let envelope = self.sign_room_event(
-            event_type::ROOM_JOIN,
-            &input.room_id,
-            None,
-            None,
-            Vec::new(),
-            payload,
-        )?;
+        let envelope =
+            self.sign_room_event(event_type::ROOM_JOIN, &key, None, None, Vec::new(), payload)?;
         let record = DiscourseClient::new(&host)
             .join_room(&input.room_id, &envelope)
             .await?;
         let record = typed_record_to_value(record)?;
-        self.apply_record(record.clone())?;
+        self.apply_host_record(&host, record.clone())?;
         let member = self
-            .local_room(&input.room_id)?
+            .local_room(&key)?
             .members
             .get(&self.agent_id())
             .cloned()
@@ -1658,12 +1725,13 @@ impl LocalConnector {
         json_result(json!({
             "record": record,
             "member": member,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     async fn room_leave(&mut self, input: RoomLeaveInput) -> Result<Value> {
-        let host = self.allowed_room_host(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let payload = ReasonPayload {
             reason: input.reason,
             references: Vec::new(),
@@ -1671,7 +1739,7 @@ impl LocalConnector {
         };
         let envelope = self.sign_room_event(
             event_type::ROOM_LEAVE,
-            &input.room_id,
+            &key,
             None,
             None,
             Vec::new(),
@@ -1681,19 +1749,21 @@ impl LocalConnector {
             .leave_room(&input.room_id, &envelope)
             .await?;
         let record = typed_record_to_value(record)?;
-        self.apply_record(record.clone())?;
-        json_result(json!({ "record": record, "sync": self.sync_state(&input.room_id)? }))
+        self.apply_host_record(&host, record.clone())?;
+        json_result(json!({ "record": record, "sync": self.sync_state(&key)? }))
     }
 
     async fn room_send_message(&mut self, mut input: RoomSendMessageInput) -> Result<Value> {
-        if let Some(result) = self.head_mismatch_message_result(&mut input)? {
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        if let Some(result) = self.head_mismatch_message_result(&key, &mut input)? {
             return Ok(result);
         }
         self.submit_message_unchecked(input).await
     }
 
     async fn submit_message_unchecked(&mut self, input: RoomSendMessageInput) -> Result<Value> {
-        let host = self.allowed_room_host(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let mut payload = MessageCreatePayload::new(
             input
                 .content_type
@@ -1704,7 +1774,7 @@ impl LocalConnector {
         payload.extra = input.extra;
         let envelope = self.sign_room_event(
             event_type::MESSAGE_CREATE,
-            &input.room_id,
+            &key,
             input.base_seq,
             input.base_hash.clone(),
             input.mentions,
@@ -1713,29 +1783,41 @@ impl LocalConnector {
         let record = DiscourseClient::new(&host)
             .submit_event(&input.room_id, &envelope)
             .await?;
-        self.apply_record(record.clone())?;
-        let item = self.timeline_item_by_event(&input.room_id, &record.envelope.hash)?;
+        self.apply_host_record(&host, record.clone())?;
+        let item = self.timeline_item_by_event(&key, &record.envelope.hash)?;
         json_result(json!({
             "status": "sent",
             "record": record,
             "item": item,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     async fn room_submit_event(&mut self, mut input: RoomSubmitEventInput) -> Result<Value> {
-        if let Some(result) = self.head_mismatch_event_result(&mut input)? {
-            return Ok(result);
+        // For signal-kind writes — including the membership events — the base
+        // is only an anchor: never hold the draft, ignore on_head_mismatch.
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let advances_head = self
+            .state
+            .rooms
+            .get(&key)
+            .map(|room| event_type_advances_room_head(room, &input.event_type))
+            .unwrap_or(true);
+        if advances_head {
+            if let Some(result) = self.head_mismatch_event_result(&key, &mut input)? {
+                return Ok(result);
+            }
         }
         self.submit_event_unchecked(input).await
     }
 
     async fn submit_event_unchecked(&mut self, input: RoomSubmitEventInput) -> Result<Value> {
-        let host = self.allowed_room_host(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let payload = payload_with_references(input.payload, input.references)?;
         let envelope = self.sign_room_event(
             input.event_type,
-            &input.room_id,
+            &key,
             input.base_seq,
             input.base_hash.clone(),
             input.mentions,
@@ -1744,18 +1826,19 @@ impl LocalConnector {
         let record = DiscourseClient::new(&host)
             .submit_event(&input.room_id, &envelope)
             .await?;
-        self.apply_record(record.clone())?;
-        let item = self.timeline_item_by_event(&input.room_id, &record.envelope.hash)?;
+        self.apply_host_record(&host, record.clone())?;
+        let item = self.timeline_item_by_event(&key, &record.envelope.hash)?;
         json_result(json!({
             "status": "sent",
             "record": record,
             "item": item,
-            "sync": self.sync_state(&input.room_id)?
+            "sync": self.sync_state(&key)?
         }))
     }
 
     async fn join_requests_list(&mut self, input: JoinRequestsListInput) -> Result<Value> {
-        let host = self.allowed_room_host(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let jwt = self.request_jwt(&host)?;
         let mut requests = DiscourseClient::new(&host)
             .join_requests(&input.room_id, &jwt)
@@ -1779,12 +1862,13 @@ impl LocalConnector {
         requests.truncate(input.limit.unwrap_or(requests.len()));
         self.state
             .join_requests
-            .insert(input.room_id.clone(), requests.clone());
+            .insert(key.clone(), requests.clone());
         json_result(json!({ "join_requests": requests }))
     }
 
     async fn join_request_review(&mut self, input: JoinRequestReviewInput) -> Result<Value> {
-        let host = self.allowed_room_host(&input.room_id)?;
+        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
+        let host = self.allowed_room_host(&key)?;
         let jwt = self.request_jwt(&host)?;
         let status = DiscourseClient::new(&host)
             .join_request(&input.room_id, &input.request_id, &jwt)
@@ -1798,7 +1882,7 @@ impl LocalConnector {
         };
         let envelope = self.sign_room_event(
             event_type::ROOM_JOIN_REVIEW,
-            &input.room_id,
+            &key,
             None,
             None,
             Vec::new(),
@@ -1807,8 +1891,8 @@ impl LocalConnector {
         let record = DiscourseClient::new(&host)
             .submit_event(&input.room_id, &envelope)
             .await?;
-        self.apply_record(record.clone())?;
-        json_result(json!({ "record": record, "sync": self.sync_state(&input.room_id)? }))
+        self.apply_host_record(&host, record.clone())?;
+        json_result(json!({ "record": record, "sync": self.sync_state(&key)? }))
     }
 
     fn sign_profile_update(
@@ -1842,7 +1926,7 @@ impl LocalConnector {
     fn sign_room_event<P>(
         &mut self,
         event_type: impl Into<String>,
-        room_id: &str,
+        key: &RoomKey,
         base_seq: Option<u64>,
         base_hash: Option<String>,
         mentions: Vec<AgentId>,
@@ -1851,15 +1935,15 @@ impl LocalConnector {
     where
         P: Serialize,
     {
-        let host = self.local_room(room_id)?.host.clone();
+        let host = self.local_room(key)?.host.clone();
         self.require_allowed_host(&host)?;
-        let (base_seq, base_hash) = self.room_head_for_write(room_id, base_seq, base_hash)?;
+        let (base_seq, base_hash) = self.room_head_for_write(key, base_seq, base_hash)?;
         let event = discourse_event(
             event_type,
             self.agent_id(),
             unix_ms(),
             self.nonce_manager.next_nonce()?,
-            room_id,
+            key.1.clone(),
             base_seq,
             base_hash,
             payload,
@@ -1872,7 +1956,7 @@ impl LocalConnector {
 
     fn room_head_for_write(
         &self,
-        room_id: &str,
+        key: &RoomKey,
         base_seq: Option<u64>,
         base_hash: Option<String>,
     ) -> Result<(u64, String)> {
@@ -1882,7 +1966,7 @@ impl LocalConnector {
                 "base_seq and base_hash must identify a valid room head".to_owned(),
             )),
             (None, None) => {
-                let sync = self.sync_state(room_id)?;
+                let sync = self.sync_state(key)?;
                 let hash = sync.head_hash;
                 if sync.head_seq == 0 || hash.trim().is_empty() {
                     return Err(SdkError::InvalidPayload(
@@ -1897,7 +1981,9 @@ impl LocalConnector {
         }
     }
 
-    fn request_jwt(&self, audience: &str) -> Result<String> {
+    fn request_jwt(&self, host: &str) -> Result<String> {
+        // The request JWT aud is always the origin of the host API.
+        let audience = crate::identity::service_origin(host)?;
         let claims = RequestJwtClaims::new(
             self.agent_id(),
             RequestBinding::new(audience),
@@ -1909,13 +1995,11 @@ impl LocalConnector {
 
     fn head_mismatch_message_result(
         &mut self,
+        key: &RoomKey,
         input: &mut RoomSendMessageInput,
     ) -> Result<Option<Value>> {
-        let Some(head_mismatch) = self.head_mismatch_write_state(
-            &input.room_id,
-            input.base_seq,
-            input.base_hash.as_deref(),
-        )?
+        let Some(head_mismatch) =
+            self.head_mismatch_write_state(key, input.base_seq, input.base_hash.as_deref())?
         else {
             return Ok(None);
         };
@@ -1937,13 +2021,11 @@ impl LocalConnector {
 
     fn head_mismatch_event_result(
         &mut self,
+        key: &RoomKey,
         input: &mut RoomSubmitEventInput,
     ) -> Result<Option<Value>> {
-        let Some(head_mismatch) = self.head_mismatch_write_state(
-            &input.room_id,
-            input.base_seq,
-            input.base_hash.as_deref(),
-        )?
+        let Some(head_mismatch) =
+            self.head_mismatch_write_state(key, input.base_seq, input.base_hash.as_deref())?
         else {
             return Ok(None);
         };
@@ -1965,7 +2047,7 @@ impl LocalConnector {
 
     fn head_mismatch_write_state(
         &self,
-        room_id: &str,
+        key: &RoomKey,
         base_seq: Option<u64>,
         base_hash: Option<&str>,
     ) -> Result<Option<HeadMismatchState>> {
@@ -1973,7 +2055,7 @@ impl LocalConnector {
             return Ok(None);
         }
 
-        let sync = self.sync_state(room_id)?;
+        let sync = self.sync_state(key)?;
         let seq_mismatch = base_seq
             .map(|base_seq| base_seq != sync.head_seq)
             .unwrap_or(false);
@@ -1986,7 +2068,7 @@ impl LocalConnector {
 
         Ok(Some(HeadMismatchState {
             sync,
-            changes: self.room_changes_since(room_id, base_seq)?,
+            changes: self.room_changes_since(key, base_seq)?,
         }))
     }
 
@@ -2001,9 +2083,10 @@ impl LocalConnector {
 
     fn hold_message_draft(
         &mut self,
-        input: RoomSendMessageInput,
+        mut input: RoomSendMessageInput,
         head_mismatch: HeadMismatchState,
     ) -> Result<Value> {
+        input.host = Some(head_mismatch.sync.host.clone());
         let draft_id = self.next_draft_id(&input.room_id);
         let draft = HeldDraft {
             id: draft_id.clone(),
@@ -2035,9 +2118,10 @@ impl LocalConnector {
 
     fn hold_event_draft(
         &mut self,
-        input: RoomSubmitEventInput,
+        mut input: RoomSubmitEventInput,
         head_mismatch: HeadMismatchState,
     ) -> Result<Value> {
+        input.host = Some(head_mismatch.sync.host.clone());
         let draft_id = self.next_draft_id(&input.room_id);
         let draft = HeldDraft {
             id: draft_id.clone(),
@@ -2069,10 +2153,10 @@ impl LocalConnector {
 
     fn room_changes_since(
         &self,
-        room_id: &str,
+        key: &RoomKey,
         base_seq: Option<u64>,
     ) -> Result<Vec<TimelineItem>> {
-        let room = self.local_room(room_id)?;
+        let room = self.local_room(key)?;
         let changes = match base_seq {
             Some(seq) => room
                 .timeline
@@ -2109,8 +2193,8 @@ impl LocalConnector {
         format!("draft_{}_{}", room, self.state.drafts.len() + 1)
     }
 
-    fn sync_state(&self, room_id: &str) -> Result<SyncState> {
-        let room = self.local_room(room_id)?;
+    fn sync_state(&self, key: &RoomKey) -> Result<SyncState> {
+        let room = self.local_room(key)?;
         let head_hash = room
             .head_hash
             .clone()
@@ -2118,14 +2202,14 @@ impl LocalConnector {
             .unwrap_or_else(|| room.room.hash.clone());
         Ok(SyncState {
             host: room.host.clone(),
-            room_id: room_id.to_owned(),
+            room_id: key.1.clone(),
             head_seq: room.head_seq,
             head_hash,
             synced_seq: room.synced_seq,
             remote_seq: room.room.seq.max(room.synced_seq),
             subscribed: room.subscribed,
             unread_count: room.unread_count(),
-            pending_inbox_count: self.pending_inbox_count(Some(room_id)),
+            pending_inbox_count: self.pending_inbox_count(Some(&key.1)),
         })
     }
 
@@ -2184,7 +2268,7 @@ impl LocalConnector {
     fn summary_for_response(&self, host: &str, room: &RoomResponse) -> RoomSummary {
         self.state
             .rooms
-            .get(&room.id)
+            .get(&(host.to_owned(), room.id.clone()))
             .map(|room| self.summary_for_room(room))
             .unwrap_or_else(|| RoomSummary {
                 room_id: room.id.clone(),
@@ -2202,8 +2286,8 @@ impl LocalConnector {
             })
     }
 
-    fn timeline_item_by_event(&self, room_id: &str, event_id: &str) -> Result<TimelineItem> {
-        self.local_room(room_id)?
+    fn timeline_item_by_event(&self, key: &RoomKey, event_id: &str) -> Result<TimelineItem> {
+        self.local_room(key)?
             .timeline
             .iter()
             .find(|item| item.event_id == event_id)
@@ -2211,18 +2295,18 @@ impl LocalConnector {
             .ok_or_else(|| SdkError::InvalidPayload("timeline item not materialized".to_owned()))
     }
 
-    fn local_room(&self, room_id: &str) -> Result<&LocalRoomState> {
+    fn local_room(&self, key: &RoomKey) -> Result<&LocalRoomState> {
         self.state
             .rooms
-            .get(room_id)
-            .ok_or_else(|| SdkError::InvalidPayload(format!("room is not open locally: {room_id}")))
+            .get(key)
+            .ok_or_else(|| SdkError::InvalidPayload(format!("room is not open locally: {}", key.1)))
     }
 
-    fn local_room_mut(&mut self, room_id: &str) -> Result<&mut LocalRoomState> {
+    fn local_room_mut(&mut self, key: &RoomKey) -> Result<&mut LocalRoomState> {
         self.state
             .rooms
-            .get_mut(room_id)
-            .ok_or_else(|| SdkError::InvalidPayload(format!("room is not open locally: {room_id}")))
+            .get_mut(key)
+            .ok_or_else(|| SdkError::InvalidPayload(format!("room is not open locally: {}", key.1)))
     }
 
     fn require_allowed_host(&self, host: &str) -> Result<()> {
@@ -2232,8 +2316,8 @@ impl LocalConnector {
         }
     }
 
-    fn allowed_room_host(&self, room_id: &str) -> Result<String> {
-        let host = self.local_room(room_id)?.host.clone();
+    fn allowed_room_host(&self, key: &RoomKey) -> Result<String> {
+        let host = self.local_room(key)?.host.clone();
         self.require_allowed_host(&host)?;
         Ok(host)
     }
@@ -2311,15 +2395,6 @@ impl TimelineItem {
 }
 
 #[derive(Deserialize)]
-struct HostAddInput {
-    host: String,
-    #[serde(default)]
-    label: Option<String>,
-    #[serde(default)]
-    profile_service: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct RoomsSearchInput {
     host: String,
     #[serde(default)]
@@ -2378,6 +2453,8 @@ struct RoomOpenInput {
 struct RoomStateInput {
     room_id: String,
     #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
     refresh: bool,
     #[serde(default)]
     include_types: bool,
@@ -2386,6 +2463,8 @@ struct RoomStateInput {
 #[derive(Deserialize)]
 struct RoomMembersListInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     #[serde(default)]
     status: Option<RoomMemberStatus>,
     #[serde(default)]
@@ -2401,6 +2480,8 @@ struct RoomMembersListInput {
 #[derive(Deserialize)]
 struct RoomMemberGetInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     agent_id: AgentId,
     #[serde(default)]
     include_profile: bool,
@@ -2412,12 +2493,16 @@ struct RoomMemberGetInput {
 struct AgentStatusListInput {
     room_id: String,
     #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
     refresh: bool,
 }
 
 #[derive(Deserialize)]
 struct AgentStatusGetInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     agent_id: AgentId,
     #[serde(default)]
     refresh: bool,
@@ -2426,6 +2511,8 @@ struct AgentStatusGetInput {
 #[derive(Deserialize)]
 struct AgentStatusSetInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     state: String,
     #[serde(default)]
     summary: Option<String>,
@@ -2437,7 +2524,8 @@ struct AgentStatusSetInput {
     claim_id: Option<String>,
     #[serde(default)]
     activity: Option<String>,
-    expires_at: i64,
+    #[serde(default)]
+    expires_at: Option<i64>,
     #[serde(default)]
     extra: BTreeMap<String, Value>,
 }
@@ -2445,11 +2533,15 @@ struct AgentStatusSetInput {
 #[derive(Deserialize)]
 struct AgentStatusClearInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct RoomTimelineInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     #[serde(default)]
     after_seq: Option<u64>,
     #[serde(default)]
@@ -2472,6 +2564,8 @@ struct RoomTimelineInput {
 struct RoomUnreadInput {
     room_id: String,
     #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
     mark_read: bool,
@@ -2480,6 +2574,8 @@ struct RoomUnreadInput {
 #[derive(Deserialize)]
 struct RoomMarkReadInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     through_seq: u64,
 }
 
@@ -2517,6 +2613,8 @@ struct InboxAckInput {
 struct DraftsListInput {
     #[serde(default)]
     room_id: Option<String>,
+    #[serde(default)]
+    host: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
@@ -2618,6 +2716,8 @@ struct RoomJoinRequestToolInput {
 #[derive(Deserialize)]
 struct RoomJoinWhenApprovedInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     request_id: String,
 }
 
@@ -2625,12 +2725,16 @@ struct RoomJoinWhenApprovedInput {
 struct RoomLeaveInput {
     room_id: String,
     #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
     reason: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
 struct RoomSendMessageInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     content: String,
     #[serde(default)]
     content_type: Option<String>,
@@ -2651,6 +2755,8 @@ struct RoomSendMessageInput {
 #[derive(Clone, Deserialize, Debug)]
 struct RoomSubmitEventInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     #[serde(rename = "type")]
     event_type: String,
     payload: Value,
@@ -2670,6 +2776,8 @@ struct RoomSubmitEventInput {
 struct JoinRequestsListInput {
     room_id: String,
     #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
     status: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
@@ -2680,6 +2788,8 @@ struct JoinRequestsListInput {
 #[derive(Deserialize)]
 struct JoinRequestReviewInput {
     room_id: String,
+    #[serde(default)]
+    host: Option<String>,
     request_id: String,
     decision: JoinDecision,
     #[serde(default)]
@@ -2776,9 +2886,15 @@ fn room_response_head(room: &RoomResponse) -> (u64, String) {
 }
 
 fn record_advances_room_head(room: &LocalRoomState, record: &ServerRecord) -> bool {
-    let event_type = record.envelope.event.kind.as_str();
-    if crate::discourse::is_builtin_event_type(event_type) {
-        return true;
+    event_type_advances_room_head(room, record.envelope.event.kind.as_str())
+}
+
+/// ADP Section 6.1: room lifecycle, `message`-kind, and `control`-kind records
+/// advance the room head. `signal`-kind records — including the built-in
+/// membership events — only anchor to an accepted record.
+fn event_type_advances_room_head(room: &LocalRoomState, event_type: &str) -> bool {
+    if let Some(class) = crate::discourse::builtin_event_class(event_type) {
+        return class != crate::discourse::BuiltinEventClass::Signal;
     }
     room.room
         .types
@@ -2789,10 +2905,17 @@ fn record_advances_room_head(room: &LocalRoomState, record: &ServerRecord) -> bo
 }
 
 fn materialize_creator(room: &mut LocalRoomState) {
-    let Some(envelope) = &room.room.envelope else {
-        return;
+    let creator = match (
+        room.room.creator.clone(),
+        room.room
+            .envelope
+            .as_ref()
+            .map(|envelope| envelope.event.actor.clone()),
+    ) {
+        (Some(creator), _) => creator,
+        (None, Some(creator)) => creator,
+        (None, None) => return,
     };
-    let creator = envelope.event.actor.clone();
     room.members
         .entry(creator.clone())
         .or_insert_with(|| RoomMemberView {
@@ -2807,6 +2930,49 @@ fn materialize_creator(room: &mut LocalRoomState) {
             profile: None,
             extra: BTreeMap::new(),
         });
+}
+
+/// Applies an accepted `room.update` to the local room contract. A present
+/// field replaces the current value entirely; an empty value clears an
+/// optional field.
+fn apply_room_update(
+    room: &mut LocalRoomState,
+    payload: &crate::discourse::RoomUpdatePayload,
+    received_at: i64,
+) {
+    let response = &mut room.room;
+    if let Some(topic) = &payload.topic {
+        response.topic = Some(topic.clone());
+    }
+    if let Some(agenda) = &payload.agenda {
+        response.agenda = (!agenda.is_empty()).then(|| agenda.clone());
+    }
+    if let Some(guidance) = &payload.guidance {
+        response.guidance = (!guidance.is_empty()).then(|| guidance.clone());
+    }
+    if let Some(tags) = &payload.tags {
+        response.tags = tags.clone();
+    }
+    if let Some(language) = &payload.language {
+        response.language = (!language.is_empty()).then(|| language.clone());
+    }
+    if let Some(policy) = &payload.policy {
+        // A present field replaces the current value entirely; a policy that
+        // happens to equal the default is still an explicit revision, not a
+        // clear, so store it verbatim.
+        response.policy = Some(policy.clone());
+    }
+    if let Some(start_time) = payload.start_time {
+        response.start_time = Some(start_time);
+        // A scheduled room whose new start_time is at or before acceptance
+        // time becomes active.
+        if response.status == RoomState::Scheduled && start_time <= received_at {
+            response.status = RoomState::Active;
+        }
+    }
+    if let Some(end_time) = payload.end_time {
+        response.end_time = Some(end_time);
+    }
 }
 
 fn is_duplicate_record(room: &LocalRoomState, record: &ServerRecord) -> bool {
@@ -2916,6 +3082,61 @@ fn apply_record_projection(
                         false,
                     ));
                 }
+            }
+        }
+        event_type::ROOM_UPDATE => {
+            let payload: crate::discourse::RoomUpdatePayload =
+                serde_json::from_value(event.payload.clone())?;
+            apply_room_update(room, &payload, record.received_at);
+            inbox.push(inbox_from_item(
+                InboxKind::RoomStateChanged,
+                InboxPriority::Normal,
+                item,
+                "room_updated",
+                false,
+            ));
+        }
+        event_type::ROOM_MEMBER_REMOVE => {
+            let payload: crate::discourse::RoomMemberRemovePayload =
+                serde_json::from_value(event.payload.clone())?;
+            let status = if payload.banning() {
+                RoomMemberStatus::Banned
+            } else {
+                RoomMemberStatus::Removed
+            };
+            room.members
+                .entry(payload.member.clone())
+                .and_modify(|member| {
+                    member.status = status;
+                    member.left_seq = Some(record.seq);
+                    member.last_event_seq = Some(record.seq);
+                })
+                .or_insert_with(|| RoomMemberView {
+                    // A `ban: true` remove may target a non-member as a
+                    // pre-emptive ban; it never had a real role.
+                    agent_id: payload.member.clone(),
+                    role: Role::Observer,
+                    status,
+                    is_creator: false,
+                    perspective: None,
+                    joined_seq: None,
+                    left_seq: Some(record.seq),
+                    last_event_seq: Some(record.seq),
+                    profile: None,
+                    extra: BTreeMap::new(),
+                });
+            if payload.member == *active_agent {
+                inbox.push(inbox_from_item(
+                    InboxKind::RoomMemberRemoved,
+                    InboxPriority::High,
+                    item,
+                    if payload.banning() {
+                        "member_banned"
+                    } else {
+                        "member_removed"
+                    },
+                    false,
+                ));
             }
         }
         event_type::ROOM_CLOSE => {
@@ -3198,7 +3419,6 @@ fn held_draft_options() -> Vec<DraftAction> {
 fn profile_to_member_profile(profile: &AgentProfile) -> RoomMemberProfile {
     RoomMemberProfile {
         name: Some(profile.name.clone()),
-        username: profile.username.clone(),
         description: profile.description.clone(),
         avatar_url: profile.avatar_url.clone(),
     }
@@ -3230,6 +3450,8 @@ mod tests {
             id: room_id.to_owned(),
             status: RoomState::Active,
             url: format!("https://api.example.test/v1/rooms/{room_id}"),
+            creator: None,
+            created_at: None,
             topic: Some("Room".to_owned()),
             agenda: None,
             guidance: None,
@@ -3296,7 +3518,10 @@ mod tests {
         );
         let result = connector.sign_room_event(
             event_type::MESSAGE_CREATE,
-            "room1",
+            &(
+                "https://untrusted.example.test".to_owned(),
+                "room1".to_owned(),
+            ),
             None,
             None,
             Vec::new(),
@@ -3326,7 +3551,8 @@ mod tests {
         room.language = None;
 
         connector.observe_room("https://api.example.test", room);
-        let room = connector.local_room("room1").unwrap();
+        let key = ("https://api.example.test".to_owned(), "room1".to_owned());
+        let room = connector.local_room(&key).unwrap();
         let view = connector.room_state_view(room);
         let summary = connector.summary_for_room(room);
 
@@ -3387,13 +3613,18 @@ mod tests {
             .apply_record(typed_record_to_value(join).unwrap())
             .unwrap();
 
-        let message = MessageCreatePayload::text("please review this");
-        let message_base_hash = connector
-            .local_room("room1")
+        // room.join is a membership signal: it does not advance the room head,
+        // so the message still bases on the room.create head.
+        let key = ("https://api.example.test".to_owned(), "room1".to_owned());
+        let head_after_join = connector.local_room(&key).unwrap().head_seq;
+        assert_eq!(head_after_join, 1);
+        let join_record_hash = connector
+            .local_room(&key)
             .unwrap()
-            .head_hash
+            .synced_hash
             .clone()
             .unwrap();
+        let message = MessageCreatePayload::text("please review this");
         let message_envelope = speaker
             .sign_event(
                 discourse_event(
@@ -3402,16 +3633,15 @@ mod tests {
                     120,
                     2,
                     "room1",
-                    2,
-                    message_base_hash.clone(),
+                    1,
+                    "room-create-head",
                     message,
                 )
                 .with_mention(connector.agent_id()),
             )
             .unwrap();
         let message =
-            build_server_record("room1", 3, Some(message_base_hash), 121, message_envelope)
-                .unwrap();
+            build_server_record("room1", 3, Some(join_record_hash), 121, message_envelope).unwrap();
         connector
             .apply_record(typed_record_to_value(message).unwrap())
             .unwrap();
@@ -3419,6 +3649,7 @@ mod tests {
         let members = connector
             .room_members_list(RoomMembersListInput {
                 room_id: "room1".to_owned(),
+                host: None,
                 status: Some(RoomMemberStatus::Active),
                 role: None,
                 include_profiles: false,
@@ -3483,6 +3714,7 @@ mod tests {
         let result = runtime
             .block_on(connector.room_send_message(RoomSendMessageInput {
                 room_id: "room1".to_owned(),
+                host: None,
                 content: "answer based on old context".to_owned(),
                 content_type: None,
                 mentions: Vec::new(),
@@ -3504,6 +3736,7 @@ mod tests {
         let drafts = connector
             .drafts_list(DraftsListInput {
                 room_id: Some("room1".to_owned()),
+                host: None,
                 limit: None,
                 cursor: None,
             })
@@ -3569,7 +3802,8 @@ mod tests {
             .apply_record(typed_record_to_value(signal).unwrap())
             .unwrap();
 
-        let sync = connector.sync_state("room1").unwrap();
+        let key = ("https://api.example.test".to_owned(), "room1".to_owned());
+        let sync = connector.sync_state(&key).unwrap();
         assert_eq!(sync.head_seq, 1);
         assert_eq!(sync.head_hash, "room-create-head");
         assert_eq!(sync.synced_seq, 2);
@@ -3644,6 +3878,229 @@ mod tests {
             .apply_record(typed_record_to_value(stale_message).unwrap())
             .unwrap_err();
         assert!(err.to_string().contains("must match current room head"));
+    }
+
+    #[test]
+    fn member_remove_records_project_removal_bans_and_inbox() {
+        let active = signer(1);
+        let moderator = signer(5);
+        let mut connector = LocalConnector::new(active);
+        let mut room = room_response("room1", &moderator);
+        room.creator = Some(moderator.agent_id());
+        connector.accept_room_response("https://api.example.test", room);
+        let key = ("https://api.example.test".to_owned(), "room1".to_owned());
+
+        // The active agent joins, then is removed with a ban.
+        let active_id = connector.agent_id();
+        let join_envelope = connector
+            .signer
+            .sign_event(discourse_event(
+                event_type::ROOM_JOIN,
+                active_id.clone(),
+                110,
+                1,
+                "room1",
+                1,
+                "room-create-head",
+                RoomJoinPayload {
+                    request_id: None,
+                    role: Role::Speaker,
+                    perspective: None,
+                },
+            ))
+            .unwrap();
+        let join = build_server_record(
+            "room1",
+            2,
+            Some("room-create-head".to_owned()),
+            111,
+            join_envelope,
+        )
+        .unwrap();
+        connector
+            .apply_host_record(
+                "https://api.example.test",
+                typed_record_to_value(join).unwrap(),
+            )
+            .unwrap();
+        // Membership signals never advance the room head.
+        assert_eq!(connector.local_room(&key).unwrap().head_seq, 1);
+
+        let join_hash = connector
+            .local_room(&key)
+            .unwrap()
+            .synced_hash
+            .clone()
+            .unwrap();
+        let remove_envelope = moderator
+            .sign_event(discourse_event(
+                event_type::ROOM_MEMBER_REMOVE,
+                moderator.agent_id(),
+                120,
+                2,
+                "room1",
+                1,
+                "room-create-head",
+                crate::discourse::RoomMemberRemovePayload {
+                    ban: Some(true),
+                    reason: Some("spam".to_owned()),
+                    ..crate::discourse::RoomMemberRemovePayload::new(active_id.clone())
+                },
+            ))
+            .unwrap();
+        let remove =
+            build_server_record("room1", 3, Some(join_hash), 121, remove_envelope).unwrap();
+        connector
+            .apply_host_record(
+                "https://api.example.test",
+                typed_record_to_value(remove).unwrap(),
+            )
+            .unwrap();
+
+        // Still anchored, still not head-advancing.
+        assert_eq!(connector.local_room(&key).unwrap().head_seq, 1);
+        let member = connector
+            .local_room(&key)
+            .unwrap()
+            .members
+            .get(&active_id)
+            .cloned()
+            .unwrap();
+        assert_eq!(member.status, RoomMemberStatus::Banned);
+        assert_eq!(member.left_seq, Some(3));
+
+        let banned_members = connector
+            .room_members_list(RoomMembersListInput {
+                room_id: "room1".to_owned(),
+                host: None,
+                status: Some(RoomMemberStatus::Banned),
+                role: None,
+                include_profiles: false,
+                limit: None,
+                cursor: None,
+            })
+            .unwrap();
+        assert_eq!(banned_members["members"].as_array().unwrap().len(), 1);
+
+        let inbox = connector
+            .inbox_next(InboxNextInput {
+                room_id: Some("room1".to_owned()),
+                kinds: Some(vec!["room.member.removed".to_owned()]),
+                limit: None,
+                wait_ms: None,
+                claim: false,
+            })
+            .unwrap();
+        assert_eq!(inbox["items"].as_array().unwrap().len(), 1);
+        assert_eq!(inbox["items"][0]["kind"], "room.member.removed");
+        assert_eq!(inbox["items"][0]["reason"], "member_banned");
+    }
+
+    #[test]
+    fn room_update_records_advance_head_and_revise_the_contract() {
+        let active = signer(1);
+        let moderator = signer(5);
+        let mut connector = LocalConnector::new(active);
+        connector.accept_room_response(
+            "https://api.example.test",
+            room_response("room1", &moderator),
+        );
+        let key = ("https://api.example.test".to_owned(), "room1".to_owned());
+
+        let update_envelope = moderator
+            .sign_event(discourse_event(
+                event_type::ROOM_UPDATE,
+                moderator.agent_id(),
+                120,
+                2,
+                "room1",
+                1,
+                "room-create-head",
+                crate::discourse::RoomUpdatePayload {
+                    topic: Some("Sharper topic".to_owned()),
+                    guidance: Some(String::new()),
+                    end_time: Some(5000),
+                    // An all-default policy is still an explicit revision: it
+                    // must be stored verbatim, not cleared.
+                    policy: Some(crate::discourse::RoomPolicy::default()),
+                    ..crate::discourse::RoomUpdatePayload::default()
+                },
+            ))
+            .unwrap();
+        let update = build_server_record(
+            "room1",
+            2,
+            Some("room-create-head".to_owned()),
+            121,
+            update_envelope,
+        )
+        .unwrap();
+        connector
+            .apply_host_record(
+                "https://api.example.test",
+                typed_record_to_value(update).unwrap(),
+            )
+            .unwrap();
+
+        // room.update is a lifecycle event: it advances the room head.
+        let room = connector.local_room(&key).unwrap();
+        assert_eq!(room.head_seq, 2);
+        assert_eq!(room.room.topic.as_deref(), Some("Sharper topic"));
+        assert_eq!(room.room.guidance, None);
+        assert_eq!(room.room.end_time, Some(5000));
+        assert_eq!(
+            room.room.policy,
+            Some(crate::discourse::RoomPolicy::default())
+        );
+        assert_eq!(connector.pending_inbox_count(Some("room1")), 1);
+    }
+
+    #[test]
+    fn duplicate_room_ids_across_hosts_require_a_host_input() {
+        let active = signer(1);
+        let creator = signer(5);
+        let mut connector = LocalConnector::new(active);
+        connector.accept_room_response("https://a.example.test", room_response("room1", &creator));
+        connector.accept_room_response("https://b.example.test", room_response("room1", &creator));
+
+        assert!(connector.resolve_room_key(None, "room1").is_err());
+        assert_eq!(
+            connector
+                .resolve_room_key(Some("https://a.example.test"), "room1")
+                .unwrap(),
+            ("https://a.example.test".to_owned(), "room1".to_owned())
+        );
+        let listed = connector
+            .room_members_list(RoomMembersListInput {
+                room_id: "room1".to_owned(),
+                host: Some("https://b.example.test".to_owned()),
+                status: None,
+                role: None,
+                include_profiles: false,
+                limit: None,
+                cursor: None,
+            })
+            .unwrap();
+        assert_eq!(listed["sync"]["host"], "https://b.example.test");
+    }
+
+    #[test]
+    fn standard_tools_exclude_host_mutation_and_mark_timeline_writable() {
+        let tools = standard_tool_definitions();
+        assert!(!tools
+            .iter()
+            .any(|tool| tool.name == "agent_protocols_host_add"));
+        let timeline = tools
+            .iter()
+            .find(|tool| tool.name == TOOL_ROOM_TIMELINE)
+            .unwrap();
+        assert!(!timeline.annotations.read_only_hint);
+        assert!(timeline.annotations.idempotent_hint);
+        let inbox_next = tools
+            .iter()
+            .find(|tool| tool.name == TOOL_INBOX_NEXT)
+            .unwrap();
+        assert!(!inbox_next.annotations.read_only_hint);
     }
 
     #[test]

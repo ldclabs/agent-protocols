@@ -61,12 +61,17 @@ export interface RequestJwtHeader {
 }
 
 export interface RequestBinding {
+  /** The origin of the receiving service, e.g. `https://api.example.com`. */
   audience: string;
 }
 
 export interface RequestJwtClaims {
   iss: AgentId;
   sub: AgentId;
+  /**
+   * Origin of the receiving service: scheme, host, and non-default port with
+   * no path. All Agent Protocols endpoints on one origin share this value.
+   */
   aud: string;
   iat: number;
   exp: number;
@@ -154,9 +159,12 @@ export class MemoryNonceStore implements NonceStore {
     }
     const record = this.records.get(actor);
     if (record && record.expiresAt > nowMs && nonce <= record.maxNonce) {
+      // Services rejecting for this reason MUST return the effective maximum
+      // in the `Max-Seen-Nonce` response header; `data.max_nonce` carries it.
       throw protocolError(
         "nonce_not_greater",
         `nonce must be greater than accepted max nonce ${record.maxNonce}`,
+        { max_nonce: record.maxNonce },
       );
     }
     this.records.set(actor, { maxNonce: nonce, expiresAt: nowMs + ttlMs });
@@ -268,6 +276,9 @@ export function agentIdFromPublicKey(publicKey: Uint8Array): AgentId {
 }
 
 export function publicKeyBytes(agentId: AgentId): Uint8Array {
+  if (typeof agentId !== "string") {
+    throw protocolError("invalid_agent_id", "agent id must be a string");
+  }
   const encoded = agentId.startsWith(AGENT_ID_PREFIX)
     ? agentId.slice(AGENT_ID_PREFIX.length)
     : undefined;
@@ -277,7 +288,7 @@ export function publicKeyBytes(agentId: AgentId): Uint8Array {
       "agent id must start with did:agent:",
     );
   }
-  const bytes = base64UrlDecodeNoPad(encoded);
+  const bytes = base64UrlDecode(encoded);
   if (bytes.byteLength !== 32) {
     throw protocolError(
       "invalid_public_key",
@@ -323,6 +334,13 @@ export function signEvent(
   return signEventHash(secretKey, eventHashBytes(event));
 }
 
+/**
+ * Signs a precomputed 32-byte event hash. Signing a digest supplied by
+ * another component without seeing the event it commits to (blind signing) is
+ * NOT RECOMMENDED: `actor` and all event content are inside the digest, so a
+ * blind signer can be tricked into signing arbitrary events attributed to its
+ * key. Prefer `signEvent`, which canonicalizes and hashes the event itself.
+ */
 export function signEventHash(
   secretKey: Uint8Array,
   eventHash: Uint8Array,
@@ -428,6 +446,23 @@ export function createRequestBinding(audience: string): RequestBinding {
   };
 }
 
+/**
+ * Derives the request JWT `aud` from a request URL: the service origin —
+ * scheme, host, and non-default port, with no path (Agent Identity Section 8).
+ */
+export function serviceOrigin(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw protocolError("invalid_url", `not a valid URL: ${url}`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw protocolError("invalid_url", `not an HTTP(S) URL: ${url}`);
+  }
+  return parsed.origin;
+}
+
 export function createRequestJwtClaims(
   agentId: AgentId,
   binding: RequestBinding,
@@ -528,18 +563,20 @@ function base64UrlEncode(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
 }
 
+/**
+ * Canonical base64url decoding: URL-safe alphabet, no padding, zero trailing
+ * bits. Receivers MUST reject non-canonical encodings, otherwise one value
+ * gains multiple distinct string forms and corrupts string-keyed comparisons.
+ */
 function base64UrlDecode(value: string): Uint8Array {
-  return new Uint8Array(Buffer.from(value, "base64url"));
-}
-
-function base64UrlDecodeNoPad(value: string): Uint8Array {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+  const bytes = new Uint8Array(Buffer.from(value, "base64url"));
+  if (Buffer.from(bytes).toString("base64url") !== value) {
     throw protocolError(
       "invalid_encoding",
-      "expected base64url without padding",
+      "expected canonical base64url without padding",
     );
   }
-  return base64UrlDecode(value);
+  return bytes;
 }
 
 function validEventHashBytes(eventHash: Uint8Array): Uint8Array {

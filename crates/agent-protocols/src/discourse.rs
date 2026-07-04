@@ -1,7 +1,7 @@
 //! Agent Discourse Protocol 1.0: kernel types, the room type system, and
 //! verification helpers.
 //!
-//! The protocol defines nine built-in event types. Every other event type is
+//! The protocol defines eleven built-in event types. Every other event type is
 //! declared per room as a schema-validated type definition, either inline or
 //! imported from a type pack. Hosts validate structure and permissions; they
 //! never need to understand application semantics.
@@ -20,30 +20,81 @@ use crate::identity::{verify_envelope, AgentId, Envelope, Event, MAX_SAFE_NONCE}
 
 pub const PROTOCOL: &str = "agent-discourse/1.0";
 
-/// The nine built-in event types. All other types are room-defined.
+/// The eleven built-in event types. All other types are room-defined.
 pub mod event_type {
     pub const ROOM_CREATE: &str = "room.create";
+    pub const ROOM_UPDATE: &str = "room.update";
     pub const ROOM_JOIN: &str = "room.join";
     pub const ROOM_JOIN_REVIEW: &str = "room.join.review";
     pub const ROOM_LEAVE: &str = "room.leave";
     pub const ROOM_MEMBER_ROLE_UPDATE: &str = "room.member.role.update";
+    pub const ROOM_MEMBER_REMOVE: &str = "room.member.remove";
     pub const ROOM_CLOSE: &str = "room.close";
     pub const ROOM_CANCEL: &str = "room.cancel";
     pub const TYPE_DEFINE: &str = "type.define";
     pub const MESSAGE_CREATE: &str = "message.create";
 }
 
-pub const BUILTIN_EVENT_TYPES: [&str; 9] = [
+pub const BUILTIN_EVENT_TYPES: [&str; 11] = [
     event_type::ROOM_CREATE,
+    event_type::ROOM_UPDATE,
     event_type::ROOM_JOIN,
     event_type::ROOM_JOIN_REVIEW,
     event_type::ROOM_LEAVE,
     event_type::ROOM_MEMBER_ROLE_UPDATE,
+    event_type::ROOM_MEMBER_REMOVE,
     event_type::ROOM_CLOSE,
     event_type::ROOM_CANCEL,
     event_type::TYPE_DEFINE,
     event_type::MESSAGE_CREATE,
 ];
+
+/// Built-in membership events. They carry the `signal` class: they anchor to
+/// an accepted record but never contend for or advance the room head, so busy
+/// rooms cannot starve joins, reviews, or other membership writes.
+pub const MEMBERSHIP_EVENT_TYPES: [&str; 5] = [
+    event_type::ROOM_JOIN,
+    event_type::ROOM_JOIN_REVIEW,
+    event_type::ROOM_LEAVE,
+    event_type::ROOM_MEMBER_ROLE_UPDATE,
+    event_type::ROOM_MEMBER_REMOVE,
+];
+
+/// Standard ADP error codes from the Section 20 table.
+pub const DISCOURSE_ERROR_CODES: [&str; 29] = [
+    "invalid_event",
+    "invalid_event_hash",
+    "invalid_signature",
+    "invalid_actor",
+    "timestamp_out_of_window",
+    "nonce_not_greater",
+    "room_not_found",
+    "room_not_active",
+    "room_ended",
+    "permission_denied",
+    "approval_required",
+    "join_request_not_found",
+    "join_request_not_approved",
+    "join_request_role_mismatch",
+    "join_request_expired",
+    "member_banned",
+    "role_not_allowed",
+    "max_speakers_exceeded",
+    "membership_required",
+    "invalid_token",
+    "room_head_mismatch",
+    "base_record_mismatch",
+    "agent_status_not_found",
+    "rate_limited",
+    "payload_too_large",
+    "type_not_defined",
+    "type_disabled",
+    "payload_schema_violation",
+    "pack_unavailable",
+];
+
+/// Hosts MUST reject events with more than this many `mentions` entries.
+pub const MAX_MENTIONS: usize = 32;
 
 /// Custom event types must not use these prefixes.
 pub const RESERVED_TYPE_PREFIXES: [&str; 2] = ["room.", "type."];
@@ -99,6 +150,50 @@ pub enum TypeStatus {
     Active,
     Deprecated,
     Disabled,
+}
+
+/// Class of a built-in type per the Section 13.2 table.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinEventClass {
+    Lifecycle,
+    Signal,
+    Control,
+    Message,
+}
+
+/// Section 13.2 class of a built-in type; `None` for room-defined types.
+pub fn builtin_event_class(event_type: &str) -> Option<BuiltinEventClass> {
+    match event_type {
+        event_type::ROOM_CREATE
+        | event_type::ROOM_UPDATE
+        | event_type::ROOM_CLOSE
+        | event_type::ROOM_CANCEL => Some(BuiltinEventClass::Lifecycle),
+        event_type::ROOM_JOIN
+        | event_type::ROOM_JOIN_REVIEW
+        | event_type::ROOM_LEAVE
+        | event_type::ROOM_MEMBER_ROLE_UPDATE
+        | event_type::ROOM_MEMBER_REMOVE => Some(BuiltinEventClass::Signal),
+        event_type::TYPE_DEFINE => Some(BuiltinEventClass::Control),
+        event_type::MESSAGE_CREATE => Some(BuiltinEventClass::Message),
+        _ => None,
+    }
+}
+
+/// Whether an accepted record of this type advances the room head and must
+/// therefore match the current head when written (Section 6.1). Room
+/// lifecycle, `message`-kind, and `control`-kind records advance the head;
+/// `signal`-kind records — including the built-in membership events — only
+/// anchor to an accepted record. Unknown custom types default to
+/// head-advancing.
+pub fn event_advances_room_head(event_type: &str, registry: &TypeRegistry) -> bool {
+    if let Some(class) = builtin_event_class(event_type) {
+        return class != BuiltinEventClass::Signal;
+    }
+    registry
+        .get(event_type)
+        .map(|def| def.kind != TypeKind::Signal)
+        .unwrap_or(true)
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -177,6 +272,77 @@ pub struct RoomPolicy {
 impl RoomPolicy {
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+/// Payload of `room.update`: a partial contract revision. A present field
+/// replaces the current value entirely; an empty value clears an optional
+/// field. `visibility` is not updatable, and the type registry evolves only
+/// through `type.define`. The field set is closed: `deny_unknown_fields`
+/// rejects non-updatable fields (e.g. `visibility`) so all three SDKs agree,
+/// matching the explicit key check in the TypeScript and Python validators.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RoomUpdatePayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agenda: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<RoomPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_time: Option<i64>,
+}
+
+impl RoomUpdatePayload {
+    pub fn is_empty(&self) -> bool {
+        self.topic.is_none()
+            && self.agenda.is_none()
+            && self.guidance.is_none()
+            && self.tags.is_none()
+            && self.language.is_none()
+            && self.policy.is_none()
+            && self.start_time.is_none()
+            && self.end_time.is_none()
+    }
+}
+
+/// Payload of `room.member.remove`: removal and optional ban.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RoomMemberRemovePayload {
+    pub member: AgentId,
+    /// Defaults to `false`. `true` additionally bans the agent from the room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ban: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl RoomMemberRemovePayload {
+    pub fn new(member: AgentId) -> Self {
+        Self {
+            member,
+            ban: None,
+            reason: None,
+            references: Vec::new(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn banning(&self) -> bool {
+        self.ban.unwrap_or(false)
     }
 }
 
@@ -306,6 +472,10 @@ pub struct RoomResponse {
     pub status: RoomState,
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator: Option<AgentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agenda: Option<String>,
@@ -331,7 +501,7 @@ pub struct RoomResponse {
     pub pre_hash: Option<String>,
     pub hash: String,
     pub received_at: i64,
-    /// Latest accepted non-signal record. Falls back to `seq`/`hash` on older hosts.
+    /// Latest accepted head-advancing record. Falls back to `seq`/`hash` on older hosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<RoomHead>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,13 +588,15 @@ pub struct AgentStatusInput {
     pub claim_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<String>,
-    pub expires_at: i64,
+    /// Optional: when omitted, the host assigns its maximum TTL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, Value>,
 }
 
 impl AgentStatusInput {
-    pub fn new(state: impl Into<String>, expires_at: i64) -> Self {
+    pub fn new(state: impl Into<String>) -> Self {
         Self {
             state: state.into(),
             summary: None,
@@ -432,9 +604,14 @@ impl AgentStatusInput {
             seen_hash: None,
             claim_id: None,
             activity: None,
-            expires_at,
+            expires_at: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn with_expires_at(mut self, expires_at: i64) -> Self {
+        self.expires_at = Some(expires_at);
+        self
     }
 }
 
@@ -670,6 +847,7 @@ where
             return Err(SdkError::MissingRoomId);
         }
         validate_room_head_precondition(&envelope.event)?;
+        validate_mentions(&envelope.event.mentions)?;
     }
     Ok(())
 }
@@ -692,6 +870,7 @@ pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Resu
         return Ok(());
     }
     validate_room_head_precondition(&envelope.event)?;
+    validate_mentions(&envelope.event.mentions)?;
     match envelope.event.room_id.as_deref() {
         Some(actual) if actual == path_room_id => Ok(()),
         Some(actual) => Err(SdkError::RoomIdMismatch {
@@ -720,6 +899,21 @@ fn validate_room_head_precondition<P>(event: &Event<P>) -> Result<()> {
             "room event requires base_seq and base_hash".to_owned(),
         )),
     }
+}
+
+fn validate_mentions(mentions: &[AgentId]) -> Result<()> {
+    if mentions.len() > MAX_MENTIONS {
+        return Err(SdkError::InvalidPayload(format!(
+            "mentions must not exceed {MAX_MENTIONS} entries"
+        )));
+    }
+    let unique: BTreeSet<&AgentId> = mentions.iter().collect();
+    if unique.len() != mentions.len() {
+        return Err(SdkError::InvalidPayload(
+            "mentions must be unique".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Checks the shape of a custom event type name: lowercase dot-separated,
@@ -879,6 +1073,44 @@ pub fn validate_room_join_payload(payload: &RoomJoinPayload) -> Result<()> {
     Ok(())
 }
 
+/// Shape checks for a `room.update` payload. State-dependent rules — room
+/// status, effective time ordering against the current contract — remain
+/// host-side.
+pub fn validate_room_update_payload(payload: &RoomUpdatePayload) -> Result<()> {
+    if payload.is_empty() {
+        return Err(SdkError::InvalidPayload(
+            "room.update payload must not be empty".to_owned(),
+        ));
+    }
+    if matches!(&payload.topic, Some(topic) if topic.trim().is_empty()) {
+        return Err(SdkError::InvalidPayload(
+            "room topic must not be empty".to_owned(),
+        ));
+    }
+    if let (Some(start_time), Some(end_time)) = (payload.start_time, payload.end_time) {
+        if start_time >= end_time {
+            return Err(SdkError::InvalidPayload(
+                "start_time must be before end_time".to_owned(),
+            ));
+        }
+    }
+    if let Some(policy) = &payload.policy {
+        if matches!(policy.max_speakers, Some(0)) {
+            return Err(SdkError::InvalidPayload(
+                "max_speakers must be a positive integer".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Shape checks for a `room.member.remove` payload. Creator, self, and
+/// membership checks remain host-side.
+pub fn validate_room_member_remove_payload(payload: &RoomMemberRemovePayload) -> Result<()> {
+    payload.member.public_key_bytes()?;
+    Ok(())
+}
+
 /// The effective set of type definitions active in a room.
 #[derive(Clone, Debug, Default)]
 pub struct TypeRegistry {
@@ -918,6 +1150,14 @@ impl TypeRegistry {
 
     pub fn define(&mut self, def: TypeDef) -> Result<()> {
         validate_type_def(&def)?;
+        if let Some(existing) = self.types.get(&def.name) {
+            if existing.kind != def.kind {
+                return Err(SdkError::InvalidPayload(format!(
+                    "type {} cannot change kind on redefinition",
+                    def.name
+                )));
+            }
+        }
         self.types.insert(def.name.clone(), def);
         Ok(())
     }
@@ -1224,8 +1464,10 @@ pub fn can_submit_event(
         event_type::ROOM_CREATE => true,
         event_type::ROOM_JOIN => context.public_join_allowed || context.join_request_approved,
         event_type::ROOM_LEAVE => context.is_creator || context.role.is_some(),
-        event_type::ROOM_JOIN_REVIEW
+        event_type::ROOM_UPDATE
+        | event_type::ROOM_JOIN_REVIEW
         | event_type::ROOM_MEMBER_ROLE_UPDATE
+        | event_type::ROOM_MEMBER_REMOVE
         | event_type::ROOM_CLOSE
         | event_type::ROOM_CANCEL
         | event_type::TYPE_DEFINE => context.is_creator || context.role == Some(Role::Moderator),
@@ -1261,7 +1503,9 @@ pub fn can_write_in_state(event_type: &str, state: RoomState) -> bool {
             event_type::ROOM_JOIN
                 | event_type::ROOM_JOIN_REVIEW
                 | event_type::ROOM_MEMBER_ROLE_UPDATE
+                | event_type::ROOM_MEMBER_REMOVE
                 | event_type::ROOM_LEAVE
+                | event_type::ROOM_UPDATE
                 | event_type::TYPE_DEFINE
                 | event_type::ROOM_CANCEL
         ),
@@ -1375,6 +1619,161 @@ mod tests {
             reason: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn kernel_defines_eleven_builtins_with_membership_signals() {
+        assert_eq!(BUILTIN_EVENT_TYPES.len(), 11);
+        assert!(is_builtin_event_type(event_type::ROOM_UPDATE));
+        assert!(is_builtin_event_type(event_type::ROOM_MEMBER_REMOVE));
+
+        let registry = TypeRegistry::new();
+        for membership in MEMBERSHIP_EVENT_TYPES {
+            assert_eq!(
+                builtin_event_class(membership),
+                Some(BuiltinEventClass::Signal)
+            );
+            assert!(!event_advances_room_head(membership, &registry));
+        }
+        for advancing in [
+            event_type::ROOM_CREATE,
+            event_type::ROOM_UPDATE,
+            event_type::ROOM_CLOSE,
+            event_type::ROOM_CANCEL,
+            event_type::TYPE_DEFINE,
+            event_type::MESSAGE_CREATE,
+        ] {
+            assert!(event_advances_room_head(advancing, &registry));
+        }
+        assert_eq!(builtin_event_class("review.finding"), None);
+        // Unknown custom types default to head-advancing.
+        assert!(event_advances_room_head("unknown.type", &registry));
+
+        let mut registry = TypeRegistry::new();
+        let mut signal_def = finding_def();
+        signal_def.name = "reaction.create".to_owned();
+        signal_def.kind = TypeKind::Signal;
+        registry.define(signal_def).unwrap();
+        assert!(!event_advances_room_head("reaction.create", &registry));
+
+        assert!(DISCOURSE_ERROR_CODES.contains(&"member_banned"));
+        assert!(DISCOURSE_ERROR_CODES.contains(&"role_not_allowed"));
+        assert!(DISCOURSE_ERROR_CODES.contains(&"max_speakers_exceeded"));
+    }
+
+    #[test]
+    fn room_update_and_member_remove_follow_moderator_rules() {
+        let registry = TypeRegistry::new();
+        let moderator = PermissionContext::for_role(Role::Moderator);
+        let speaker = PermissionContext::for_role(Role::Speaker);
+        let creator = PermissionContext::creator(None);
+        for builtin in [event_type::ROOM_UPDATE, event_type::ROOM_MEMBER_REMOVE] {
+            assert!(can_submit_event(builtin, &moderator, &registry));
+            assert!(can_submit_event(builtin, &creator, &registry));
+            assert!(!can_submit_event(builtin, &speaker, &registry));
+            assert!(can_write_in_state(builtin, RoomState::Scheduled));
+            assert!(can_write_in_state(builtin, RoomState::Active));
+            assert!(!can_write_in_state(builtin, RoomState::Ended));
+            assert!(!can_write_in_state(builtin, RoomState::Cancelled));
+        }
+    }
+
+    #[test]
+    fn validates_room_update_payloads() {
+        let valid = RoomUpdatePayload {
+            topic: Some("New topic".to_owned()),
+            guidance: Some(String::new()),
+            end_time: Some(2000),
+            ..RoomUpdatePayload::default()
+        };
+        validate_room_update_payload(&valid).unwrap();
+
+        assert!(validate_room_update_payload(&RoomUpdatePayload::default()).is_err());
+        assert!(validate_room_update_payload(&RoomUpdatePayload {
+            topic: Some("  ".to_owned()),
+            ..RoomUpdatePayload::default()
+        })
+        .is_err());
+        assert!(validate_room_update_payload(&RoomUpdatePayload {
+            start_time: Some(5),
+            end_time: Some(5),
+            ..RoomUpdatePayload::default()
+        })
+        .is_err());
+        assert!(validate_room_update_payload(&RoomUpdatePayload {
+            policy: Some(RoomPolicy {
+                max_speakers: Some(0),
+                ..RoomPolicy::default()
+            }),
+            ..RoomUpdatePayload::default()
+        })
+        .is_err());
+
+        // The field set is closed: a non-updatable field (e.g. `visibility`)
+        // is rejected at deserialization, matching the TS/Python validators.
+        serde_json::from_value::<RoomUpdatePayload>(json!({"topic": "New topic"})).unwrap();
+        assert!(serde_json::from_value::<RoomUpdatePayload>(
+            json!({"topic": "New topic", "visibility": "private"})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn validates_room_member_remove_payloads() {
+        let member = AgentSigner::from_seed([41; 32]).agent_id();
+        let mut payload = RoomMemberRemovePayload::new(member);
+        validate_room_member_remove_payload(&payload).unwrap();
+        assert!(!payload.banning());
+        payload.ban = Some(true);
+        assert!(payload.banning());
+        validate_room_member_remove_payload(&payload).unwrap();
+    }
+
+    #[test]
+    fn mentions_are_capped_at_32_unique_agent_ids() {
+        let signer = AgentSigner::from_seed([42; 32]);
+        let mentions: Vec<AgentId> = (0..33)
+            .map(|index| AgentSigner::from_seed([100 + index as u8; 32]).agent_id())
+            .collect();
+        let event = |mentions: Vec<AgentId>| {
+            discourse_event(
+                event_type::MESSAGE_CREATE,
+                signer.agent_id(),
+                100,
+                1,
+                "room1",
+                1,
+                "room-create-head",
+                MessageCreatePayload::text("hi"),
+            )
+            .with_mentions(mentions)
+        };
+
+        let ok = signer.sign_event(event(mentions[..32].to_vec())).unwrap();
+        validate_discourse_envelope(&ok).unwrap();
+
+        let too_many = signer.sign_event(event(mentions.clone())).unwrap();
+        assert!(validate_discourse_envelope(&too_many).is_err());
+
+        let duplicated = signer
+            .sign_event(event(vec![mentions[0].clone(), mentions[0].clone()]))
+            .unwrap();
+        assert!(validate_discourse_envelope(&duplicated).is_err());
+        assert!(validate_room_path(&duplicated, "room1").is_err());
+    }
+
+    #[test]
+    fn type_redefinition_cannot_change_kind() {
+        let mut registry = TypeRegistry::new();
+        registry.define(finding_def()).unwrap();
+        let mut retitled = finding_def();
+        retitled.title = "Finding v2".to_owned();
+        registry.define(retitled).unwrap();
+        assert_eq!(registry.get("review.finding").unwrap().title, "Finding v2");
+
+        let mut flipped = finding_def();
+        flipped.kind = TypeKind::Signal;
+        assert!(registry.define(flipped).is_err());
     }
 
     #[test]

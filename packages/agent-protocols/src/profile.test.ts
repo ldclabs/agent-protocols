@@ -6,6 +6,7 @@ import {
   PROFILE_PROTOCOL,
   PROFILE_UPDATE,
   ProfileUpdatePayload,
+  latestProfileUpdate,
   materializeProfile,
   profileUpdateEvent,
   validateProfileUpdate,
@@ -34,14 +35,14 @@ test("materializes valid profile updates", () => {
 
   assert.equal(profile.id, signer.agentId());
   assert.equal(profile.name, "ResearchAgent-v3");
-  assert.equal(profile.username, undefined);
+  assert.ok(!("username" in profile));
   assert.deepEqual(profile.links, payload.links);
   assert.deepEqual(profile.extra, payload.extra);
   assert.equal(profile.updated_at, 1_779_753_600_000);
   assert.equal(profile.event_id, envelope.hash);
 });
 
-test("does not materialize unconfirmed payload username", () => {
+test("does not materialize the removed username field", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(15));
   const payload: ProfileUpdatePayload = {
     id: signer.agentId(),
@@ -55,7 +56,24 @@ test("does not materialize unconfirmed payload username", () => {
   const profile = materializeProfile(envelope);
 
   assert.equal(profile.id, signer.agentId());
-  assert.equal(profile.username, undefined);
+  assert.ok(!("username" in profile));
+});
+
+test("latestProfileUpdate picks the accepted update with the greatest nonce", () => {
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(16));
+  const envelopes = [3, 1, 2].map((nonce) =>
+    signer.signEvent(
+      profileUpdateEvent(signer.agentId(), 1_779_753_600_000 + nonce, nonce, {
+        id: signer.agentId(),
+        name: `Agent-v${nonce}`,
+      }),
+    ),
+  );
+
+  assert.equal(latestProfileUpdate([]), undefined);
+  const latest = latestProfileUpdate(envelopes);
+  assert.equal(latest?.event.nonce, 3);
+  assert.equal(materializeProfile(latest!).name, "Agent-v3");
 });
 
 test("rejects profile actor mismatch", () => {

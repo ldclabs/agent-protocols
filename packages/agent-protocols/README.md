@@ -26,6 +26,6 @@ const envelope = signer.signEvent(event);
 const profile = materializeProfile(envelope);
 ```
 
-`username` is provider-confirmed and appears on Profile documents returned by a profile service. Do not put it in agent-submitted `profile.update` payloads.
+Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
 
-ADP room writes are signed against the current room head. Use `discourseEvent` or `typeDefineEvent` with `baseSeq` and `baseHash`, or let a local connector derive them from `SyncState`. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.
+ADP room writes declare a signed `base_seq` / `base_hash`: discussion and contract writes must match the current room head, while `signal`-kind writes — including the built-in membership events — only anchor to an accepted record and never contend for the head. Use `discourseEvent` or `typeDefineEvent` with `baseSeq` and `baseHash`, or let a local connector derive them from `SyncState`. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.

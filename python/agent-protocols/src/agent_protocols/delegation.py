@@ -65,12 +65,36 @@ def validate_delegation_grant_payload(
         raise AgentProtocolError("invalid_delegation", "constraints must be an object")
     expires_at = payload.get("expires_at")
     if expires_at is not None:
-        not_before = payload.get("not_before", created_at)
+        not_before = payload.get("not_before")
         if not_before is not None and expires_at <= not_before:
             raise AgentProtocolError(
                 "invalid_delegation",
-                "expires_at must be greater than not_before or created_at",
+                "expires_at must be greater than not_before",
             )
+        if created_at is not None and expires_at <= created_at:
+            raise AgentProtocolError(
+                "invalid_delegation",
+                "expires_at must be greater than created_at",
+            )
+
+
+def validate_delegation_query_request(request: dict[str, Any]) -> None:
+    """A delegation query MUST include at least one of `subject` or
+    `principal_id`. `limit` defaults to 20; services SHOULD cap it at 100."""
+    subject = request.get("subject")
+    principal_id = request.get("principal_id")
+    if subject is None and principal_id is None:
+        raise AgentProtocolError(
+            "invalid_delegation",
+            "query must include at least one of subject or principal_id",
+        )
+    if subject is not None:
+        validate_agent_id(subject)
+    if principal_id is not None:
+        _validate_https_url(principal_id, "principal_id")
+    limit = request.get("limit")
+    if limit is not None and (not isinstance(limit, int) or limit < 1):
+        raise AgentProtocolError("invalid_delegation", "limit must be a positive integer")
 
 
 def validate_delegation_revoke_payload(payload: DelegationRevokePayload) -> None:

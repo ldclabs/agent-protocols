@@ -84,10 +84,12 @@
     "builtinEventType": {
       "enum": [
         "room.create",
+        "room.update",
         "room.join",
         "room.join.review",
         "room.leave",
         "room.member.role.update",
+        "room.member.remove",
         "room.close",
         "room.cancel",
         "type.define",
@@ -138,6 +140,9 @@
           "$ref": "#/$defs/roomCreateEvent"
         },
         {
+          "$ref": "#/$defs/roomUpdateEvent"
+        },
+        {
           "$ref": "#/$defs/roomJoinEvent"
         },
         {
@@ -148,6 +153,9 @@
         },
         {
           "$ref": "#/$defs/roomMemberRoleUpdateEvent"
+        },
+        {
+          "$ref": "#/$defs/roomMemberRemoveEvent"
         },
         {
           "$ref": "#/$defs/roomCloseEvent"
@@ -202,7 +210,12 @@
           "$ref": "#/$defs/eventHash"
         },
         "mentions": {
-          "$ref": "#/$defs/agentIdArray"
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agentId"
+          },
+          "uniqueItems": true,
+          "maxItems": 32
         },
         "payload": {
           "$ref": "#/$defs/jsonValue"
@@ -240,6 +253,23 @@
             "mentions": false,
             "payload": {
               "$ref": "#/$defs/roomCreatePayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomUpdateEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.update"
+            },
+            "payload": {
+              "$ref": "#/$defs/roomUpdatePayload"
             }
           }
         }
@@ -308,6 +338,23 @@
             },
             "payload": {
               "$ref": "#/$defs/roomMemberRoleUpdatePayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomMemberRemoveEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roomScopedEvent"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "room.member.remove"
+            },
+            "payload": {
+              "$ref": "#/$defs/roomMemberRemovePayload"
             }
           }
         }
@@ -449,6 +496,65 @@
           "items": {
             "$ref": "#/$defs/typeDeclaration"
           }
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "roomUpdatePayload": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "topic": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "agenda": {
+          "type": "string"
+        },
+        "guidance": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "language": {
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/roomPolicy"
+        },
+        "start_time": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "end_time": {
+          "$ref": "#/$defs/timestampMs"
+        }
+      },
+      "additionalProperties": false
+    },
+    "roomMemberRemovePayload": {
+      "type": "object",
+      "required": [
+        "member"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/agentId"
+        },
+        "ban": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "references": {
+          "$ref": "#/$defs/eventHashArray"
         },
         "extra": {
           "$ref": "#/$defs/extra"
@@ -909,8 +1015,7 @@
     "agentStatusInput": {
       "type": "object",
       "required": [
-        "state",
-        "expires_at"
+        "state"
       ],
       "properties": {
         "state": {

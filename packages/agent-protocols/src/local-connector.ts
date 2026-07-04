@@ -14,7 +14,6 @@ import {
 
 export const TOOL_IDENTITY_CURRENT = "agent_protocols_identity_current";
 export const TOOL_HOSTS_LIST = "agent_protocols_hosts_list";
-export const TOOL_HOST_ADD = "agent_protocols_host_add";
 export const TOOL_ROOMS_SEARCH = "agent_protocols_rooms_search";
 export const TOOL_ROOMS_LIST = "agent_protocols_rooms_list";
 export const TOOL_ROOM_OPEN = "agent_protocols_room_open";
@@ -58,7 +57,6 @@ export const RESOURCE_ROOM_AGENT_STATUS_SUFFIX = "/agent-status";
 export type LocalConnectorToolName =
   | typeof TOOL_IDENTITY_CURRENT
   | typeof TOOL_HOSTS_LIST
-  | typeof TOOL_HOST_ADD
   | typeof TOOL_ROOMS_SEARCH
   | typeof TOOL_ROOMS_LIST
   | typeof TOOL_ROOM_OPEN
@@ -114,13 +112,6 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
       false,
     ],
     [TOOL_HOSTS_LIST, "List configured Agent Discourse hosts.", true, true, false],
-    [
-      TOOL_HOST_ADD,
-      "Add an allowed Agent Discourse host after discovery.",
-      false,
-      true,
-      true,
-    ],
     [TOOL_ROOMS_SEARCH, "Search public rooms on an allowed host.", true, false, true],
     [TOOL_ROOMS_LIST, "List locally known rooms and unread summaries.", true, true, false],
     [
@@ -161,7 +152,10 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
       true,
       true,
     ],
-    [TOOL_ROOM_TIMELINE, "Read simplified timeline items from the local cache.", true, true, false],
+    // MCP tool annotations are static declarations from tools/list: a pure
+    // read is the degenerate case, so mark_read-capable reads declare
+    // readOnlyHint: false.
+    [TOOL_ROOM_TIMELINE, "Read simplified timeline items from the local cache.", false, true, false],
     [
       TOOL_ROOM_UNREAD,
       "Read unread timeline items, optionally marking them read.",
@@ -217,6 +211,13 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
   }));
 }
 
+/**
+ * Connector sync marker for one room. Connectors key local room state by
+ * `(host, room_id)`: ADP room IDs are only recommended to be globally unique
+ * and a connector can be configured with multiple hosts. `head_seq` /
+ * `head_hash` are the latest locally verified head-advancing record per ADP
+ * Section 6.1.
+ */
 export interface SyncState {
   host: string;
   room_id: string;
@@ -238,11 +239,11 @@ export interface AgentProtocolsHost {
   last_checked_at?: number;
 }
 
-export type RoomMemberStatus = "active" | "left" | "removed" | "unknown";
+/** `removed` and `banned` are produced by accepted `room.member.remove` records. */
+export type RoomMemberStatus = "active" | "left" | "removed" | "banned" | "unknown";
 
 export interface RoomMemberProfile {
   name?: string;
-  username?: string;
   description?: string;
   avatar_url?: string;
 }
@@ -285,6 +286,7 @@ export type InboxKind =
   | "room.join.requested"
   | "room.join.approved"
   | "room.role.changed"
+  | "room.member.removed"
   | "room.state.changed"
   | "room.event.custom";
 
@@ -379,6 +381,8 @@ export type RoomsListMembership =
 
 export interface RoomSendMessageInput {
   room_id: string;
+  /** Disambiguates when `room_id` matches rooms on more than one host. */
+  host?: string;
   content: string;
   content_type?: string;
   mentions?: AgentId[];
@@ -389,8 +393,17 @@ export interface RoomSendMessageInput {
   on_head_mismatch?: HeadMismatchPolicy;
 }
 
+/**
+ * Also covers the built-in events without a dedicated tool: `room.update`,
+ * `room.close`, `room.cancel`, `room.member.role.update`,
+ * `room.member.remove`, and `type.define`. For `signal`-kind writes —
+ * including the membership events — the base is only an anchor: the connector
+ * never holds the draft and ignores `on_head_mismatch`.
+ */
 export interface RoomSubmitEventInput {
   room_id: string;
+  /** Disambiguates when `room_id` matches rooms on more than one host. */
+  host?: string;
   type: string;
   payload: Record<string, unknown>;
   mentions?: AgentId[];

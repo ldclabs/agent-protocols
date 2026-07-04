@@ -267,15 +267,38 @@ pub fn validate_delegation_grant_payload(
         ));
     }
     if let Some(expires_at) = payload.expires_at {
-        let not_before = payload.not_before.or(created_at);
-        if not_before
-            .map(|not_before| expires_at <= not_before)
-            .unwrap_or(false)
-        {
+        if matches!(payload.not_before, Some(not_before) if expires_at <= not_before) {
             return Err(SdkError::InvalidPayload(
-                "expires_at must be greater than not_before or created_at".to_owned(),
+                "expires_at must be greater than not_before".to_owned(),
             ));
         }
+        if matches!(created_at, Some(created_at) if expires_at <= created_at) {
+            return Err(SdkError::InvalidPayload(
+                "expires_at must be greater than created_at".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A delegation query MUST include at least one of `subject` or
+/// `principal_id`. `limit` defaults to 20; services SHOULD cap it at 100.
+pub fn validate_delegation_query_request(request: &DelegationQueryRequest) -> Result<()> {
+    if request.subject.is_none() && request.principal_id.is_none() {
+        return Err(SdkError::InvalidPayload(
+            "query must include at least one of subject or principal_id".to_owned(),
+        ));
+    }
+    if let Some(subject) = &request.subject {
+        subject.public_key_bytes()?;
+    }
+    if let Some(principal_id) = &request.principal_id {
+        validate_https_url(principal_id, "principal_id")?;
+    }
+    if matches!(request.limit, Some(0)) {
+        return Err(SdkError::InvalidPayload(
+            "limit must be a positive integer".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -450,6 +473,55 @@ mod tests {
             Vec::new(),
         );
         assert!(validate_delegation_grant_payload(&invalid, None).is_err());
+    }
+
+    #[test]
+    fn grant_expiry_checked_against_not_before_and_created_at() {
+        let controller = AgentSigner::from_seed([36; 32]);
+        let base = DelegationGrantPayload::new(
+            "del_1",
+            PrincipalDescriptor::new("https://al.ink/yan"),
+            controller.agent_id(),
+            vec!["inbox.screen".to_owned()],
+        );
+
+        let mut same_as_not_before = base.clone();
+        same_as_not_before.not_before = Some(2000);
+        same_as_not_before.expires_at = Some(2000);
+        assert!(validate_delegation_grant_payload(&same_as_not_before, Some(1000)).is_err());
+
+        let mut before_created_at = base.clone();
+        before_created_at.not_before = Some(500);
+        before_created_at.expires_at = Some(800);
+        assert!(validate_delegation_grant_payload(&before_created_at, Some(1000)).is_err());
+
+        let mut valid = base;
+        valid.not_before = Some(500);
+        valid.expires_at = Some(1500);
+        validate_delegation_grant_payload(&valid, Some(1000)).unwrap();
+    }
+
+    #[test]
+    fn delegation_queries_require_subject_or_principal() {
+        let subject = AgentSigner::from_seed([37; 32]).agent_id();
+        validate_delegation_query_request(&DelegationQueryRequest {
+            subject: Some(subject.clone()),
+            ..DelegationQueryRequest::default()
+        })
+        .unwrap();
+        validate_delegation_query_request(&DelegationQueryRequest {
+            principal_id: Some("https://al.ink/yan".to_owned()),
+            limit: Some(20),
+            ..DelegationQueryRequest::default()
+        })
+        .unwrap();
+        assert!(validate_delegation_query_request(&DelegationQueryRequest::default()).is_err());
+        assert!(validate_delegation_query_request(&DelegationQueryRequest {
+            subject: Some(subject),
+            limit: Some(0),
+            ..DelegationQueryRequest::default()
+        })
+        .is_err());
     }
 
     #[test]

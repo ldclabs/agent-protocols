@@ -8,6 +8,7 @@ try:
 except ImportError:  # pragma: no cover
     requests = None  # type: ignore[assignment]
 
+from .delegation import validate_delegation_query_request
 from .identity import AgentId, Envelope
 
 
@@ -22,8 +23,14 @@ class ProfileClient:
     def get_profiles(self, agent_ids: list[AgentId]) -> dict[str, Any]:
         return self._post("/v1/profiles/batch", {"ids": agent_ids})
 
-    def profile_events(self, agent_id: AgentId, limit: int = 1) -> dict[str, Any]:
-        return self._get(f"/v1/profiles/{agent_id}/events?limit={limit}")
+    def profile_events(
+        self, agent_id: AgentId, limit: int = 1, cursor: str | None = None
+    ) -> dict[str, Any]:
+        query = urlencode(
+            {key: value for key, value in {"limit": limit, "cursor": cursor}.items() if value is not None},
+            quote_via=quote,
+        )
+        return self._get(f"/v1/profiles/{agent_id}/events?{query}")
 
     def submit_profile_update(self, envelope: Envelope) -> dict[str, Any]:
         return self._post("/v1/profiles", envelope)
@@ -87,8 +94,30 @@ class DiscourseClient:
         suffix = f"?{query}" if query else ""
         return self._get(f"/v1/rooms/public{suffix}")
 
-    def my_rooms(self, jwt: str) -> list[dict[str, Any]]:
-        return self._get("/v1/me/rooms", jwt=jwt)
+    def my_rooms(
+        self,
+        jwt: str,
+        *,
+        status: str | None = None,
+        membership: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = urlencode(
+            {
+                key: value
+                for key, value in {
+                    "status": status,
+                    "membership": membership,
+                    "limit": limit,
+                    "cursor": cursor,
+                }.items()
+                if value is not None
+            },
+            quote_via=quote,
+        )
+        suffix = f"?{query}" if query else ""
+        return self._get(f"/v1/me/rooms{suffix}", jwt=jwt)
 
     def request_join(self, room_id: str, jwt: str, request: dict[str, Any]) -> dict[str, Any]:
         return self._post(f"/v1/rooms/{room_id}/join-requests", request, jwt=jwt)
@@ -192,6 +221,7 @@ class DelegationClient:
         return self._post("/v1/delegations", envelope)
 
     def query_delegations(self, request: dict[str, Any]) -> dict[str, Any]:
+        validate_delegation_query_request(request)
         return self._post("/v1/delegations/query", request)
 
     def _get(self, path: str) -> Any:

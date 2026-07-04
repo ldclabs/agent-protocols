@@ -4,6 +4,8 @@ import test from "node:test";
 import { buildServerRecord, discourseEvent, eventType, roomCreateEvent } from "./discourse.js";
 import { AgentSigner, withMention } from "./identity.js";
 import {
+  InboxKind,
+  RoomMemberStatus,
   TOOL_INBOX_NEXT,
   TOOL_ROOM_JOIN,
   TOOL_ROOM_MEMBERS_LIST,
@@ -116,4 +118,27 @@ test("timelineItemFromRecord exposes message fields and event-level mentions", (
   assert.deepEqual(item.references, ["abc"]);
   assert.deepEqual(item.mentions, [target.agentId()]);
   assert.equal(item.summary, "please review this");
+});
+
+test("connector surface reflects the 2026-07-04 revision", () => {
+  const tools = standardToolDefinitions();
+  const names = tools.map((tool) => tool.name);
+
+  // The host allowlist is operator configuration; no agent-reachable mutation.
+  assert.ok(!names.some((name) => name === "agent_protocols_host_add"));
+
+  // Static annotations: mark_read-capable timeline reads declare readOnly false.
+  const timeline = tools.find(
+    (tool) => tool.name === "agent_protocols_room_timeline",
+  );
+  assert.equal(timeline?.annotations.readOnlyHint, false);
+  assert.equal(timeline?.annotations.idempotentHint, true);
+  const inboxNext = tools.find((tool) => tool.name === TOOL_INBOX_NEXT);
+  assert.equal(inboxNext?.annotations.readOnlyHint, false);
+
+  // Member status and inbox kinds cover removal and bans.
+  const banned: RoomMemberStatus = "banned";
+  const removedKind: InboxKind = "room.member.removed";
+  assert.equal(banned, "banned");
+  assert.equal(removedKind, "room.member.removed");
 });

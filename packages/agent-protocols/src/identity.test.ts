@@ -3,6 +3,9 @@ import test from "node:test";
 
 import nacl from "tweetnacl";
 
+import { AgentProtocolError } from "./errors.js";
+import { serviceOrigin } from "./identity.js";
+
 import {
   AGENT_ID_PREFIX,
   AgentSigner,
@@ -214,6 +217,12 @@ test("agent id helpers validate prefix, length, and encoding", () => {
   assert.throws(() => publicKeyBytes("did:web:example"), /did:agent:/);
   assert.throws(() => publicKeyBytes(`${AGENT_ID_PREFIX}!!!`), /base64url/);
   assert.throws(() => publicKeyBytes(`${AGENT_ID_PREFIX}AAAA`), /32 bytes/);
+  // A non-string agent id yields a clean protocol error, not a raw TypeError.
+  assert.throws(
+    () => publicKeyBytes({ not: "a string" } as unknown as string),
+    (error: unknown) =>
+      error instanceof AgentProtocolError && /must be a string/.test(error.message),
+  );
 });
 
 test("createEvent and room helpers build room-scoped events", () => {
@@ -410,4 +419,86 @@ test("canonicalEventBytes rejects values without a canonical form", () => {
     () => canonicalEventBytes(undefined as never),
     /canonical JSON/,
   );
+});
+
+test("base64url decoding rejects non-canonical encodings", () => {
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(60));
+  const agentId = signer.agentId();
+  const suffix = agentId.slice("did:agent:".length);
+
+  // Canonical form round-trips.
+  validateAgentId(agentId);
+
+  // Padding characters are rejected even when the decoded bytes match.
+  assert.throws(
+    () => validateAgentId(`did:agent:${suffix}==`),
+    /canonical base64url/,
+  );
+  // Non-zero trailing bits give the same key a second string form: replace
+  // the final character with one sharing its used bits but different trailing
+  // bits (the last base64url char of a 32-byte value uses 4 of its 6 bits).
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const lastIndex = alphabet.indexOf(suffix.slice(-1));
+  const nonCanonicalLast = alphabet[(lastIndex & ~3) | ((lastIndex & 3) ^ 1)];
+  assert.throws(
+    () =>
+      validateAgentId(`did:agent:${suffix.slice(0, -1)}${nonCanonicalLast}`),
+    /canonical base64url/,
+  );
+  // Non-alphabet characters are rejected.
+  assert.throws(
+    () => validateAgentId(`did:agent:${suffix.slice(0, -1)}+`),
+    /canonical base64url/,
+  );
+
+  // Signatures must be canonical base64url too.
+  const event = createEvent(
+    "agent-profile/1.0",
+    "profile.update",
+    agentId,
+    1000,
+    1,
+    { id: agentId, name: "Agent" },
+  );
+  const envelope = signer.signEvent(event);
+  assert.throws(
+    () =>
+      verifyEnvelope({
+        ...envelope,
+        signature: `${envelope.signature}=`,
+      }),
+    /canonical base64url/,
+  );
+});
+
+test("serviceOrigin derives the request JWT audience from a URL", () => {
+  assert.equal(
+    serviceOrigin("https://api.example.com/v1/rooms/room1"),
+    "https://api.example.com",
+  );
+  assert.equal(
+    serviceOrigin("https://api.example.com:8443/path?q=1"),
+    "https://api.example.com:8443",
+  );
+  assert.equal(
+    serviceOrigin("https://API.Example.com:443/"),
+    "https://api.example.com",
+  );
+  assert.throws(() => serviceOrigin("not a url"), /valid URL/);
+  assert.throws(() => serviceOrigin("ftp://example.com"), /HTTP/);
+});
+
+test("nonce_not_greater errors carry the effective maximum for Max-Seen-Nonce", () => {
+  const actor = AgentSigner.fromSeed(new Uint8Array(32).fill(61)).agentId();
+  const store = new MemoryNonceStore();
+  store.checkAndUpdate(actor, 7, 1000, 1000);
+  try {
+    store.checkAndUpdate(actor, 7, 1100, 1000);
+    assert.fail("expected nonce_not_greater");
+  } catch (error) {
+    const protocolFailure = error as AgentProtocolError;
+    assert.equal(protocolFailure.code, "nonce_not_greater");
+    assert.deepEqual(protocolFailure.data, { max_nonce: 7 });
+  }
 });

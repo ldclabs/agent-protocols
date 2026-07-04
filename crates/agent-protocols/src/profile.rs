@@ -93,8 +93,6 @@ pub struct AgentProfile {
     pub id: AgentId,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
@@ -182,7 +180,6 @@ pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<
     Ok(AgentProfile {
         id: payload.id.clone(),
         name: payload.name.clone(),
-        username: None,
         description: payload.description.clone(),
         avatar_url: payload.avatar_url.clone(),
         provider: payload.provider.clone(),
@@ -194,6 +191,16 @@ pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<
         updated_at: envelope.event.created_at,
         event_id: envelope.hash.clone(),
     })
+}
+
+/// Selects the latest profile state from accepted update envelopes. Nonces
+/// are strictly monotonic per Agent ID, so the latest profile is defined as
+/// the accepted `profile.update` with the greatest `nonce` — deterministic and
+/// independently checkable from event history alone.
+pub fn latest_profile_update(
+    envelopes: &[Envelope<ProfileUpdatePayload>],
+) -> Option<&Envelope<ProfileUpdatePayload>> {
+    envelopes.iter().max_by_key(|envelope| envelope.event.nonce)
 }
 
 #[cfg(test)]
@@ -235,7 +242,6 @@ mod tests {
 
         assert_eq!(profile.id, signer.agent_id());
         assert_eq!(profile.name, "ResearchAgent-v3");
-        assert_eq!(profile.username, None);
         assert_eq!(profile.links.len(), 1);
         assert_eq!(profile.links[0].rel, ProfileLinkRel::Homepage);
         assert_eq!(profile.delegations.len(), 1);
@@ -245,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn materializes_profile_update_without_username() {
+    fn materialized_profile_has_no_username_field() {
         let signer = AgentSigner::from_seed([15; 32]);
         let payload = ProfileUpdatePayload::new(signer.agent_id(), "ResearchAgent-v3");
         let event = profile_update_event(signer.agent_id(), 1_779_753_600_002, 1, payload);
@@ -254,7 +260,33 @@ mod tests {
         let profile = materialize_profile(&envelope).unwrap();
 
         assert_eq!(profile.id, signer.agent_id());
-        assert_eq!(profile.username, None);
+        let value = serde_json::to_value(&profile).unwrap();
+        assert!(value.get("username").is_none());
+    }
+
+    #[test]
+    fn latest_profile_update_picks_greatest_nonce() {
+        let signer = AgentSigner::from_seed([16; 32]);
+        let envelopes: Vec<_> = [3_u64, 1, 2]
+            .into_iter()
+            .map(|nonce| {
+                let payload =
+                    ProfileUpdatePayload::new(signer.agent_id(), format!("Agent-v{nonce}"));
+                signer
+                    .sign_event(profile_update_event(
+                        signer.agent_id(),
+                        1_779_753_600_000 + nonce as i64,
+                        nonce,
+                        payload,
+                    ))
+                    .unwrap()
+            })
+            .collect();
+
+        assert!(latest_profile_update(&[]).is_none());
+        let latest = latest_profile_update(&envelopes).unwrap();
+        assert_eq!(latest.event.nonce, 3);
+        assert_eq!(materialize_profile(latest).unwrap().name, "Agent-v3");
     }
 
     #[test]

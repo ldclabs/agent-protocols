@@ -27,6 +27,7 @@ from agent_protocols.discourse import (
     can_accept_room_write,
     can_submit_event,
     can_write_in_state,
+    discourse_event,
     pack_map,
     room_create_event,
     server_record_hash,
@@ -41,6 +42,7 @@ from agent_protocols.discourse import (
     verify_server_record,
     verify_server_record_chain,
 )
+from agent_protocols import discourse
 from agent_protocols.errors import AgentProtocolError
 from agent_protocols.http_client import sse_events_url
 from agent_protocols.identity import AgentSigner, create_event
@@ -400,6 +402,118 @@ class DiscourseTests(unittest.TestCase):
             sse_events_url("https://api.example.com", "room123"),
             "https://api.example.com/v1/rooms/room123/events/live",
         )
+
+class Revision20260704Tests(unittest.TestCase):
+    def test_kernel_defines_eleven_builtins_with_membership_signals(self):
+        self.assertEqual(len(discourse.BUILTIN_EVENT_TYPES), 11)
+        self.assertIn("room.update", discourse.BUILTIN_EVENT_TYPES)
+        self.assertIn("room.member.remove", discourse.BUILTIN_EVENT_TYPES)
+
+        for membership in discourse.MEMBERSHIP_EVENT_TYPES:
+            self.assertEqual(discourse.builtin_event_class(membership), "signal")
+            self.assertFalse(discourse.event_advances_room_head(membership))
+        for advancing in (
+            discourse.ROOM_CREATE,
+            discourse.ROOM_UPDATE,
+            discourse.ROOM_CLOSE,
+            discourse.ROOM_CANCEL,
+            discourse.TYPE_DEFINE,
+            discourse.MESSAGE_CREATE,
+        ):
+            self.assertTrue(discourse.event_advances_room_head(advancing))
+        self.assertIsNone(discourse.builtin_event_class("review.finding"))
+
+        registry = discourse.TypeRegistry()
+        registry.define(
+            {
+                "type": "reaction.create",
+                "kind": "signal",
+                "title": "Reaction",
+                "schema": {"type": "object"},
+            }
+        )
+        self.assertFalse(discourse.event_advances_room_head("reaction.create", registry))
+        self.assertTrue(discourse.event_advances_room_head("unknown.type", registry))
+
+        self.assertIn("member_banned", discourse.DISCOURSE_ERROR_CODES)
+        self.assertIn("role_not_allowed", discourse.DISCOURSE_ERROR_CODES)
+        self.assertIn("max_speakers_exceeded", discourse.DISCOURSE_ERROR_CODES)
+
+    def test_room_update_and_member_remove_follow_moderator_rules(self):
+        for builtin in (discourse.ROOM_UPDATE, discourse.ROOM_MEMBER_REMOVE):
+            self.assertTrue(discourse.can_submit_event(builtin, {"role": "moderator"}))
+            self.assertTrue(discourse.can_submit_event(builtin, {"is_creator": True}))
+            self.assertFalse(discourse.can_submit_event(builtin, {"role": "speaker"}))
+            self.assertTrue(discourse.can_write_in_state(builtin, "scheduled"))
+            self.assertTrue(discourse.can_write_in_state(builtin, "active"))
+            self.assertFalse(discourse.can_write_in_state(builtin, "ended"))
+            self.assertFalse(discourse.can_write_in_state(builtin, "cancelled"))
+
+    def test_validates_room_update_payloads(self):
+        discourse.validate_room_update_payload(
+            {"topic": "New topic", "guidance": "", "end_time": 2000}
+        )
+        with self.assertRaisesRegex(AgentProtocolError, "must not be empty"):
+            discourse.validate_room_update_payload({})
+        with self.assertRaisesRegex(AgentProtocolError, "not updatable"):
+            discourse.validate_room_update_payload({"visibility": "private"})
+        with self.assertRaisesRegex(AgentProtocolError, "topic"):
+            discourse.validate_room_update_payload({"topic": "  "})
+        with self.assertRaisesRegex(AgentProtocolError, "before end_time"):
+            discourse.validate_room_update_payload({"start_time": 5, "end_time": 5})
+        with self.assertRaisesRegex(AgentProtocolError, "max_speakers"):
+            discourse.validate_room_update_payload({"policy": {"max_speakers": 0}})
+
+    def test_validates_room_member_remove_payloads(self):
+        member = AgentSigner.from_seed(bytes([41]) * 32).agent_id()
+        discourse.validate_room_member_remove_payload({"member": member})
+        discourse.validate_room_member_remove_payload({"member": member, "ban": True})
+        with self.assertRaises(AgentProtocolError):
+            discourse.validate_room_member_remove_payload({"member": "not-an-id"})
+        with self.assertRaisesRegex(AgentProtocolError, "ban must be a boolean"):
+            discourse.validate_room_member_remove_payload({"member": member, "ban": "yes"})
+
+    def test_mentions_are_capped_at_32_unique_agent_ids(self):
+        signer = AgentSigner.from_seed(bytes([42]) * 32)
+        others = [AgentSigner.from_seed(bytes([100 + index]) * 32).agent_id() for index in range(33)]
+
+        def envelope_with(mentions):
+            event = discourse_event(
+                MESSAGE_CREATE,
+                signer.agent_id(),
+                100,
+                1,
+                "room1",
+                1,
+                "room-create-head",
+                {"content_type": "text/plain", "content": "hi"},
+            )
+            event["mentions"] = mentions
+            return signer.sign_event(event)
+
+        validate_discourse_envelope(envelope_with(others[:32]))
+        with self.assertRaisesRegex(AgentProtocolError, "must not exceed 32"):
+            validate_discourse_envelope(envelope_with(others))
+        with self.assertRaisesRegex(AgentProtocolError, "unique"):
+            validate_discourse_envelope(envelope_with([others[0], others[0]]))
+        # A non-string mention yields a clean protocol error, not a raw
+        # TypeError from set() hashing.
+        with self.assertRaises(AgentProtocolError):
+            validate_discourse_envelope(envelope_with([{"not": "a string"}]))
+
+    def test_type_redefinition_cannot_change_kind(self):
+        definition = {
+            "type": "review.finding",
+            "kind": "message",
+            "title": "Finding",
+            "schema": {"type": "object"},
+        }
+        registry = discourse.TypeRegistry()
+        registry.define(definition)
+        registry.define({**definition, "title": "Finding v2"})
+        self.assertEqual(registry.get("review.finding")["title"], "Finding v2")
+        with self.assertRaisesRegex(AgentProtocolError, "cannot change kind"):
+            registry.define({**definition, "kind": "signal"})
 
 
 if __name__ == "__main__":

@@ -1,7 +1,12 @@
 import unittest
 
 from agent_protocols.identity import AgentSigner
-from agent_protocols.profile import materialize_profile, profile_update_event, validate_profile_update
+from agent_protocols.profile import (
+    latest_profile_update,
+    materialize_profile,
+    profile_update_event,
+    validate_profile_update,
+)
 
 
 class ProfileTests(unittest.TestCase):
@@ -28,14 +33,14 @@ class ProfileTests(unittest.TestCase):
 
         self.assertEqual(profile["id"], signer.agent_id())
         self.assertEqual(profile["name"], "ResearchAgent-v3")
-        self.assertIsNone(profile["username"])
+        self.assertNotIn("username", profile)
         self.assertEqual(profile["links"], payload["links"])
         self.assertEqual(profile["delegations"], payload["delegations"])
         self.assertEqual(profile["extra"], payload["extra"])
         self.assertEqual(profile["updated_at"], 1_779_753_600_000)
         self.assertEqual(profile["event_id"], envelope["hash"])
 
-    def test_does_not_materialize_unconfirmed_payload_username(self):
+    def test_does_not_materialize_the_removed_username_field(self):
         signer = AgentSigner.from_seed(bytes([15]) * 32)
         payload = {"id": signer.agent_id(), "name": "ResearchAgent-v3", "username": "anda"}
         envelope = signer.sign_event(profile_update_event(signer.agent_id(), 1_779_753_600_002, 1, payload))
@@ -43,7 +48,26 @@ class ProfileTests(unittest.TestCase):
         profile = materialize_profile(envelope)
 
         self.assertEqual(profile["id"], signer.agent_id())
-        self.assertIsNone(profile["username"])
+        self.assertNotIn("username", profile)
+
+    def test_latest_profile_update_picks_greatest_nonce(self):
+        signer = AgentSigner.from_seed(bytes([16]) * 32)
+        envelopes = [
+            signer.sign_event(
+                profile_update_event(
+                    signer.agent_id(),
+                    1_779_753_600_000 + nonce,
+                    nonce,
+                    {"id": signer.agent_id(), "name": f"Agent-v{nonce}"},
+                )
+            )
+            for nonce in (3, 1, 2)
+        ]
+
+        self.assertIsNone(latest_profile_update([]))
+        latest = latest_profile_update(envelopes)
+        self.assertEqual(latest["event"]["nonce"], 3)
+        self.assertEqual(materialize_profile(latest)["name"], "Agent-v3")
 
     def test_rejects_actor_payload_mismatch(self):
         signer = AgentSigner.from_seed(bytes([12]) * 32)

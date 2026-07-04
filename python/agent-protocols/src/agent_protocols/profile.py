@@ -35,7 +35,6 @@ def materialize_profile(envelope: Envelope) -> AgentProfile:
     return {
         "id": payload_id,
         "name": payload["name"],
-        "username": None,
         "description": payload.get("description"),
         "avatar_url": payload.get("avatar_url"),
         "provider": payload.get("provider"),
@@ -47,3 +46,13 @@ def materialize_profile(envelope: Envelope) -> AgentProfile:
         "updated_at": envelope["event"]["created_at"],
         "event_id": envelope["hash"],
     }
+
+
+def latest_profile_update(envelopes: list[Envelope]) -> Envelope | None:
+    """Selects the latest profile state from accepted update envelopes. Nonces
+    are strictly monotonic per Agent ID, so the latest profile is defined as
+    the accepted `profile.update` with the greatest `nonce` — deterministic
+    and independently checkable from event history alone."""
+    if not envelopes:
+        return None
+    return max(envelopes, key=lambda envelope: envelope["event"]["nonce"])

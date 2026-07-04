@@ -399,7 +399,11 @@ fn discourse_client_round_trips_every_endpoint() {
             .unwrap();
         assert_eq!(status.status.state, "idle");
         let status = client
-            .set_agent_status("room1", "jwt-status-set", &AgentStatusInput::new("idle", 2))
+            .set_agent_status(
+                "room1",
+                "jwt-status-set",
+                &AgentStatusInput::new("idle").with_expires_at(2),
+            )
             .await
             .unwrap();
         assert_eq!(status.agent_id, agent_id);

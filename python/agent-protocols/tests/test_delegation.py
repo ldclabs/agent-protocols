@@ -122,3 +122,45 @@ class DelegationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Revision20260704DelegationTests(unittest.TestCase):
+    def test_grant_expiry_checked_against_not_before_and_created_at(self):
+        from agent_protocols.delegation import validate_delegation_grant_payload
+        from agent_protocols.errors import AgentProtocolError
+        from agent_protocols.identity import AgentSigner
+
+        subject = AgentSigner.from_seed(bytes([46]) * 32).agent_id()
+        base = {
+            "id": "del_1",
+            "principal": {"id": "https://al.ink/yan"},
+            "subject": subject,
+            "scopes": ["inbox.screen"],
+        }
+
+        with self.assertRaisesRegex(AgentProtocolError, "greater than not_before"):
+            validate_delegation_grant_payload(
+                {**base, "not_before": 2000, "expires_at": 2000}, 1000
+            )
+        with self.assertRaisesRegex(AgentProtocolError, "greater than created_at"):
+            validate_delegation_grant_payload({**base, "expires_at": 1000}, 1000)
+        with self.assertRaisesRegex(AgentProtocolError, "greater than created_at"):
+            validate_delegation_grant_payload(
+                {**base, "not_before": 500, "expires_at": 800}, 1000
+            )
+        validate_delegation_grant_payload(
+            {**base, "not_before": 500, "expires_at": 1500}, 1000
+        )
+
+    def test_delegation_queries_require_subject_or_principal(self):
+        from agent_protocols.delegation import validate_delegation_query_request
+        from agent_protocols.errors import AgentProtocolError
+        from agent_protocols.identity import AgentSigner
+
+        subject = AgentSigner.from_seed(bytes([47]) * 32).agent_id()
+        validate_delegation_query_request({"subject": subject})
+        validate_delegation_query_request({"principal_id": "https://al.ink/yan", "limit": 20})
+        with self.assertRaisesRegex(AgentProtocolError, "at least one of subject or principal_id"):
+            validate_delegation_query_request({"status": "active"})
+        with self.assertRaisesRegex(AgentProtocolError, "positive integer"):
+            validate_delegation_query_request({"subject": subject, "limit": 0})

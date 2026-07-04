@@ -187,13 +187,49 @@ export function validateDelegationGrantPayload(
     throw protocolError("invalid_delegation", "constraints must be an object");
   }
   if (payload.expires_at !== undefined) {
-    const notBefore = payload.not_before ?? createdAt;
-    if (notBefore !== undefined && payload.expires_at <= notBefore) {
+    if (
+      payload.not_before !== undefined &&
+      payload.expires_at <= payload.not_before
+    ) {
       throw protocolError(
         "invalid_delegation",
-        "expires_at must be greater than not_before or created_at",
+        "expires_at must be greater than not_before",
       );
     }
+    if (createdAt !== undefined && payload.expires_at <= createdAt) {
+      throw protocolError(
+        "invalid_delegation",
+        "expires_at must be greater than created_at",
+      );
+    }
+  }
+}
+
+/**
+ * A delegation query MUST include at least one of `subject` or
+ * `principal_id`. `limit` defaults to 20; services SHOULD cap it at 100.
+ */
+export function validateDelegationQueryRequest(
+  request: DelegationQueryRequest,
+): void {
+  if (request.subject === undefined && request.principal_id === undefined) {
+    throw protocolError(
+      "invalid_delegation",
+      "query must include at least one of subject or principal_id",
+    );
+  }
+  if (request.subject !== undefined) validateAgentId(request.subject);
+  if (request.principal_id !== undefined) {
+    validateHttpsUrl(request.principal_id, "principal_id");
+  }
+  if (
+    request.limit !== undefined &&
+    (!Number.isInteger(request.limit) || request.limit < 1)
+  ) {
+    throw protocolError(
+      "invalid_delegation",
+      "limit must be a positive integer",
+    );
   }
 }
 

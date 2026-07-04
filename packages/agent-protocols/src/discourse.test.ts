@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { AgentSigner, createEvent } from "./identity.js";
+import * as discourse from "./discourse.js";
 import {
   PackDocument,
   PermissionContext,
@@ -481,5 +482,177 @@ test("builds SSE event stream URLs", () => {
   assert.equal(
     sseEventsUrl("https://api.example.com", "room123"),
     "https://api.example.com/v1/rooms/room123/events/live",
+  );
+});
+
+test("kernel defines eleven built-in types with membership events as signals", () => {
+  const {
+    BUILTIN_EVENT_TYPES,
+    MEMBERSHIP_EVENT_TYPES,
+    builtinEventClass,
+    eventAdvancesRoomHead,
+  } = discourse;
+  assert.equal(BUILTIN_EVENT_TYPES.length, 11);
+  assert.ok(BUILTIN_EVENT_TYPES.includes("room.update"));
+  assert.ok(BUILTIN_EVENT_TYPES.includes("room.member.remove"));
+
+  assert.deepEqual(MEMBERSHIP_EVENT_TYPES, [
+    "room.join",
+    "room.join.review",
+    "room.leave",
+    "room.member.role.update",
+    "room.member.remove",
+  ]);
+  for (const type of MEMBERSHIP_EVENT_TYPES) {
+    assert.equal(builtinEventClass(type), "signal");
+    assert.equal(eventAdvancesRoomHead(type), false);
+  }
+  assert.equal(builtinEventClass(eventType.ROOM_UPDATE), "lifecycle");
+  assert.equal(builtinEventClass(eventType.TYPE_DEFINE), "control");
+  assert.equal(builtinEventClass(eventType.MESSAGE_CREATE), "message");
+  assert.equal(builtinEventClass("review.finding"), undefined);
+  for (const type of [
+    eventType.ROOM_CREATE,
+    eventType.ROOM_UPDATE,
+    eventType.ROOM_CLOSE,
+    eventType.ROOM_CANCEL,
+    eventType.TYPE_DEFINE,
+    eventType.MESSAGE_CREATE,
+  ]) {
+    assert.equal(eventAdvancesRoomHead(type), true);
+  }
+
+  const registry = new TypeRegistry();
+  registry.define({
+    type: "reaction.create",
+    kind: "signal",
+    title: "Reaction",
+    schema: { type: "object" },
+  });
+  assert.equal(eventAdvancesRoomHead("reaction.create", registry), false);
+  assert.equal(eventAdvancesRoomHead("unknown.type", registry), true);
+
+  assert.ok(discourse.DISCOURSE_ERROR_CODES.includes("member_banned"));
+  assert.ok(discourse.DISCOURSE_ERROR_CODES.includes("role_not_allowed"));
+  assert.ok(discourse.DISCOURSE_ERROR_CODES.includes("max_speakers_exceeded"));
+});
+
+test("room.update and room.member.remove follow moderator permissions and state rules", () => {
+  const moderator: PermissionContext = { role: "moderator" };
+  const speaker: PermissionContext = { role: "speaker" };
+  const creator: PermissionContext = { isCreator: true };
+
+  for (const type of [eventType.ROOM_UPDATE, eventType.ROOM_MEMBER_REMOVE]) {
+    assert.equal(canSubmitEvent(type, moderator), true);
+    assert.equal(canSubmitEvent(type, creator), true);
+    assert.equal(canSubmitEvent(type, speaker), false);
+    assert.equal(canWriteInState(type, "scheduled"), true);
+    assert.equal(canWriteInState(type, "active"), true);
+    assert.equal(canWriteInState(type, "ended"), false);
+    assert.equal(canWriteInState(type, "cancelled"), false);
+  }
+});
+
+test("validateRoomUpdatePayload enforces the updatable field set", () => {
+  discourse.validateRoomUpdatePayload({
+    topic: "New topic",
+    end_time: 2000,
+    guidance: "",
+  });
+  assert.throws(() => discourse.validateRoomUpdatePayload({}), /must not be empty/);
+  assert.throws(
+    () =>
+      discourse.validateRoomUpdatePayload({
+        visibility: "private",
+      } as never),
+    /not updatable/,
+  );
+  assert.throws(
+    () => discourse.validateRoomUpdatePayload({ topic: "  " }),
+    /topic/,
+  );
+  assert.throws(
+    () => discourse.validateRoomUpdatePayload({ start_time: 5, end_time: 5 }),
+    /before end_time/,
+  );
+  assert.throws(
+    () => discourse.validateRoomUpdatePayload({ policy: { max_speakers: 0 } }),
+    /max_speakers/,
+  );
+});
+
+test("validateRoomMemberRemovePayload checks member and ban shape", () => {
+  const member = AgentSigner.fromSeed(new Uint8Array(32).fill(41)).agentId();
+  discourse.validateRoomMemberRemovePayload({ member });
+  discourse.validateRoomMemberRemovePayload({ member, ban: true, reason: "spam" });
+  assert.throws(
+    () => discourse.validateRoomMemberRemovePayload({ member: "not-an-id" }),
+    /agent id/i,
+  );
+  assert.throws(
+    () =>
+      discourse.validateRoomMemberRemovePayload({
+        member,
+        ban: "yes",
+      } as never),
+    /ban must be a boolean/,
+  );
+});
+
+test("mentions are capped at 32 unique agent ids", () => {
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(42));
+  const others = Array.from({ length: 33 }, (_, index) =>
+    AgentSigner.fromSeed(new Uint8Array(32).fill(100 + index)).agentId(),
+  );
+  const makeEnvelope = (mentions: string[]) =>
+    signer.signEvent({
+      ...discourse.discourseEvent(
+        eventType.MESSAGE_CREATE,
+        signer.agentId(),
+        100,
+        1,
+        "room1",
+        1,
+        "room-create-head",
+        { content_type: "text/plain", content: "hi" },
+      ),
+      mentions,
+    });
+
+  validateDiscourseEnvelope(makeEnvelope(others.slice(0, 32)));
+  assert.throws(
+    () => validateDiscourseEnvelope(makeEnvelope(others)),
+    /must not exceed 32/,
+  );
+  assert.throws(
+    () => validateDiscourseEnvelope(makeEnvelope([others[0], others[0]])),
+    /unique/,
+  );
+});
+
+test("type redefinition cannot change the kind", () => {
+  const registry = new TypeRegistry();
+  registry.define({
+    type: "review.finding",
+    kind: "message",
+    title: "Finding",
+    schema: { type: "object" },
+  });
+  registry.define({
+    type: "review.finding",
+    kind: "message",
+    title: "Finding v2",
+    schema: { type: "object" },
+  });
+  assert.equal(registry.get("review.finding")?.title, "Finding v2");
+  assert.throws(
+    () =>
+      registry.define({
+        type: "review.finding",
+        kind: "signal",
+        title: "Finding v3",
+        schema: { type: "object" },
+      }),
+    /cannot change kind/,
   );
 });

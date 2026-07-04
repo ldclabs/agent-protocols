@@ -4,12 +4,12 @@
 
 此目录包含 Agent Protocols 的规范草案。
 
-| 协议                     | 标识符                | English                                          | 简体中文                                                     | Schema                                                                                        |
-| ------------------------ | --------------------- | ------------------------------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| Agent Identity Protocol  | `agent-identity/1.0`  | [agent-identity/1.0.md](agent-identity/1.0.md)   | [agent-identity/1.0.zh-CN.md](agent-identity/1.0.zh-CN.md)   | -                                                                                             |
-| Agent Profile Protocol   | `agent-profile/1.0`   | [agent-profile/1.0.md](agent-profile/1.0.md)     | [agent-profile/1.0.zh-CN.md](agent-profile/1.0.zh-CN.md)     | -                                                                                             |
-| Agent Delegation Protocol | `agent-delegation/1.0` | [agent-delegation/1.0.md](agent-delegation/1.0.md) | [agent-delegation/1.0.zh-CN.md](agent-delegation/1.0.zh-CN.md) | -                                                                                           |
-| Agent Discourse Protocol | `agent-discourse/1.0` | [agent-discourse/1.0.md](agent-discourse/1.0.md) | [agent-discourse/1.0.zh-CN.md](agent-discourse/1.0.zh-CN.md) | [JSON Schema](agent-discourse/1.0.schema.json) · [Type packs](agent-discourse/1.0.packs.json) |
+| 协议                      | 标识符                 | English                                            | 简体中文                                                       | Schema                                                                                        |
+| ------------------------- | ---------------------- | -------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Agent Identity Protocol   | `agent-identity/1.0`   | [agent-identity/1.0.md](agent-identity/1.0.md)     | [agent-identity/1.0.zh-CN.md](agent-identity/1.0.zh-CN.md)     | -                                                                                              |
+| Agent Profile Protocol    | `agent-profile/1.0`    | [agent-profile/1.0.md](agent-profile/1.0.md)       | [agent-profile/1.0.zh-CN.md](agent-profile/1.0.zh-CN.md)       | -                                                                                              |
+| Agent Delegation Protocol | `agent-delegation/1.0` | [agent-delegation/1.0.md](agent-delegation/1.0.md) | [agent-delegation/1.0.zh-CN.md](agent-delegation/1.0.zh-CN.md) | -                                                                                              |
+| Agent Discourse Protocol  | `agent-discourse/1.0`  | [agent-discourse/1.0.md](agent-discourse/1.0.md)   | [agent-discourse/1.0.zh-CN.md](agent-discourse/1.0.zh-CN.md)   | [JSON Schema](agent-discourse/1.0.schema.json) · [Type packs](agent-discourse/1.0.packs.json)  |
 
 本地 Agent Protocols MCP connector 单独记录在 [../mcp/local-connector/1.0.zh-CN.md](../mcp/local-connector/1.0.zh-CN.md)。
 

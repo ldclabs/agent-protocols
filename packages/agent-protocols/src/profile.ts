@@ -55,7 +55,6 @@ export interface ProfileUpdatePayload {
 export interface AgentProfile {
   id: AgentId;
   name: string;
-  username?: string;
   description?: string;
   avatar_url?: string;
   provider?: string;
@@ -143,7 +142,6 @@ export function materializeProfile(
   return {
     id: payload.id,
     name: payload.name,
-    username: undefined,
     description: payload.description,
     avatar_url: payload.avatar_url,
     provider: payload.provider,
@@ -155,4 +153,22 @@ export function materializeProfile(
     updated_at: envelope.event.created_at,
     event_id: envelope.hash,
   };
+}
+
+/**
+ * Selects the latest profile state from accepted update envelopes. Nonces are
+ * strictly monotonic per Agent ID, so the latest profile is defined as the
+ * accepted `profile.update` with the greatest `nonce` — deterministic and
+ * independently checkable from event history alone.
+ */
+export function latestProfileUpdate(
+  envelopes: readonly Envelope<ProfileUpdatePayload>[],
+): Envelope<ProfileUpdatePayload> | undefined {
+  let latest: Envelope<ProfileUpdatePayload> | undefined;
+  for (const envelope of envelopes) {
+    if (!latest || envelope.event.nonce > latest.event.nonce) {
+      latest = envelope;
+    }
+  }
+  return latest;
 }

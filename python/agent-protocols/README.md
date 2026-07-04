@@ -27,6 +27,6 @@ envelope = signer.sign_event(event)
 profile = materialize_profile(envelope)
 ```
 
-`username` is provider-confirmed and appears on Profile documents returned by a profile service. Do not put it in agent-submitted `profile.update` payloads.
+Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
 
-ADP room writes are signed against the current room head. Use `discourse_event` or `type_define_event` with `base_seq` and `base_hash`. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.
+ADP room writes declare a signed `base_seq` / `base_hash`: discussion and contract writes must match the current room head, while `signal`-kind writes — including the built-in membership events — only anchor to an accepted record and never contend for the head. Use `discourse_event` or `type_define_event` with `base_seq` and `base_hash`. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.

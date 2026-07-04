@@ -70,9 +70,24 @@ impl ProfileClient {
         agent_id: &AgentId,
         limit: Option<usize>,
     ) -> Result<ProfileEventsResponse> {
+        self.profile_events_page(agent_id, limit, None).await
+    }
+
+    pub async fn profile_events_page(
+        &self,
+        agent_id: &AgentId,
+        limit: Option<usize>,
+        cursor: Option<&str>,
+    ) -> Result<ProfileEventsResponse> {
         let mut path = format!("/v1/profiles/{agent_id}/events");
+        let mut pairs = Vec::new();
         if let Some(limit) = limit {
-            path.push_str(&format!("?limit={limit}"));
+            pairs.push(format!("limit={limit}"));
+        }
+        push_query_pair(&mut pairs, "cursor", cursor);
+        if !pairs.is_empty() {
+            path.push('?');
+            path.push_str(&pairs.join("&"));
         }
         Ok(self
             .inner
@@ -235,9 +250,24 @@ impl DiscourseClient {
     }
 
     pub async fn my_rooms(&self, jwt: &str) -> Result<Vec<RoomResponse>> {
+        self.my_rooms_with_options(jwt, &MyRoomsOptions::default())
+            .await
+    }
+
+    pub async fn my_rooms_with_options(
+        &self,
+        jwt: &str,
+        options: &MyRoomsOptions,
+    ) -> Result<Vec<RoomResponse>> {
+        let mut path = "/v1/me/rooms".to_owned();
+        let query = options.query_string();
+        if !query.is_empty() {
+            path.push('?');
+            path.push_str(&query);
+        }
         Ok(self
             .inner
-            .get(self.url("/v1/me/rooms"))
+            .get(self.url(&path))
             .bearer_auth(jwt)
             .send()
             .await?
@@ -511,6 +541,7 @@ impl DelegationClient {
         &self,
         request: &DelegationQueryRequest,
     ) -> Result<DelegationQueryResponse> {
+        crate::delegation::validate_delegation_query_request(request)?;
         Ok(self
             .inner
             .post(self.url("/v1/delegations/query"))
@@ -528,6 +559,27 @@ impl DelegationClient {
             self.base_url.trim_end_matches('/'),
             path.trim_start_matches('/')
         )
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MyRoomsOptions {
+    pub status: Option<String>,
+    pub membership: Option<String>,
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+}
+
+impl MyRoomsOptions {
+    fn query_string(&self) -> String {
+        let mut pairs = Vec::new();
+        push_query_pair(&mut pairs, "status", self.status.as_deref());
+        push_query_pair(&mut pairs, "membership", self.membership.as_deref());
+        if let Some(limit) = self.limit {
+            pairs.push(format!("limit={limit}"));
+        }
+        push_query_pair(&mut pairs, "cursor", self.cursor.as_deref());
+        pairs.join("&")
     }
 }
 

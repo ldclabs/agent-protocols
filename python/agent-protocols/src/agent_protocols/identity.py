@@ -6,6 +6,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 from typing import Any, MutableMapping, Protocol
 
 import rfc8785
@@ -34,9 +35,11 @@ def agent_id_from_public_key(public_key: bytes) -> AgentId:
 
 
 def public_key_bytes(agent_id: AgentId) -> bytes:
+    if not isinstance(agent_id, str):
+        raise AgentProtocolError("invalid_agent_id", "agent id must be a string")
     if not agent_id.startswith(AGENT_ID_PREFIX):
         raise AgentProtocolError("invalid_agent_id", "agent id must start with did:agent:")
-    data = _base64url_decode_no_pad(agent_id[len(AGENT_ID_PREFIX):])
+    data = _base64url_decode(agent_id[len(AGENT_ID_PREFIX):])
     if len(data) != 32:
         raise AgentProtocolError("invalid_public_key", f"agent id public key must be 32 bytes, got {len(data)}")
     return data
@@ -114,7 +117,14 @@ class MemoryNonceStore:
         if record is not None:
             max_nonce, expires_at = record
             if expires_at > now_ms and nonce <= max_nonce:
-                raise AgentProtocolError("nonce_not_greater", f"nonce must be greater than accepted max nonce {max_nonce}")
+                # Services rejecting for this reason MUST return the effective
+                # maximum in the `Max-Seen-Nonce` response header; `data`
+                # carries it.
+                raise AgentProtocolError(
+                    "nonce_not_greater",
+                    f"nonce must be greater than accepted max nonce {max_nonce}",
+                    data={"max_nonce": max_nonce},
+                )
         self._records[actor] = (nonce, now_ms + ttl_ms)
         return nonce
 
@@ -215,6 +225,11 @@ def sign_event(private_key: Ed25519PrivateKey, event: Event) -> str:
 
 
 def sign_event_hash(private_key: Ed25519PrivateKey, event_hash: bytes) -> str:
+    """Signs a precomputed 32-byte event hash. Signing a digest supplied by
+    another component without seeing the event it commits to (blind signing)
+    is NOT RECOMMENDED: ``actor`` and all event content are inside the digest,
+    so a blind signer can be tricked into signing arbitrary events attributed
+    to its key. Prefer :func:`sign_event`."""
     return _base64url_encode(private_key.sign(_valid_event_hash_bytes(event_hash)))
 
 
@@ -302,6 +317,20 @@ def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None
     return claims
 
 
+def service_origin(url: str) -> str:
+    """Derives the request JWT ``aud`` from a request URL: the service origin —
+    scheme, host, and non-default port, with no path (Agent Identity Section 8)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https", "http") or not parsed.hostname:
+        raise AgentProtocolError("invalid_url", f"not an HTTP(S) URL: {url}")
+    host = parsed.hostname
+    port = parsed.port
+    default_port = 443 if parsed.scheme == "https" else 80
+    if port is None or port == default_port:
+        return f"{parsed.scheme}://{host}"
+    return f"{parsed.scheme}://{host}:{port}"
+
+
 def unix_ms() -> int:
     return int(time.time() * 1000)
 
@@ -320,14 +349,20 @@ def _base64url_encode(data: bytes) -> str:
 
 
 def _base64url_decode(value: str) -> bytes:
+    """Canonical base64url decoding: URL-safe alphabet, no padding, zero
+    trailing bits. Receivers MUST reject non-canonical encodings, otherwise
+    one value gains multiple distinct string forms and corrupts string-keyed
+    comparisons."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]*", value):
+        raise AgentProtocolError("invalid_encoding", "expected canonical base64url without padding")
     padding = "=" * ((4 - len(value) % 4) % 4)
-    return base64.urlsafe_b64decode(value + padding)
-
-
-def _base64url_decode_no_pad(value: str) -> bytes:
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
-        raise AgentProtocolError("invalid_encoding", "expected base64url without padding")
-    return _base64url_decode(value)
+    try:
+        data = base64.urlsafe_b64decode(value + padding)
+    except (ValueError, TypeError) as exc:
+        raise AgentProtocolError("invalid_encoding", "expected canonical base64url without padding") from exc
+    if _base64url_encode(data) != value:
+        raise AgentProtocolError("invalid_encoding", "expected canonical base64url without padding")
+    return data
 
 
 def _valid_event_hash_bytes(event_hash: bytes) -> bytes:

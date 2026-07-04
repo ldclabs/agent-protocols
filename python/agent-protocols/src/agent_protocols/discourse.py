@@ -1,7 +1,7 @@
 """Agent Discourse Protocol 1.0: kernel types, the room type system, and
 verification helpers.
 
-The protocol defines nine built-in event types. Every other event type is
+The protocol defines eleven built-in event types. Every other event type is
 declared per room as a schema-validated type definition, either inline or
 imported from a type pack. Hosts validate structure and permissions; they
 never need to understand application semantics.
@@ -32,12 +32,14 @@ from .identity import (
 
 DISCOURSE_PROTOCOL = "agent-discourse/1.0"
 
-# The nine built-in event types. All other types are room-defined.
+# The eleven built-in event types. All other types are room-defined.
 ROOM_CREATE = "room.create"
+ROOM_UPDATE = "room.update"
 ROOM_JOIN = "room.join"
 ROOM_JOIN_REVIEW = "room.join.review"
 ROOM_LEAVE = "room.leave"
 ROOM_MEMBER_ROLE_UPDATE = "room.member.role.update"
+ROOM_MEMBER_REMOVE = "room.member.remove"
 ROOM_CLOSE = "room.close"
 ROOM_CANCEL = "room.cancel"
 TYPE_DEFINE = "type.define"
@@ -45,15 +47,66 @@ MESSAGE_CREATE = "message.create"
 
 BUILTIN_EVENT_TYPES = {
     ROOM_CREATE,
+    ROOM_UPDATE,
     ROOM_JOIN,
     ROOM_JOIN_REVIEW,
     ROOM_LEAVE,
     ROOM_MEMBER_ROLE_UPDATE,
+    ROOM_MEMBER_REMOVE,
     ROOM_CLOSE,
     ROOM_CANCEL,
     TYPE_DEFINE,
     MESSAGE_CREATE,
 }
+
+# Built-in membership events. They carry the `signal` class: they anchor to
+# an accepted record but never contend for or advance the room head, so busy
+# rooms cannot starve joins, reviews, or other membership writes.
+MEMBERSHIP_EVENT_TYPES = (
+    ROOM_JOIN,
+    ROOM_JOIN_REVIEW,
+    ROOM_LEAVE,
+    ROOM_MEMBER_ROLE_UPDATE,
+    ROOM_MEMBER_REMOVE,
+)
+
+# Standard ADP error codes from the Section 20 table.
+DISCOURSE_ERROR_CODES = frozenset(
+    {
+        "invalid_event",
+        "invalid_event_hash",
+        "invalid_signature",
+        "invalid_actor",
+        "timestamp_out_of_window",
+        "nonce_not_greater",
+        "room_not_found",
+        "room_not_active",
+        "room_ended",
+        "permission_denied",
+        "approval_required",
+        "join_request_not_found",
+        "join_request_not_approved",
+        "join_request_role_mismatch",
+        "join_request_expired",
+        "member_banned",
+        "role_not_allowed",
+        "max_speakers_exceeded",
+        "membership_required",
+        "invalid_token",
+        "room_head_mismatch",
+        "base_record_mismatch",
+        "agent_status_not_found",
+        "rate_limited",
+        "payload_too_large",
+        "type_not_defined",
+        "type_disabled",
+        "payload_schema_violation",
+        "pack_unavailable",
+    }
+)
+
+# Hosts MUST reject events with more than this many `mentions` entries.
+MAX_MENTIONS = 32
 
 # Custom event types must not use these prefixes.
 RESERVED_TYPE_PREFIXES = ("room.", "type.")
@@ -171,6 +224,42 @@ def event_requires_room_id(event_type: str) -> bool:
     return event_type != ROOM_CREATE
 
 
+BuiltinEventClass = Literal["lifecycle", "signal", "control", "message"]
+
+_BUILTIN_EVENT_CLASSES: dict[str, BuiltinEventClass] = {
+    ROOM_CREATE: "lifecycle",
+    ROOM_UPDATE: "lifecycle",
+    ROOM_CLOSE: "lifecycle",
+    ROOM_CANCEL: "lifecycle",
+    ROOM_JOIN: "signal",
+    ROOM_JOIN_REVIEW: "signal",
+    ROOM_LEAVE: "signal",
+    ROOM_MEMBER_ROLE_UPDATE: "signal",
+    ROOM_MEMBER_REMOVE: "signal",
+    TYPE_DEFINE: "control",
+    MESSAGE_CREATE: "message",
+}
+
+
+def builtin_event_class(event_type: str) -> BuiltinEventClass | None:
+    """Section 13.2 class of a built-in type; ``None`` for room-defined types."""
+    return _BUILTIN_EVENT_CLASSES.get(event_type)
+
+
+def event_advances_room_head(event_type: str, registry: "TypeRegistry | None" = None) -> bool:
+    """Whether an accepted record of this type advances the room head and must
+    therefore match the current head when written (Section 6.1). Room
+    lifecycle, `message`-kind, and `control`-kind records advance the head;
+    `signal`-kind records — including the built-in membership events — only
+    anchor to an accepted record. Unknown custom types default to
+    head-advancing."""
+    builtin_class = builtin_event_class(event_type)
+    if builtin_class is not None:
+        return builtin_class != "signal"
+    definition = registry.get(event_type) if registry is not None else None
+    return definition is None or definition.get("kind") != "signal"
+
+
 def validate_discourse_envelope(envelope: Envelope) -> None:
     verify_envelope(envelope)
     event = envelope["event"]
@@ -222,8 +311,17 @@ def _validate_mentions(mentions: Any) -> None:
         return
     if not isinstance(mentions, list):
         raise AgentProtocolError("invalid_event", "mentions must be an Agent ID array")
+    if len(mentions) > MAX_MENTIONS:
+        raise AgentProtocolError("invalid_event", f"mentions must not exceed {MAX_MENTIONS} entries")
+    # Validate each entry before testing uniqueness: a non-string mention would
+    # otherwise raise a raw TypeError from set() instead of a clean protocol
+    # error.
+    seen: set[str] = set()
     for mention in mentions:
         validate_agent_id(mention)
+        if mention in seen:
+            raise AgentProtocolError("invalid_event", "mentions must be unique")
+        seen.add(mention)
 
 
 def validate_custom_event_type_name(name: str) -> None:
@@ -334,6 +432,12 @@ class TypeRegistry:
 
     def define(self, definition: dict[str, Any]) -> None:
         validate_type_def(definition)
+        existing = self._types.get(definition["type"])
+        if existing is not None and existing.get("kind") != definition.get("kind"):
+            raise AgentProtocolError(
+                "invalid_event",
+                f"type {definition['type']} cannot change kind on redefinition",
+            )
         self._types[definition["type"]] = definition
 
     def _import(self, declaration: dict[str, Any], packs: dict[str, dict[str, Any]]) -> None:
@@ -452,6 +556,44 @@ def validate_room_join_payload(payload: dict[str, Any]) -> None:
         )
 
 
+_ROOM_UPDATE_FIELDS = frozenset(
+    {"topic", "agenda", "guidance", "tags", "language", "policy", "start_time", "end_time"}
+)
+
+
+def validate_room_update_payload(payload: dict[str, Any]) -> None:
+    """Shape checks for a `room.update` payload. State-dependent rules — room
+    status, effective time ordering against the current contract — remain
+    host-side."""
+    if not payload:
+        raise AgentProtocolError("invalid_event", "room.update payload must not be empty")
+    for field in payload:
+        if field not in _ROOM_UPDATE_FIELDS:
+            raise AgentProtocolError(
+                "invalid_event", f"room.update payload field {field} is not updatable"
+            )
+    topic = payload.get("topic")
+    if topic is not None and not str(topic).strip():
+        raise AgentProtocolError("invalid_event", "room topic must not be empty")
+    start_time = payload.get("start_time")
+    end_time = payload.get("end_time")
+    if start_time is not None and end_time is not None and start_time >= end_time:
+        raise AgentProtocolError("invalid_event", "start_time must be before end_time")
+    policy = payload.get("policy") or {}
+    max_speakers = policy.get("max_speakers")
+    if max_speakers is not None and (not isinstance(max_speakers, int) or max_speakers < 1):
+        raise AgentProtocolError("invalid_event", "max_speakers must be a positive integer")
+
+
+def validate_room_member_remove_payload(payload: dict[str, Any]) -> None:
+    """Shape checks for a `room.member.remove` payload. Creator, self, and
+    membership checks remain host-side."""
+    validate_agent_id(payload.get("member"))
+    ban = payload.get("ban")
+    if ban is not None and not isinstance(ban, bool):
+        raise AgentProtocolError("invalid_event", "ban must be a boolean")
+
+
 def server_record_hash_payload(
     room_id: str,
     seq: int,
@@ -554,7 +696,15 @@ def can_submit_event(
         return bool(context.get("public_join_allowed") or context.get("join_request_approved"))
     if event_type == ROOM_LEAVE:
         return is_creator or role is not None
-    if event_type in {ROOM_JOIN_REVIEW, ROOM_MEMBER_ROLE_UPDATE, ROOM_CLOSE, ROOM_CANCEL, TYPE_DEFINE}:
+    if event_type in {
+        ROOM_UPDATE,
+        ROOM_JOIN_REVIEW,
+        ROOM_MEMBER_ROLE_UPDATE,
+        ROOM_MEMBER_REMOVE,
+        ROOM_CLOSE,
+        ROOM_CANCEL,
+        TYPE_DEFINE,
+    }:
         return is_creator or role == "moderator"
     if event_type == MESSAGE_CREATE:
         return is_creator or role in ("moderator", "speaker")
@@ -576,7 +726,9 @@ def can_write_in_state(event_type: str, state: RoomState) -> bool:
             ROOM_JOIN,
             ROOM_JOIN_REVIEW,
             ROOM_MEMBER_ROLE_UPDATE,
+            ROOM_MEMBER_REMOVE,
             ROOM_LEAVE,
+            ROOM_UPDATE,
             TYPE_DEFINE,
             ROOM_CANCEL,
         }

@@ -40,6 +40,8 @@ impl AgentId {
             .0
             .strip_prefix(AGENT_ID_PREFIX)
             .ok_or(SdkError::InvalidAgentIdPrefix)?;
+        // URL_SAFE_NO_PAD rejects padding characters and non-zero trailing
+        // bits, so non-canonical encodings of the same key are rejected.
         let bytes = URL_SAFE_NO_PAD.decode(encoded)?;
         bytes
             .try_into()
@@ -274,6 +276,11 @@ where
     Ok(sign_event_hash(signing_key, &event_hash).expect("event hashes are always 32 bytes"))
 }
 
+/// Signs a precomputed 32-byte event hash. Signing a digest supplied by
+/// another component without seeing the event it commits to (blind signing) is
+/// NOT RECOMMENDED: `actor` and all event content are inside the digest, so a
+/// blind signer can be tricked into signing arbitrary events attributed to its
+/// key. Prefer [`sign_event`], which canonicalizes and hashes the event.
 pub fn sign_event_hash(signing_key: &SigningKey, event_hash: &[u8]) -> Result<String> {
     let signature = signing_key.sign(valid_event_hash_bytes(event_hash)?);
     Ok(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
@@ -516,6 +523,9 @@ pub struct RequestJwtHeader {
 pub struct RequestJwtClaims {
     pub iss: AgentId,
     pub sub: AgentId,
+    /// Origin of the receiving service: scheme, host, and non-default port
+    /// with no path. All Agent Protocols endpoints on one origin share this
+    /// value; derive it with [`service_origin`].
     pub aud: String,
     pub iat: i64,
     pub exp: i64,
@@ -610,6 +620,19 @@ pub fn verify_request_jwt(token: &str, context: &RequestAuthContext) -> Result<R
     }
 
     Ok(claims)
+}
+
+/// Derives the request JWT `aud` from a request URL: the service origin —
+/// scheme, host, and non-default port, with no path (Agent Identity Section 8).
+pub fn service_origin(url: &str) -> Result<String> {
+    let parsed = url::Url::parse(url)
+        .map_err(|_| SdkError::InvalidPayload(format!("not a valid URL: {url}")))?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err(SdkError::InvalidPayload(format!(
+            "not an HTTP(S) URL: {url}"
+        )));
+    }
+    Ok(parsed.origin().ascii_serialization())
 }
 
 pub fn unix_ms() -> i64 {
@@ -1156,6 +1179,65 @@ mod tests {
             ),
             Err(SdkError::InvalidJwtClaim("kid/iss/sub"))
         ));
+    }
+
+    #[test]
+    fn rejects_non_canonical_base64url_encodings() {
+        let signer = AgentSigner::from_seed([62; 32]);
+        let agent_id = signer.agent_id();
+        let suffix = agent_id
+            .as_str()
+            .strip_prefix(AGENT_ID_PREFIX)
+            .unwrap()
+            .to_owned();
+
+        // Padding characters are rejected even when the decoded bytes match.
+        let padded = AgentId(format!("{AGENT_ID_PREFIX}{suffix}=="));
+        assert!(padded.public_key_bytes().is_err());
+
+        // Non-zero trailing bits give the same key a second string form:
+        // replace the final character with one sharing its used bits but
+        // different trailing bits (the last char of a 32-byte value uses 4 of
+        // its 6 bits).
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let last = suffix.as_bytes()[suffix.len() - 1];
+        let index = ALPHABET.iter().position(|&c| c == last).unwrap();
+        let non_canonical = ALPHABET[(index & !3) | ((index & 3) ^ 1)] as char;
+        let mut tweaked = suffix[..suffix.len() - 1].to_owned();
+        tweaked.push(non_canonical);
+        let tweaked = AgentId(format!("{AGENT_ID_PREFIX}{tweaked}"));
+        assert!(tweaked.public_key_bytes().is_err());
+
+        // Signatures must be canonical base64url too.
+        let event = Event::new(
+            "agent-profile/1.0",
+            "profile.update",
+            signer.agent_id(),
+            1000,
+            1,
+            json!({"name": "Agent"}),
+        );
+        let mut envelope = signer.sign_event(event).unwrap();
+        envelope.signature.push('=');
+        assert!(verify_signature(&envelope).is_err());
+    }
+
+    #[test]
+    fn service_origin_derives_request_jwt_audience() {
+        assert_eq!(
+            service_origin("https://api.example.com/v1/rooms/room1").unwrap(),
+            "https://api.example.com"
+        );
+        assert_eq!(
+            service_origin("https://api.example.com:8443/path?q=1").unwrap(),
+            "https://api.example.com:8443"
+        );
+        assert_eq!(
+            service_origin("https://API.Example.com:443/").unwrap(),
+            "https://api.example.com"
+        );
+        assert!(service_origin("not a url").is_err());
+        assert!(service_origin("ftp://example.com").is_err());
     }
 
     #[test]

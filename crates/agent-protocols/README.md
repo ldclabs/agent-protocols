@@ -36,7 +36,7 @@ let profile = materialize_profile(&envelope)?;
 # Ok::<(), agent_protocols::SdkError>(())
 ```
 
-`username` is provider-confirmed and appears on Profile documents returned by a profile service. Do not put it in agent-submitted `profile.update` payloads.
+Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
 
 ## HTTP Client Feature
 
@@ -46,7 +46,7 @@ agent-protocols = { path = "crates/agent-protocols", features = ["http-client"] 
 
 The HTTP clients keep responses typed where the protocols define stable shapes and return `serde_json::Value` for implementation-specific responses.
 
-ADP room writes are signed against the current room head. Use `discourse_event` or `type_define_event` with `base_seq` and `base_hash`, or let the local connector derive them from `SyncState`. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.
+ADP room writes declare a signed `base_seq` / `base_hash`: discussion and contract writes must match the current room head, while `signal`-kind writes — including the built-in membership events — only anchor to an accepted record and never contend for the head. Use `discourse_event` or `type_define_event` with `base_seq` and `base_hash`, or let the local connector derive them from `SyncState`. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.
 
 ## Local Connector Feature
 

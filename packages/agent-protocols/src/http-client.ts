@@ -1,12 +1,13 @@
-import type {
-  DelegationCredential,
-  DelegationEventsResponse,
-  DelegationPayload,
-  DelegationQueryRequest,
-  DelegationQueryResponse,
-  DelegationServiceDiscovery,
-  DelegationStatusDocument,
-  PrincipalDocument,
+import {
+  validateDelegationQueryRequest,
+  type DelegationCredential,
+  type DelegationEventsResponse,
+  type DelegationPayload,
+  type DelegationQueryRequest,
+  type DelegationQueryResponse,
+  type DelegationServiceDiscovery,
+  type DelegationStatusDocument,
+  type PrincipalDocument,
 } from "./delegation.js";
 import {
   AgentStatus,
@@ -39,6 +40,13 @@ export interface RoomEventsOptions {
   jwt?: string;
 }
 
+export interface MyRoomsOptions {
+  status?: string;
+  membership?: string;
+  limit?: number;
+  cursor?: string;
+}
+
 export interface PublicRoomsOptions {
   status?: string;
   tag?: string;
@@ -68,8 +76,12 @@ export class ProfileClient {
   async profileEvents(
     agentId: AgentId,
     limit = 1,
+    cursor?: string,
   ): Promise<ProfileEventsResponse> {
-    return this.getJson(`/v1/profiles/${agentId}/events?limit=${limit}`);
+    const query = cursor
+      ? `limit=${limit}&cursor=${encodeURIComponent(cursor)}`
+      : `limit=${limit}`;
+    return this.getJson(`/v1/profiles/${agentId}/events?${query}`);
   }
 
   async submitProfileUpdate(
@@ -133,8 +145,16 @@ export class DiscourseClient {
     );
   }
 
-  async myRooms(jwt: string): Promise<RoomResponse[]> {
-    return this.getJson("/v1/me/rooms", jwt);
+  async myRooms(jwt: string, options: MyRoomsOptions = {}): Promise<RoomResponse[]> {
+    return this.getJson(
+      addQuery("/v1/me/rooms", {
+        status: options.status,
+        membership: options.membership,
+        limit: options.limit,
+        cursor: options.cursor,
+      }),
+      jwt,
+    );
   }
 
   async requestJoin(
@@ -312,6 +332,7 @@ export class DelegationClient {
   async queryDelegations(
     request: DelegationQueryRequest,
   ): Promise<DelegationQueryResponse> {
+    validateDelegationQueryRequest(request);
     return this.postJson("/v1/delegations/query", request);
   }
 

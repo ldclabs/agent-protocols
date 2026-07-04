@@ -2,7 +2,7 @@
  * Agent Discourse Protocol 1.0: kernel types, the room type system, and
  * verification helpers.
  *
- * The protocol defines nine built-in event types. Every other event type is
+ * The protocol defines eleven built-in event types. Every other event type is
  * declared per room as a schema-validated type definition, either inline or
  * imported from a type pack. Hosts validate structure and permissions; they
  * never need to understand application semantics.
@@ -26,13 +26,15 @@ import {
 
 export const DISCOURSE_PROTOCOL = "agent-discourse/1.0";
 
-/** The nine built-in event types. All other types are room-defined. */
+/** The eleven built-in event types. All other types are room-defined. */
 export const eventType = {
   ROOM_CREATE: "room.create",
+  ROOM_UPDATE: "room.update",
   ROOM_JOIN: "room.join",
   ROOM_JOIN_REVIEW: "room.join.review",
   ROOM_LEAVE: "room.leave",
   ROOM_MEMBER_ROLE_UPDATE: "room.member.role.update",
+  ROOM_MEMBER_REMOVE: "room.member.remove",
   ROOM_CLOSE: "room.close",
   ROOM_CANCEL: "room.cancel",
   TYPE_DEFINE: "type.define",
@@ -42,6 +44,100 @@ export const eventType = {
 export type BuiltinEventType = (typeof eventType)[keyof typeof eventType];
 
 export const BUILTIN_EVENT_TYPES: readonly string[] = Object.values(eventType);
+
+/**
+ * Built-in membership events. They carry the `signal` class: they anchor to
+ * an accepted record but never contend for or advance the room head, so busy
+ * rooms cannot starve joins, reviews, or other membership writes.
+ */
+export const MEMBERSHIP_EVENT_TYPES: readonly string[] = [
+  eventType.ROOM_JOIN,
+  eventType.ROOM_JOIN_REVIEW,
+  eventType.ROOM_LEAVE,
+  eventType.ROOM_MEMBER_ROLE_UPDATE,
+  eventType.ROOM_MEMBER_REMOVE,
+];
+
+/** Class of a built-in type per the Section 13.2 table. */
+export type BuiltinEventClass = "lifecycle" | "signal" | "control" | "message";
+
+/** Section 13.2 class of a built-in type; `undefined` for room-defined types. */
+export function builtinEventClass(
+  type: string,
+): BuiltinEventClass | undefined {
+  switch (type) {
+    case eventType.ROOM_CREATE:
+    case eventType.ROOM_UPDATE:
+    case eventType.ROOM_CLOSE:
+    case eventType.ROOM_CANCEL:
+      return "lifecycle";
+    case eventType.ROOM_JOIN:
+    case eventType.ROOM_JOIN_REVIEW:
+    case eventType.ROOM_LEAVE:
+    case eventType.ROOM_MEMBER_ROLE_UPDATE:
+    case eventType.ROOM_MEMBER_REMOVE:
+      return "signal";
+    case eventType.TYPE_DEFINE:
+      return "control";
+    case eventType.MESSAGE_CREATE:
+      return "message";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Whether an accepted record of this type advances the room head and must
+ * therefore match the current head when written (Section 6.1). Room lifecycle,
+ * `message`-kind, and `control`-kind records advance the head; `signal`-kind
+ * records — including the built-in membership events — only anchor to an
+ * accepted record. Unknown custom types default to head-advancing.
+ */
+export function eventAdvancesRoomHead(
+  type: string,
+  registry?: TypeRegistry,
+): boolean {
+  const builtinClass = builtinEventClass(type);
+  if (builtinClass !== undefined) return builtinClass !== "signal";
+  const def = registry?.get(type);
+  return def === undefined || def.kind !== "signal";
+}
+
+/** Standard ADP error codes from the Section 20 table. */
+export const DISCOURSE_ERROR_CODES: readonly string[] = [
+  "invalid_event",
+  "invalid_event_hash",
+  "invalid_signature",
+  "invalid_actor",
+  "timestamp_out_of_window",
+  "nonce_not_greater",
+  "room_not_found",
+  "room_not_active",
+  "room_ended",
+  "permission_denied",
+  "approval_required",
+  "join_request_not_found",
+  "join_request_not_approved",
+  "join_request_role_mismatch",
+  "join_request_expired",
+  "member_banned",
+  "role_not_allowed",
+  "max_speakers_exceeded",
+  "membership_required",
+  "invalid_token",
+  "room_head_mismatch",
+  "base_record_mismatch",
+  "agent_status_not_found",
+  "rate_limited",
+  "payload_too_large",
+  "type_not_defined",
+  "type_disabled",
+  "payload_schema_violation",
+  "pack_unavailable",
+];
+
+/** Hosts MUST reject events with more than this many `mentions` entries. */
+export const MAX_MENTIONS = 32;
 
 /** Custom event types must not use these prefixes. */
 export const RESERVED_TYPE_PREFIXES = ["room.", "type."] as const;
@@ -88,6 +184,33 @@ export interface RoomPolicy {
   moderator_agent_ids?: AgentId[];
   max_speakers?: number;
   observer_allowed?: boolean;
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * Payload of `room.update`: a partial contract revision. A present field
+ * replaces the current value entirely; an empty value clears an optional
+ * field. `visibility` is not updatable, and the type registry evolves only
+ * through `type.define`.
+ */
+export interface RoomUpdatePayload {
+  topic?: string;
+  agenda?: string;
+  guidance?: string;
+  tags?: string[];
+  language?: string;
+  policy?: RoomPolicy;
+  start_time?: number;
+  end_time?: number;
+}
+
+/** Payload of `room.member.remove`: removal and optional ban. */
+export interface RoomMemberRemovePayload {
+  member: AgentId;
+  /** Defaults to `false`. `true` additionally bans the agent from the room. */
+  ban?: boolean;
+  reason?: string;
+  references?: string[];
   extra?: Record<string, unknown>;
 }
 
@@ -155,6 +278,8 @@ export interface RoomResponse {
   id: string;
   status: RoomState;
   url: string;
+  creator?: AgentId;
+  created_at?: number;
   topic?: string;
   agenda?: string;
   guidance?: string;
@@ -166,11 +291,12 @@ export interface RoomResponse {
   policy?: RoomPolicy;
   /** Materialized type registry served by the host. */
   types?: TypeDef[];
+  extra?: Record<string, unknown>;
   seq: number;
   pre_hash: string | null;
   hash: string;
   received_at: number;
-  /** Latest accepted non-signal record. Falls back to `seq`/`hash` on older hosts. */
+  /** Latest accepted head-advancing record. Falls back to `seq`/`hash` on older hosts. */
   head?: RoomHead;
   envelope?: Envelope<RoomCreatePayload>;
 }
@@ -221,7 +347,8 @@ export interface AgentStatusInput {
   seen_hash?: string;
   claim_id?: string;
   activity?: string;
-  expires_at: number;
+  /** Optional: when omitted, the host assigns its maximum TTL. */
+  expires_at?: number;
   extra?: Record<string, unknown>;
 }
 
@@ -484,6 +611,15 @@ function validateMentions(mentions: AgentId[] | undefined): void {
   if (!Array.isArray(mentions)) {
     throw protocolError("invalid_event", "mentions must be an Agent ID array");
   }
+  if (mentions.length > MAX_MENTIONS) {
+    throw protocolError(
+      "invalid_event",
+      `mentions must not exceed ${MAX_MENTIONS} entries`,
+    );
+  }
+  if (new Set(mentions).size !== mentions.length) {
+    throw protocolError("invalid_event", "mentions must be unique");
+  }
   for (const mention of mentions) validateAgentId(mention);
 }
 
@@ -680,6 +816,70 @@ export function validateRoomJoinPayload(payload: RoomJoinPayload): void {
   }
 }
 
+const ROOM_UPDATE_FIELDS = [
+  "topic",
+  "agenda",
+  "guidance",
+  "tags",
+  "language",
+  "policy",
+  "start_time",
+  "end_time",
+] as const;
+
+/**
+ * Shape checks for a `room.update` payload. State-dependent rules — room
+ * status, effective time ordering against the current contract — remain
+ * host-side.
+ */
+export function validateRoomUpdatePayload(payload: RoomUpdatePayload): void {
+  const keys = Object.keys(payload);
+  if (keys.length === 0) {
+    throw protocolError("invalid_event", "room.update payload must not be empty");
+  }
+  for (const key of keys) {
+    if (!includes(ROOM_UPDATE_FIELDS, key)) {
+      throw protocolError(
+        "invalid_event",
+        `room.update payload field ${key} is not updatable`,
+      );
+    }
+  }
+  if (payload.topic !== undefined && payload.topic.trim() === "") {
+    throw protocolError("invalid_event", "room topic must not be empty");
+  }
+  if (
+    payload.start_time !== undefined &&
+    payload.end_time !== undefined &&
+    payload.start_time >= payload.end_time
+  ) {
+    throw protocolError("invalid_event", "start_time must be before end_time");
+  }
+  const maxSpeakers = payload.policy?.max_speakers;
+  if (
+    maxSpeakers !== undefined &&
+    (!Number.isInteger(maxSpeakers) || maxSpeakers < 1)
+  ) {
+    throw protocolError(
+      "invalid_event",
+      "max_speakers must be a positive integer",
+    );
+  }
+}
+
+/**
+ * Shape checks for a `room.member.remove` payload. Creator, self, and
+ * membership checks remain host-side.
+ */
+export function validateRoomMemberRemovePayload(
+  payload: RoomMemberRemovePayload,
+): void {
+  validateAgentId(payload.member);
+  if (payload.ban !== undefined && typeof payload.ban !== "boolean") {
+    throw protocolError("invalid_event", "ban must be a boolean");
+  }
+}
+
 /** The effective set of type definitions active in a room. */
 export class TypeRegistry {
   private readonly types = new Map<string, TypeDef>();
@@ -718,6 +918,13 @@ export class TypeRegistry {
 
   define(def: TypeDef): void {
     validateTypeDef(def);
+    const existing = this.types.get(def.type);
+    if (existing && existing.kind !== def.kind) {
+      throw protocolError(
+        "invalid_event",
+        `type ${def.type} cannot change kind from ${existing.kind} to ${def.kind}`,
+      );
+    }
     this.types.set(def.type, def);
   }
 
@@ -958,8 +1165,10 @@ export function canSubmitEvent(
       return Boolean(context.publicJoinAllowed || context.joinRequestApproved);
     case eventType.ROOM_LEAVE:
       return Boolean(context.isCreator) || context.role !== undefined;
+    case eventType.ROOM_UPDATE:
     case eventType.ROOM_JOIN_REVIEW:
     case eventType.ROOM_MEMBER_ROLE_UPDATE:
+    case eventType.ROOM_MEMBER_REMOVE:
     case eventType.ROOM_CLOSE:
     case eventType.ROOM_CANCEL:
     case eventType.TYPE_DEFINE:
@@ -988,7 +1197,9 @@ export function canWriteInState(type: string, state: RoomState): boolean {
         type === eventType.ROOM_JOIN ||
         type === eventType.ROOM_JOIN_REVIEW ||
         type === eventType.ROOM_MEMBER_ROLE_UPDATE ||
+        type === eventType.ROOM_MEMBER_REMOVE ||
         type === eventType.ROOM_LEAVE ||
+        type === eventType.ROOM_UPDATE ||
         type === eventType.TYPE_DEFINE ||
         type === eventType.ROOM_CANCEL
       );

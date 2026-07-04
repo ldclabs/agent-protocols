@@ -13,6 +13,7 @@ from .identity import (
     event_hash,
     event_hash_bytes,
     public_key_bytes,
+    service_origin,
     sign_event,
     sign_event_hash,
     unix_ms,
@@ -31,7 +32,14 @@ from .identity import (
     with_room_head,
     with_room_id,
 )
-from .profile import PROFILE_PROTOCOL, PROFILE_UPDATE, materialize_profile, profile_update_event, validate_profile_update
+from .profile import (
+    PROFILE_PROTOCOL,
+    PROFILE_UPDATE,
+    latest_profile_update,
+    materialize_profile,
+    profile_update_event,
+    validate_profile_update,
+)
 from .delegation import (
     DELEGATION_GRANT,
     DELEGATION_PROTOCOL,
@@ -41,6 +49,7 @@ from .delegation import (
     materialize_delegation_credential,
     validate_delegation_envelope,
     validate_delegation_grant_payload,
+    validate_delegation_query_request,
     validate_delegation_revoke_payload,
     validate_principal_document,
 )
@@ -66,10 +75,12 @@ __all__ = [
     "create_request_jwt_claims",
     "event_hash",
     "event_hash_bytes",
+    "latest_profile_update",
     "materialize_profile",
     "materialize_delegation_credential",
     "profile_update_event",
     "public_key_bytes",
+    "service_origin",
     "sign_event",
     "sign_event_hash",
     "unix_ms",
@@ -77,6 +88,7 @@ __all__ = [
     "validate_agent_id",
     "validate_delegation_envelope",
     "validate_delegation_grant_payload",
+    "validate_delegation_query_request",
     "validate_delegation_revoke_payload",
     "validate_nonce",
     "validate_principal_document",

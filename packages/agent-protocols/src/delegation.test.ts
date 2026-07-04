@@ -12,6 +12,7 @@ import {
   materializeDelegationCredential,
   validateDelegationEnvelope,
   validateDelegationGrantPayload,
+  validateDelegationQueryRequest,
   validatePrincipalDocument,
 } from "./delegation.js";
 
@@ -118,4 +119,62 @@ test("rejects malformed HTTPS-like principal URLs", () => {
       }),
     );
   }
+});
+
+test("grant expiry is checked against not_before and created_at separately", () => {
+  const controller = AgentSigner.fromSeed(new Uint8Array(32).fill(45));
+  const subject = AgentSigner.fromSeed(new Uint8Array(32).fill(46));
+  const base: DelegationGrantPayload = {
+    id: "del_1",
+    principal: { id: "https://al.ink/yan" },
+    subject: subject.agentId(),
+    scopes: ["inbox.screen"],
+  };
+
+  // expires_at must be greater than not_before when both are present.
+  assert.throws(
+    () =>
+      validateDelegationGrantPayload(
+        { ...base, not_before: 2000, expires_at: 2000 },
+        1000,
+      ),
+    /greater than not_before/,
+  );
+  // expires_at must be greater than created_at even when not_before is absent.
+  assert.throws(
+    () => validateDelegationGrantPayload({ ...base, expires_at: 1000 }, 1000),
+    /greater than created_at/,
+  );
+  // And also when not_before is present and already satisfied.
+  assert.throws(
+    () =>
+      validateDelegationGrantPayload(
+        { ...base, not_before: 500, expires_at: 800 },
+        1000,
+      ),
+    /greater than created_at/,
+  );
+  validateDelegationGrantPayload(
+    { ...base, not_before: 500, expires_at: 1500 },
+    1000,
+  );
+  assert.equal(controller.agentId().startsWith("did:agent:"), true);
+});
+
+test("delegation queries require subject or principal_id", () => {
+  const subject = AgentSigner.fromSeed(new Uint8Array(32).fill(47)).agentId();
+  validateDelegationQueryRequest({ subject });
+  validateDelegationQueryRequest({ principal_id: "https://al.ink/yan", limit: 20 });
+  assert.throws(
+    () => validateDelegationQueryRequest({ status: "active" }),
+    /at least one of subject or principal_id/,
+  );
+  assert.throws(
+    () => validateDelegationQueryRequest({ subject, limit: 0 }),
+    /positive integer/,
+  );
+  assert.throws(
+    () => validateDelegationQueryRequest({ principal_id: "http://al.ink/yan" }),
+    /HTTPS/,
+  );
 });
