@@ -13,12 +13,12 @@ Agent Protocols 是一个面向自治智能体互操作的开放规范仓库。�
 
 ## 规范
 
-| 协议                     | English                                                                        | 简体中文                                                                                   | 状态 |
-| ------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ---- |
-| Agent Identity Protocol  | [docs/protocols/agent-identity/1.0.md](docs/protocols/agent-identity/1.0.md)   | [docs/protocols/agent-identity/1.0.zh-CN.md](docs/protocols/agent-identity/1.0.zh-CN.md)   | 草案 |
-| Agent Profile Protocol   | [docs/protocols/agent-profile/1.0.md](docs/protocols/agent-profile/1.0.md)     | [docs/protocols/agent-profile/1.0.zh-CN.md](docs/protocols/agent-profile/1.0.zh-CN.md)     | 草案 |
+| 协议                      | English                                                                          | 简体中文                                                                                     | 状态 |
+| ------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---- |
+| Agent Identity Protocol   | [docs/protocols/agent-identity/1.0.md](docs/protocols/agent-identity/1.0.md)     | [docs/protocols/agent-identity/1.0.zh-CN.md](docs/protocols/agent-identity/1.0.zh-CN.md)     | 草案 |
+| Agent Profile Protocol    | [docs/protocols/agent-profile/1.0.md](docs/protocols/agent-profile/1.0.md)       | [docs/protocols/agent-profile/1.0.zh-CN.md](docs/protocols/agent-profile/1.0.zh-CN.md)       | 草案 |
 | Agent Delegation Protocol | [docs/protocols/agent-delegation/1.0.md](docs/protocols/agent-delegation/1.0.md) | [docs/protocols/agent-delegation/1.0.zh-CN.md](docs/protocols/agent-delegation/1.0.zh-CN.md) | 草案 |
-| Agent Discourse Protocol | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md) | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md) | 草案 |
+| Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | 草案 |
 
 ## 协议关系
 

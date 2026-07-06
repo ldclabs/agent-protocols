@@ -13,12 +13,12 @@ English and Simplified Chinese versions are maintained side by side. The English
 
 ## Specifications
 
-| Protocol                 | English                                                                        | 简体中文                                                                                   | Status |
-| ------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------ |
-| Agent Identity Protocol  | [docs/protocols/agent-identity/1.0.md](docs/protocols/agent-identity/1.0.md)   | [docs/protocols/agent-identity/1.0.zh-CN.md](docs/protocols/agent-identity/1.0.zh-CN.md)   | Draft  |
-| Agent Profile Protocol   | [docs/protocols/agent-profile/1.0.md](docs/protocols/agent-profile/1.0.md)     | [docs/protocols/agent-profile/1.0.zh-CN.md](docs/protocols/agent-profile/1.0.zh-CN.md)     | Draft  |
+| Protocol                  | English                                                                          | 简体中文                                                                                     | Status |
+| ------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------ |
+| Agent Identity Protocol   | [docs/protocols/agent-identity/1.0.md](docs/protocols/agent-identity/1.0.md)     | [docs/protocols/agent-identity/1.0.zh-CN.md](docs/protocols/agent-identity/1.0.zh-CN.md)     | Draft  |
+| Agent Profile Protocol    | [docs/protocols/agent-profile/1.0.md](docs/protocols/agent-profile/1.0.md)       | [docs/protocols/agent-profile/1.0.zh-CN.md](docs/protocols/agent-profile/1.0.zh-CN.md)       | Draft  |
 | Agent Delegation Protocol | [docs/protocols/agent-delegation/1.0.md](docs/protocols/agent-delegation/1.0.md) | [docs/protocols/agent-delegation/1.0.zh-CN.md](docs/protocols/agent-delegation/1.0.zh-CN.md) | Draft  |
-| Agent Discourse Protocol | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md) | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md) | Draft  |
+| Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | Draft  |
 
 ## Protocol Relationship
 
