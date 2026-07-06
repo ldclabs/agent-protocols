@@ -12,11 +12,11 @@
     <helmet>
       <link rel="icon" type="image/svg+xml" href="./favicon.svg">
       <link rel="apple-touch-icon" href="./favicon.svg">
-      <meta name="theme-color" content="#f4f1e9">
+      <meta name="theme-color" content="#eff1ea">
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link
-        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@400;500;600&display=swap"
+        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Serif:wght@400;500&display=swap"
         rel="stylesheet">
       <style>
         * {
@@ -29,8 +29,8 @@
 
         body {
           margin: 0;
-          background: #f4f1e9;
-          color: #1c1a14;
+          background: #eff1ea;
+          color: #101d17;
           font-family: "IBM Plex Sans", system-ui, sans-serif;
           font-size: 16px;
           line-height: 1.6;
@@ -40,78 +40,12 @@
         }
 
         ::selection {
-          background: oklch(0.6 0.16 255 / .22)
-        }
-
-        @keyframes ap-pulse {
-          0% {
-            box-shadow: 0 0 0 0 oklch(0.6 0.16 255 / .5)
-          }
-
-          70% {
-            box-shadow: 0 0 0 8px oklch(0.6 0.16 255 / 0)
-          }
-
-          100% {
-            box-shadow: 0 0 0 0 oklch(0.6 0.16 255 / 0)
-          }
+          background: #dce5d8
         }
 
         @keyframes ap-dash {
           to {
             stroke-dashoffset: 0
-          }
-        }
-
-        @keyframes ap-blink {
-
-          0%,
-          100% {
-            opacity: 1
-          }
-
-          50% {
-            opacity: 0
-          }
-        }
-
-        @keyframes ap-float {
-
-          0%,
-          100% {
-            transform: translateY(0)
-          }
-
-          50% {
-            transform: translateY(-6px)
-          }
-        }
-
-        @keyframes ap-rise {
-          from {
-            opacity: 1;
-            transform: none
-          }
-
-          to {
-            opacity: 1;
-            transform: none
-          }
-        }
-
-        @keyframes ap-chainglow {
-
-          0%,
-          22%,
-          100% {
-            border-color: rgba(28, 26, 20, .14);
-            box-shadow: 0 1px 2px rgba(28, 26, 20, .04)
-          }
-
-          8%,
-          15% {
-            border-color: oklch(0.62 0.14 150);
-            box-shadow: 0 0 0 3px oklch(0.62 0.14 150 / .16), 0 8px 20px -8px oklch(0.62 0.14 150 / .45)
           }
         }
 
@@ -153,39 +87,6 @@
           }
         }
 
-        @keyframes ap-vpulse {
-
-          0%,
-          58%,
-          100% {
-            opacity: .4;
-            transform: scale(.96)
-          }
-
-          72% {
-            opacity: 1;
-            transform: scale(1.05)
-          }
-
-          85% {
-            opacity: 1;
-            transform: scale(1)
-          }
-        }
-
-        @keyframes ap-scan {
-
-          0%,
-          18%,
-          100% {
-            opacity: 0
-          }
-
-          9% {
-            opacity: .5
-          }
-        }
-
         @media(prefers-reduced-motion:reduce) {
           * {
             animation: none !important;
@@ -197,42 +98,42 @@
     <div ref="{{ root }}" style="position:relative;min-height:100vh">
 
       <div aria-hidden="true"
-        style="position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(rgba(28,26,20,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(28,26,20,.045) 1px,transparent 1px);background-size:64px 64px;-webkit-mask-image:radial-gradient(120% 80% at 50% 0%,#000 0%,transparent 70%);mask-image:radial-gradient(120% 80% at 50% 0%,#000 0%,transparent 70%)">
+        style="position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(rgba(16,29,23,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(16,29,23,.045) 1px,transparent 1px);background-size:64px 64px;-webkit-mask-image:radial-gradient(120% 80% at 50% 0%,#000 0%,transparent 70%);mask-image:radial-gradient(120% 80% at 50% 0%,#000 0%,transparent 70%)">
       </div>
 
       <div style="position:relative;z-index:1">
 
         <header
-          style="position:sticky;top:0;z-index:50;background:rgba(245,242,235,.94);border-bottom:1px solid rgba(28,26,20,.1)">
+          style="position:sticky;top:0;z-index:50;background:rgba(239,241,234,.94);border-bottom:1px solid rgba(16,29,23,.1)">
           <div
             style="max-width:1180px;margin:0 auto;padding:0 28px;height:68px;display:flex;align-items:center;justify-content:space-between">
             <a href="#top" style="display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit">
               <svg viewBox="0 0 100 100" width="30" height="30" fill="none" aria-hidden="true">
-                <line x1="50" y1="26" x2="27" y2="73" stroke="#1c1a14" stroke-width="3.5" />
-                <line x1="50" y1="26" x2="73" y2="73" stroke="#1c1a14" stroke-width="3.5" />
-                <line x1="27" y1="73" x2="73" y2="73" stroke="#1c1a14" stroke-width="3.5" stroke-dasharray="3 5" />
-                <circle cx="50" cy="26" r="11" fill="oklch(0.55 0.15 255)" />
-                <circle cx="27" cy="73" r="10" fill="oklch(0.64 0.14 55)" />
-                <circle cx="73" cy="73" r="10" fill="oklch(0.55 0.16 350)" />
+                <line x1="50" y1="26" x2="27" y2="73" stroke="#101d17" stroke-width="3.5" />
+                <line x1="50" y1="26" x2="73" y2="73" stroke="#101d17" stroke-width="3.5" />
+                <line x1="27" y1="73" x2="73" y2="73" stroke="#101d17" stroke-width="3.5" stroke-dasharray="3 5" />
+                <circle cx="50" cy="26" r="11" fill="#c13527" />
+                <circle cx="27" cy="73" r="10" fill="none" stroke="#101d17" stroke-width="3.5" />
+                <circle cx="73" cy="73" r="10" fill="none" stroke="#101d17" stroke-width="3.5" />
               </svg>
-              <span style="font-weight:600;font-size:16px;letter-spacing:-.01em;white-space:nowrap">Agent
+              <span style="font-weight:500;font-size:16px;letter-spacing:-.01em;white-space:nowrap">Agent
                 Protocols</span>
             </a>
             <nav style="display:flex;align-items:center;gap:30px" data-desk>
               <a href="#protocols" data-i18n="nav.protocols"
-                style="text-decoration:none;color:#6b665b;font-size:14px;font-weight:500">Protocols</a>
+                style="text-decoration:none;color:#5b6b5e;font-size:14px;font-weight:500">Protocols</a>
               <a href="#compose" data-i18n="nav.compose"
-                style="text-decoration:none;color:#6b665b;font-size:14px;font-weight:500">Composition</a>
+                style="text-decoration:none;color:#5b6b5e;font-size:14px;font-weight:500">Composition</a>
               <a href="#principles" data-i18n="nav.principles"
-                style="text-decoration:none;color:#6b665b;font-size:14px;font-weight:500">Design</a>
+                style="text-decoration:none;color:#5b6b5e;font-size:14px;font-weight:500">Design</a>
               <a href="#sdks" data-i18n="nav.sdks"
-                style="text-decoration:none;color:#6b665b;font-size:14px;font-weight:500">SDKs</a>
+                style="text-decoration:none;color:#5b6b5e;font-size:14px;font-weight:500">SDKs</a>
               <a href="#types" data-i18n="nav.types"
-                style="text-decoration:none;color:#6b665b;font-size:14px;font-weight:500">Types</a>
+                style="text-decoration:none;color:#5b6b5e;font-size:14px;font-weight:500">Types</a>
             </nav>
             <div style="display:flex;align-items:center;gap:12px">
               <button data-langbtn
-                style="font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;line-height:1.6;color:#1c1a14;cursor:pointer;background:#fbfaf6;border:1px solid rgba(28,26,20,.15);border-radius:9px;padding:8px 14px;min-width:104px;display:inline-flex;align-items:center;justify-content:center;gap:8px">
+                style="font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:500;line-height:1.6;color:#101d17;cursor:pointer;background:#fdfefb;border:1px solid rgba(16,29,23,.15);border-radius:9px;padding:8px 14px;min-width:104px;display:inline-flex;align-items:center;justify-content:center;gap:8px">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="9" />
                   <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
@@ -240,7 +141,7 @@
                 <span data-langlabel>中文</span>
               </button>
               <a href="https://github.com/ldclabs/agent-protocols" target="_blank" rel="noopener"
-                style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;color:#1c1a14;font-size:14px;font-weight:600;background:#fbfaf6;border:1px solid rgba(28,26,20,.15);border-radius:9px;padding:8px 14px;min-width:104px">
+                style="display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;color:#101d17;font-size:14px;font-weight:500;background:#fdfefb;border:1px solid rgba(16,29,23,.15);border-radius:9px;padding:8px 14px;min-width:104px">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                   <path
                     d="M12 .5C5.4.5 0 5.9 0 12.6c0 5.3 3.4 9.8 8.2 11.4.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.8 18.3 5 18.3 5c.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 24 12.6C24 5.9 18.6.5 12 .5z" />
@@ -258,52 +159,52 @@
             <div data-reveal
               style="opacity:1;transform:none;transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)">
               <span
-                style="display:inline-flex;align-items:center;gap:9px;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:oklch(0.5 0.14 255);background:oklch(0.6 0.16 255 / .08);border:1px solid oklch(0.6 0.16 255 / .2);border-radius:999px;padding:6px 13px">
+                style="display:inline-flex;align-items:center;gap:9px;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e;border:1px solid rgba(16,29,23,.22);border-radius:6px;padding:6px 13px">
                 <span
-                  style="width:6px;height:6px;border-radius:50%;background:oklch(0.64 0.14 55);animation:ap-pulse 2.4s infinite"></span>
+                  style="width:6px;height:6px;border-radius:50%;background:#8aa08e"></span>
                 <span data-i18n="hero.eyebrow">Open specification · Draft · MIT</span>
               </span>
               <h1
                 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(38px,5.2vw,62px);line-height:1.06;letter-spacing:-.02em;margin:24px 0 0">
                 <span data-i18n="hero.t1">Four composable protocols</span><br>
-                <span data-i18n="hero.t2" style="color:#6b665b">for autonomous agents.</span>
+                <span data-i18n="hero.t2" style="color:#5b6b5e">for autonomous agents.</span>
               </h1>
               <p data-i18n="hero.lede"
-                style="font-size:19px;color:#56514a;max-width:548px;margin:22px 0 32px;line-height:1.6">As autonomous
+                style="font-size:19px;color:#39473d;max-width:548px;margin:22px 0 32px;line-height:1.6">As autonomous
                 agents multiply, there's no shared way for them to prove who they are, carry capabilities across
                 platforms, act on someone's behalf, and hold verifiable conversations. Agent Protocols fixes that with
                 four small, composable specs — no central registry, no required host.</p>
               <div style="display:flex;gap:13px;flex-wrap:wrap;margin-bottom:38px">
                 <a href="#protocols" data-i18n="hero.cta1"
-                  style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:600;padding:14px 22px;border-radius:11px;background:#1c1a14;color:#f4f1e9;border:1px solid #1c1a14">Read
+                  style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:500;padding:14px 22px;border-radius:11px;background:#101d17;color:#eff1ea;border:1px solid #101d17">Read
                   the protocols
                 </a>
                 <a href="https://github.com/ldclabs/agent-protocols" target="_blank" rel="noopener"
                   data-i18n="hero.cta2"
-                  style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:600;padding:14px 22px;border-radius:11px;background:#fbfaf6;color:#1c1a14;border:1px solid rgba(28,26,20,.18)">View
+                  style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:500;padding:14px 22px;border-radius:11px;background:#fdfefb;color:#101d17;border:1px solid rgba(16,29,23,.18)">View
                   SDKs</a>
               </div>
               <div
-                style="display:flex;gap:36px;flex-wrap:wrap;border-top:1px solid rgba(28,26,20,.12);padding-top:22px">
+                style="display:flex;gap:36px;flex-wrap:wrap;border-top:1px solid rgba(16,29,23,.12);padding-top:22px">
                 <div>
                   <div
-                    style="font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:600;color:oklch(0.5 0.14 255)">
+                    style="font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:500;color:#101d17">
                     4</div>
-                  <div data-i18n="hero.s1" style="font-size:12.5px;color:#8a857a;letter-spacing:.02em">Specifications
+                  <div data-i18n="hero.s1" style="font-size:12.5px;color:#5b6b5e;letter-spacing:.02em">Specifications
                   </div>
                 </div>
                 <div>
                   <div
-                    style="font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:600;color:oklch(0.5 0.14 255)">
+                    style="font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:500;color:#101d17">
                     Ed25519</div>
-                  <div data-i18n="hero.s2" style="font-size:12.5px;color:#8a857a;letter-spacing:.02em">Signature scheme
+                  <div data-i18n="hero.s2" style="font-size:12.5px;color:#5b6b5e;letter-spacing:.02em">Signature scheme
                   </div>
                 </div>
                 <div>
                   <div
-                    style="font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:600;color:oklch(0.5 0.14 255)">
+                    style="font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:500;color:#101d17">
                     Rust · TS · Py</div>
-                  <div data-i18n="hero.s3" style="font-size:12.5px;color:#8a857a;letter-spacing:.02em">SDKs</div>
+                  <div data-i18n="hero.s3" style="font-size:12.5px;color:#5b6b5e;letter-spacing:.02em">SDKs</div>
                 </div>
               </div>
             </div>
@@ -311,42 +212,42 @@
             <div data-reveal
               style="opacity:1;transform:none;transition:opacity .7s cubic-bezier(.2,.7,.2,1) .12s,transform .7s cubic-bezier(.2,.7,.2,1) .12s">
               <div
-                style="background:#fbfaf6;border:1px solid rgba(28,26,20,.14);border-radius:16px;box-shadow:0 30px 70px -34px rgba(28,26,20,.4);overflow:hidden">
+                style="background:#fdfefb;border:1px solid rgba(16,29,23,.14);border-radius:16px;overflow:hidden">
                 <div
-                  style="display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid rgba(28,26,20,.1);background:#f2efe6">
-                  <span style="width:11px;height:11px;border-radius:50%;background:oklch(0.55 0.16 350)"></span>
-                  <span style="width:11px;height:11px;border-radius:50%;background:oklch(0.64 0.14 55)"></span>
-                  <span style="width:11px;height:11px;border-radius:50%;background:oklch(0.55 0.15 255)"></span>
+                  style="display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid rgba(16,29,23,.1);background:#e6eae0">
+                  <span style="width:11px;height:11px;border-radius:50%;background:rgba(16,29,23,.18)"></span>
+                  <span style="width:11px;height:11px;border-radius:50%;background:rgba(16,29,23,.18)"></span>
+                  <span style="width:11px;height:11px;border-radius:50%;background:rgba(16,29,23,.18)"></span>
                   <span
-                    style="margin-left:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8a857a">signed-event.json</span>
+                    style="margin-left:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#5b6b5e">signed-event.json</span>
                   <span data-verify
-                    style="margin-left:auto;display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:oklch(0.5 0.16 150)">
+                    style="margin-left:auto;display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#c13527">
                     <span
-                      style="width:7px;height:7px;border-radius:50%;background:oklch(0.55 0.16 150);animation:ap-pulse 2s infinite"></span>
+                      style="width:7px;height:7px;border-radius:50%;background:#c13527"></span>
                     <span data-i18n="hero.verified">signature verified</span>
                   </span>
                 </div>
                 <pre data-herocode
-                  style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.7;padding:18px;overflow:auto;color:#3a362d;tab-size:2"></pre>
+                  style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.7;padding:18px;overflow:auto;color:#39473d;tab-size:2"></pre>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;padding:0 18px 18px">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b665b;border:1px solid rgba(28,26,20,.12);border-radius:7px;padding:4px 9px;background:#f4f1e9">JCS
+                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5b6b5e;border:1px solid rgba(16,29,23,.12);border-radius:7px;padding:4px 9px;background:#eff1ea">JCS
                     · RFC 8785</span>
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b665b;border:1px solid rgba(28,26,20,.12);border-radius:7px;padding:4px 9px;background:#f4f1e9">SHA3-256</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5b6b5e;border:1px solid rgba(16,29,23,.12);border-radius:7px;padding:4px 9px;background:#eff1ea">SHA3-256</span>
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b665b;border:1px solid rgba(28,26,20,.12);border-radius:7px;padding:4px 9px;background:#f4f1e9">base64url</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5b6b5e;border:1px solid rgba(16,29,23,.12);border-radius:7px;padding:4px 9px;background:#eff1ea">base64url</span>
                 </div>
               </div>
               <div
-                style="display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:18px;color:#8a857a;font-size:12.5px">
+                style="display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:18px;color:#5b6b5e;font-size:12.5px">
                 <span data-i18n="hero.trust">Built on open standards</span>
                 <span
-                  style="font-family:'IBM Plex Mono',monospace;border:1px solid rgba(28,26,20,.12);border-radius:999px;padding:5px 11px;color:#6b665b">EdDSA</span>
+                  style="font-family:'IBM Plex Mono',monospace;border:1px solid rgba(16,29,23,.12);border-radius:999px;padding:5px 11px;color:#5b6b5e">EdDSA</span>
                 <span
-                  style="font-family:'IBM Plex Mono',monospace;border:1px solid rgba(28,26,20,.12);border-radius:999px;padding:5px 11px;color:#6b665b">JWT</span>
+                  style="font-family:'IBM Plex Mono',monospace;border:1px solid rgba(16,29,23,.12);border-radius:999px;padding:5px 11px;color:#5b6b5e">JWT</span>
                 <span
-                  style="font-family:'IBM Plex Mono',monospace;border:1px solid rgba(28,26,20,.12);border-radius:999px;padding:5px 11px;color:#6b665b">JSON
+                  style="font-family:'IBM Plex Mono',monospace;border:1px solid rgba(16,29,23,.12);border-radius:999px;padding:5px 11px;color:#5b6b5e">JSON
                   Schema</span>
               </div>
             </div>
@@ -354,89 +255,89 @@
         </section>
 
         <section id="problem"
-          style="background:#efece2;border-top:1px solid rgba(28,26,20,.1);border-bottom:1px solid rgba(28,26,20,.1)">
+          style="background:#e6eae0;border-top:1px solid rgba(16,29,23,.1);border-bottom:1px solid rgba(16,29,23,.1)">
           <div style="max-width:1180px;margin:0 auto;padding:88px 28px">
             <div data-reveal
               style="opacity:1;transform:none;transition:opacity .7s,transform .7s;max-width:820px;margin-bottom:48px">
               <span
-                style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:oklch(0.5 0.14 255)"
+                style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e"
                 data-i18n="prob.eyebrow">00 — The problem</span>
               <h2
                 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4.2vw,44px);line-height:1.08;letter-spacing:-.02em;margin:14px 0 16px"
                 data-i18n="prob.title">Agents are multiplying. Nothing lets them trust each other.</h2>
-              <p style="color:#56514a;font-size:18px;margin:0;max-width:680px" data-i18n="prob.sub">An agent built by
+              <p style="color:#39473d;font-size:18px;margin:0;max-width:680px" data-i18n="prob.sub">An agent built by
                 one team has no standard way to prove who it is, carry its capabilities to another platform, or take
                 part in a conversation that others can later verify. Every platform reinvents these primitives — and
                 locks agents in.</p>
             </div>
             <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:20px" data-probgrid>
               <div data-reveal
-                style="opacity:1;transform:none;transition:opacity .7s,transform .7s;display:flex;flex-direction:column;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:26px">
+                style="opacity:1;transform:none;transition:opacity .7s,transform .7s;display:flex;flex-direction:column;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:26px">
                 <span
-                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:oklch(0.55 0.15 255);margin-bottom:14px">?</span>
+                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#5b6b5e;margin-bottom:14px">?</span>
                 <h3
                   style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:20px;line-height:1.2;margin:0 0 10px"
                   data-i18n="prob.q1">Who is this agent, really?</h3>
-                <p style="color:#6b665b;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a1">Identity is
+                <p style="color:#5b6b5e;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a1">Identity is
                   asserted by whatever server happens to host the agent. Impersonation is trivial, and trust can't cross
                   hosts.</p>
                 <span
-                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:oklch(0.5 0.14 255)"><span
-                    style="width:8px;height:8px;border-radius:50%;background:oklch(0.55 0.15 255)"></span><span
+                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#5b6b5e"><span
+                    style="width:8px;height:8px;border-radius:50%;background:#8aa08e"></span><span
                     data-i18n="prob.s1">Solved by Agent Identity</span></span>
               </div>
               <div data-reveal
-                style="opacity:1;transform:none;transition:opacity .7s .08s,transform .7s .08s;display:flex;flex-direction:column;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:26px">
+                style="opacity:1;transform:none;transition:opacity .7s .08s,transform .7s .08s;display:flex;flex-direction:column;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:26px">
                 <span
-                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:oklch(0.55 0.13 55);margin-bottom:14px">?</span>
+                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#5b6b5e;margin-bottom:14px">?</span>
                 <h3
                   style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:20px;line-height:1.2;margin:0 0 10px"
                   data-i18n="prob.q2">What can it do — and does that travel?</h3>
-                <p style="color:#6b665b;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a2">Capabilities
+                <p style="color:#5b6b5e;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a2">Capabilities
                   and reputation live inside one platform. Move the agent elsewhere and it starts again from zero.</p>
                 <span
-                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:oklch(0.5 0.13 55)"><span
-                    style="width:8px;height:8px;border-radius:50%;background:oklch(0.64 0.14 55)"></span><span
+                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#5b6b5e"><span
+                    style="width:8px;height:8px;border-radius:50%;background:#8aa08e"></span><span
                     data-i18n="prob.s2">Solved by Agent Profile</span></span>
               </div>
               <div data-reveal
-                style="opacity:1;transform:none;transition:opacity .7s .16s,transform .7s .16s;display:flex;flex-direction:column;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:26px">
+                style="opacity:1;transform:none;transition:opacity .7s .16s,transform .7s .16s;display:flex;flex-direction:column;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:26px">
                 <span
-                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:oklch(0.5 0.15 150);margin-bottom:14px">?</span>
+                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#5b6b5e;margin-bottom:14px">?</span>
                 <h3
                   style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:20px;line-height:1.2;margin:0 0 10px"
                   data-i18n="prob.q4">Who is it acting for — says who?</h3>
-                <p style="color:#6b665b;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a4">An agent can
+                <p style="color:#5b6b5e;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a4">An agent can
                   claim to represent anyone. There's no portable, revocable proof that a person or organization actually
                   authorized it.</p>
                 <span
-                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:oklch(0.5 0.15 150)"><span
-                    style="width:8px;height:8px;border-radius:50%;background:oklch(0.55 0.15 150)"></span><span
+                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#5b6b5e"><span
+                    style="width:8px;height:8px;border-radius:50%;background:#8aa08e"></span><span
                     data-i18n="prob.s4">Solved by Agent Delegation</span></span>
               </div>
               <div data-reveal
-                style="opacity:1;transform:none;transition:opacity .7s .24s,transform .7s .24s;display:flex;flex-direction:column;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:26px">
+                style="opacity:1;transform:none;transition:opacity .7s .24s,transform .7s .24s;display:flex;flex-direction:column;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:26px">
                 <span
-                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:oklch(0.5 0.15 350);margin-bottom:14px">?</span>
+                  style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#5b6b5e;margin-bottom:14px">?</span>
                 <h3
                   style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:20px;line-height:1.2;margin:0 0 10px"
                   data-i18n="prob.q3">Did this discussion really happen this way?</h3>
-                <p style="color:#6b665b;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a3">Multi-agent
+                <p style="color:#5b6b5e;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a3">Multi-agent
                   transcripts can be edited, reordered, or fabricated. There's nothing to audit after the fact.</p>
                 <span
-                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:oklch(0.5 0.15 350)"><span
-                    style="width:8px;height:8px;border-radius:50%;background:oklch(0.55 0.16 350)"></span><span
+                  style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#5b6b5e"><span
+                    style="width:8px;height:8px;border-radius:50%;background:#8aa08e"></span><span
                     data-i18n="prob.s3">Solved by Agent Discourse</span></span>
               </div>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;display:flex;gap:16px;align-items:flex-start;margin-top:26px;background:#1c1a14;color:#f4f1e9;border-radius:16px;padding:26px 28px">
-              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="oklch(0.7 0.13 75)" stroke-width="2.2"
+              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;display:flex;gap:16px;align-items:flex-start;margin-top:26px;background:#101d17;color:#eff1ea;border-radius:16px;padding:26px 28px">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#8aa08e" stroke-width="2.2"
                 style="flex:none;margin-top:2px">
                 <path d="M5 12h14M13 6l6 6-6 6" />
               </svg>
-              <p style="margin:0;font-size:17px;line-height:1.6;color:#e9e5da" data-i18n="prob.bridge"><strong
-                  style="color:#fff;font-weight:600">Agent Protocols</strong> defines the minimal signed primitives —
+              <p style="margin:0;font-size:17px;line-height:1.6;color:#dce5d8" data-i18n="prob.bridge"><strong
+                  style="color:#eff1ea;font-weight:500">Agent Protocols</strong> defines the minimal signed primitives —
                 identity, profile, delegation, discourse — so any two agents, built by anyone, can identify, describe,
                 represent, and talk to each other verifiably. No central registry. No required host.</p>
             </div>
@@ -447,12 +348,12 @@
           <div data-reveal
             style="opacity:1;transform:none;transition:opacity .7s,transform .7s;max-width:720px;margin-bottom:48px">
             <span
-              style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:oklch(0.5 0.14 255)"
+              style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e"
               data-i18n="proto.eyebrow">01 — Specifications</span>
             <h2
               style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
               data-i18n="proto.title">The four protocols</h2>
-            <p style="color:#56514a;font-size:18px;margin:0" data-i18n="proto.sub">Each specification is small and
+            <p style="color:#39473d;font-size:18px;margin:0" data-i18n="proto.sub">Each specification is small and
               independent. Identity defines an agent's cryptographic identifier. Profile describes how it presents
               itself. Delegation proves on whose behalf it acts. Discourse defines where agents exchange signed
               messages.</p>
@@ -460,49 +361,49 @@
           <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:20px" data-cards>
             <!-- Identity -->
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;position:relative;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:28px;overflow:hidden">
-              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:oklch(0.55 0.15 255)"></div>
+              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;position:relative;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:28px;overflow:hidden">
+              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:rgba(16,29,23,.08)"></div>
               <div
-                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:oklch(0.6 0.16 255 / .12);border:1px solid oklch(0.6 0.16 255 / .2)">
-                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:#e6eae0;border:1px solid rgba(16,29,23,.1)">
+                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <path d="M12 2l7 4v6c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6l7-4z" />
                   <path d="M9.5 12l1.8 1.8L15 10" />
                 </svg>
               </div>
-              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a9488;margin-bottom:7px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#5b6b5e;margin-bottom:7px">
                 agent-identity/1.0</div>
               <h3 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:22px;margin:0 0 10px"
                 data-i18n="p1.name">Agent Identity</h3>
-              <p style="color:#56514a;font-size:14.5px;margin:0 0 18px" data-i18n="p1.desc">A self-certifying identity
+              <p style="color:#39473d;font-size:14.5px;margin:0 0 18px" data-i18n="p1.desc">A self-certifying identity
                 derived from an Ed25519 public key — verifiable without any central registry.</p>
               <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px">
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.14 255)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p1.f1"><code
                       style="font-family:'IBM Plex Mono',monospace;font-size:12.5px">did:agent:</code> identifiers from
                     raw public keys</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.14 255)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p1.f2">The signed event envelope the other protocols build on</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.14 255)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p1.f3">Canonical JSON (JCS) hashed with SHA3-256</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.14 255)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p1.f4">Replay protection via timestamp window + nonce</span></li>
               </ul>
               <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-identity/1.0.md"
                 target="_blank" rel="noopener"
-                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:600;color:oklch(0.5 0.14 255);text-decoration:none"><span
+                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:500;color:#c13527;text-decoration:none"><span
                   data-i18n="readspec">Read the spec</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none"
                   stroke="currentColor" stroke-width="2.5">
                   <path d="M5 12h14M13 6l6 6-6 6" />
@@ -510,50 +411,50 @@
             </div>
             <!-- Profile -->
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .08s,transform .7s .08s;position:relative;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:28px;overflow:hidden">
-              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:oklch(0.64 0.14 55)"></div>
+              style="opacity:1;transform:none;transition:opacity .7s .08s,transform .7s .08s;position:relative;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:28px;overflow:hidden">
+              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:rgba(16,29,23,.08)"></div>
               <div
-                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:oklch(0.64 0.14 55 / .14);border:1px solid oklch(0.64 0.14 55 / .25)">
-                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="oklch(0.55 0.13 55)"
+                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:#e6eae0;border:1px solid rgba(16,29,23,.1)">
+                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <rect x="3" y="5" width="18" height="14" rx="2" />
                   <circle cx="9" cy="11" r="2" />
                   <path d="M5 17c.8-2 2.4-3 4-3s3.2 1 4 3M15 9h4M15 13h3" />
                 </svg>
               </div>
-              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a9488;margin-bottom:7px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#5b6b5e;margin-bottom:7px">
                 agent-profile/1.0</div>
               <h3 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:22px;margin:0 0 10px"
                 data-i18n="p2.name">Agent Profile</h3>
-              <p style="color:#56514a;font-size:14.5px;margin:0 0 18px" data-i18n="p2.desc">Portable, signed metadata:
+              <p style="color:#39473d;font-size:14.5px;margin:0 0 18px" data-i18n="p2.desc">Portable, signed metadata:
                 name, capabilities, links, and endpoints. Any compatible service can host or mirror it.</p>
               <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px">
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.55 0.13 55)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p2.f1">Signed <code
                       style="font-family:'IBM Plex Mono',monospace;font-size:12.5px">profile.update</code> events
                     replace prior state</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.55 0.13 55)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p2.f2">Capabilities, links, and service endpoints</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.55 0.13 55)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p2.f3">Usernames confirmed by the provider, not self-issued</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.55 0.13 55)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p2.f4">HTTP API for discovery, batch read, and history</span></li>
               </ul>
               <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-profile/1.0.md"
                 target="_blank" rel="noopener"
-                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:600;color:oklch(0.55 0.13 55);text-decoration:none"><span
+                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:500;color:#c13527;text-decoration:none"><span
                   data-i18n="readspec">Read the spec</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none"
                   stroke="currentColor" stroke-width="2.5">
                   <path d="M5 12h14M13 6l6 6-6 6" />
@@ -561,48 +462,48 @@
             </div>
             <!-- Delegation -->
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .16s,transform .7s .16s;position:relative;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:28px;overflow:hidden">
-              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:oklch(0.55 0.15 150)"></div>
+              style="opacity:1;transform:none;transition:opacity .7s .16s,transform .7s .16s;position:relative;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:28px;overflow:hidden">
+              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:rgba(16,29,23,.08)"></div>
               <div
-                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:oklch(0.55 0.15 150 / .12);border:1px solid oklch(0.55 0.15 150 / .22)">
-                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="oklch(0.5 0.15 150)"
+                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:#e6eae0;border:1px solid rgba(16,29,23,.1)">
+                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <circle cx="10" cy="8" r="3.2" />
                   <path d="M4.5 19c1-2.8 3-4.3 5.5-4.3 1.1 0 2.1.3 3 .8" />
                   <path d="M14.5 17.5l2 2 3.5-3.5" />
                 </svg>
               </div>
-              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a9488;margin-bottom:7px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#5b6b5e;margin-bottom:7px">
                 agent-delegation/1.0</div>
               <h3 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:22px;margin:0 0 10px"
                 data-i18n="p4.name">Agent Delegation</h3>
-              <p style="color:#56514a;font-size:14.5px;margin:0 0 18px" data-i18n="p4.desc">Portable, verifiable
+              <p style="color:#39473d;font-size:14.5px;margin:0 0 18px" data-i18n="p4.desc">Portable, verifiable
                 credentials that state on whose behalf an agent may act — and within what boundaries.</p>
               <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px">
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 150)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p4.f1">Grants issued by principals — not agent self-claims</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 150)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p4.f2">Scopes and constraints instead of blanket authority</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 150)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p4.f3">Revocation and live status checks before relying</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 150)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p4.f4">Profiles link to credentials as discovery hints</span></li>
               </ul>
               <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.md"
                 target="_blank" rel="noopener"
-                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:600;color:oklch(0.5 0.15 150);text-decoration:none"><span
+                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:500;color:#c13527;text-decoration:none"><span
                   data-i18n="readspec">Read the spec</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none"
                   stroke="currentColor" stroke-width="2.5">
                   <path d="M5 12h14M13 6l6 6-6 6" />
@@ -610,11 +511,11 @@
             </div>
             <!-- Discourse -->
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .24s,transform .7s .24s;position:relative;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:28px;overflow:hidden">
-              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:oklch(0.55 0.16 350)"></div>
+              style="opacity:1;transform:none;transition:opacity .7s .24s,transform .7s .24s;position:relative;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:28px;overflow:hidden">
+              <div style="position:absolute;top:0;left:0;right:0;height:3px;background:rgba(16,29,23,.08)"></div>
               <div
-                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:oklch(0.55 0.16 350 / .12);border:1px solid oklch(0.55 0.16 350 / .22)">
-                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="oklch(0.5 0.15 350)"
+                style="width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;background:#e6eae0;border:1px solid rgba(16,29,23,.1)">
+                <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <path d="M21 12a8 8 0 0 1-11.5 7.2L4 21l1.8-5.5A8 8 0 1 1 21 12z" />
                   <circle cx="9" cy="12" r="1" />
@@ -622,37 +523,37 @@
                   <circle cx="17" cy="12" r="1" />
                 </svg>
               </div>
-              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a9488;margin-bottom:7px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#5b6b5e;margin-bottom:7px">
                 agent-discourse/1.0 · ADP</div>
               <h3 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:22px;margin:0 0 10px"
                 data-i18n="p3.name">Agent Discourse</h3>
-              <p style="color:#56514a;font-size:14.5px;margin:0 0 18px" data-i18n="p3.desc">Lifecycle-bounded rooms for
+              <p style="color:#39473d;font-size:14.5px;margin:0 0 18px" data-i18n="p3.desc">Lifecycle-bounded rooms for
                 multi-agent discussion. A small kernel handles membership, messages, ordering, and archives.</p>
               <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px">
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 350)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p3.f1">A room is a machine-readable contract</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 350)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p3.f2">Three roles: moderator, speaker, observer</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 350)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p3.f3">Custom event types via JSON Schema or type packs</span></li>
-                <li style="display:flex;gap:10px;font-size:13.5px;color:#3a362d;align-items:flex-start"><svg
-                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="oklch(0.5 0.15 350)"
+                <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
+                    viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
                   </svg><span data-i18n="p3.f4">Per-room records linked in a verifiable hash chain</span></li>
               </ul>
               <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.md"
                 target="_blank" rel="noopener"
-                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:600;color:oklch(0.5 0.15 350);text-decoration:none"><span
+                style="display:inline-flex;align-items:center;gap:6px;margin-top:20px;font-size:13.5px;font-weight:500;color:#c13527;text-decoration:none"><span
                   data-i18n="readspec">Read the spec</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none"
                   stroke="currentColor" stroke-width="2.5">
                   <path d="M5 12h14M13 6l6 6-6 6" />
@@ -662,89 +563,89 @@
         </section>
 
         <section id="compose"
-          style="background:#efece2;border-top:1px solid rgba(28,26,20,.1);border-bottom:1px solid rgba(28,26,20,.1)">
+          style="background:#e6eae0;border-top:1px solid rgba(16,29,23,.1);border-bottom:1px solid rgba(16,29,23,.1)">
           <div style="max-width:1180px;margin:0 auto;padding:88px 28px;scroll-margin-top:84px">
             <div data-reveal
               style="opacity:1;transform:none;transition:opacity .7s,transform .7s;max-width:720px;margin-bottom:44px">
               <span
-                style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:oklch(0.5 0.14 255)"
+                style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e"
                 data-i18n="cmp.eyebrow">02 — Composition</span>
               <h2
                 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
                 data-i18n="cmp.title">How the protocols fit together</h2>
-              <p style="color:#56514a;font-size:18px;margin:0" data-i18n="cmp.sub">No single service has to own
+              <p style="color:#39473d;font-size:18px;margin:0" data-i18n="cmp.sub">No single service has to own
                 everything. Identity anchors the agents; Profile, Delegation, and Discourse build on it independently.
                 A Discourse host may resolve profiles from any compatible Profile service, and profiles link to
                 delegation credentials as discovery hints.</p>
             </div>
             <div data-reveal data-diagram
-              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:16px;padding:44px 40px">
+              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:16px;padding:44px 40px">
               <svg viewBox="0 0 720 360" style="width:100%;height:auto;max-width:760px;display:block;margin:0 auto"
                 role="img" aria-label="Protocol relationship diagram">
                 <defs>
                   <marker id="aparr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
                     orient="auto-start-reverse">
-                    <path d="M0 0L10 5L0 10z" fill="#9a9488" />
+                    <path d="M0 0L10 5L0 10z" fill="#5b6b5e" />
                   </marker>
                 </defs>
-                <path data-draw d="M360 98 L360 150" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
+                <path data-draw d="M360 98 L360 150" stroke="#8aa08e" stroke-width="2.5" marker-end="url(#aparr)"
                   style="stroke-dasharray:60;stroke-dashoffset:60;animation:ap-dash .7s ease forwards;animation-play-state:running" />
-                <path data-draw d="M360 150 L135 214" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
+                <path data-draw d="M360 150 L135 214" stroke="#8aa08e" stroke-width="2.5" marker-end="url(#aparr)"
                   style="stroke-dasharray:240;stroke-dashoffset:240;animation:ap-dash 1s ease .3s forwards;animation-play-state:running" />
-                <path data-draw d="M360 150 L360 214" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
+                <path data-draw d="M360 150 L360 214" stroke="#8aa08e" stroke-width="2.5" marker-end="url(#aparr)"
                   style="stroke-dasharray:70;stroke-dashoffset:70;animation:ap-dash 1s ease .3s forwards;animation-play-state:running" />
-                <path data-draw d="M360 150 L585 214" stroke="#bdb8a8" stroke-width="2.5" marker-end="url(#aparr)"
+                <path data-draw d="M360 150 L585 214" stroke="#8aa08e" stroke-width="2.5" marker-end="url(#aparr)"
                   style="stroke-dasharray:240;stroke-dashoffset:240;animation:ap-dash 1s ease .3s forwards;animation-play-state:running" />
-                <path data-draw d="M585 272 L585 300" stroke="#cfc9ba" stroke-width="2.5" stroke-dasharray="5 6"
+                <path data-draw d="M585 272 L585 300" stroke="rgba(138,160,142,.55)" stroke-width="2.5" stroke-dasharray="5 6"
                   marker-end="url(#aparr)" style="animation:ap-dash 1s ease .7s forwards;animation-play-state:running" />
                 <g>
-                  <rect x="248" y="40" width="224" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.55 0.15 255)"
+                  <rect x="248" y="40" width="224" height="58" rx="13" fill="#fdfefb" stroke="rgba(16,29,23,.35)"
                     stroke-width="1.5" />
-                  <circle cx="280" cy="69" r="8" fill="oklch(0.55 0.15 255)" />
-                  <text x="300" y="65" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
-                    font-weight="600">Agent Identity</text>
-                  <text x="300" y="82" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
+                  <circle cx="280" cy="69" r="8" fill="#c13527" />
+                  <text x="300" y="65" fill="#101d17" font-family="'IBM Plex Mono',monospace" font-size="14.5"
+                    font-weight="500">Agent Identity</text>
+                  <text x="300" y="82" fill="#5b6b5e" font-family="'IBM Plex Mono',monospace"
                     font-size="10.5">did:agent: · signed envelope</text>
                 </g>
-                <text x="372" y="137" fill="#9a9488" font-family="'IBM Plex Mono',monospace" font-size="10.5">anchors
+                <text x="372" y="137" fill="#5b6b5e" font-family="'IBM Plex Mono',monospace" font-size="10.5">anchors
                   every agent</text>
                 <g>
-                  <rect x="30" y="214" width="210" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.64 0.14 55)"
+                  <rect x="30" y="214" width="210" height="58" rx="13" fill="#fdfefb" stroke="rgba(16,29,23,.35)"
                     stroke-width="1.5" />
-                  <circle cx="62" cy="243" r="8" fill="oklch(0.64 0.14 55)" />
-                  <text x="82" y="239" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
-                    font-weight="600">Agent Profile</text>
-                  <text x="82" y="256" fill="#8a857a" font-family="'IBM Plex Mono',monospace" font-size="10.5">portable
+                  <circle cx="62" cy="243" r="8" fill="#8aa08e" />
+                  <text x="82" y="239" fill="#101d17" font-family="'IBM Plex Mono',monospace" font-size="14.5"
+                    font-weight="500">Agent Profile</text>
+                  <text x="82" y="256" fill="#5b6b5e" font-family="'IBM Plex Mono',monospace" font-size="10.5">portable
                     metadata</text>
                 </g>
                 <g>
-                  <rect x="255" y="214" width="210" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.55 0.15 150)"
+                  <rect x="255" y="214" width="210" height="58" rx="13" fill="#fdfefb" stroke="rgba(16,29,23,.35)"
                     stroke-width="1.5" />
-                  <circle cx="287" cy="243" r="8" fill="oklch(0.55 0.15 150)" />
-                  <text x="307" y="239" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
-                    font-weight="600">Agent Delegation</text>
-                  <text x="307" y="256" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
+                  <circle cx="287" cy="243" r="8" fill="#8aa08e" />
+                  <text x="307" y="239" fill="#101d17" font-family="'IBM Plex Mono',monospace" font-size="14.5"
+                    font-weight="500">Agent Delegation</text>
+                  <text x="307" y="256" fill="#5b6b5e" font-family="'IBM Plex Mono',monospace"
                     font-size="10.5">principal credentials</text>
                 </g>
                 <g>
-                  <rect x="480" y="214" width="210" height="58" rx="13" fill="#fbfaf6" stroke="oklch(0.55 0.16 350)"
+                  <rect x="480" y="214" width="210" height="58" rx="13" fill="#fdfefb" stroke="rgba(16,29,23,.35)"
                     stroke-width="1.5" />
-                  <circle cx="512" cy="243" r="8" fill="oklch(0.55 0.16 350)" />
-                  <text x="532" y="239" fill="#1c1a14" font-family="'IBM Plex Mono',monospace" font-size="14.5"
-                    font-weight="600">Agent Discourse</text>
-                  <text x="532" y="256" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
+                  <circle cx="512" cy="243" r="8" fill="#8aa08e" />
+                  <text x="532" y="239" fill="#101d17" font-family="'IBM Plex Mono',monospace" font-size="14.5"
+                    font-weight="500">Agent Discourse</text>
+                  <text x="532" y="256" fill="#5b6b5e" font-family="'IBM Plex Mono',monospace"
                     font-size="10.5">verifiable rooms</text>
                 </g>
                 <g>
-                  <rect x="482" y="300" width="208" height="44" rx="11" fill="#efece2" stroke="#cfc9ba"
+                  <rect x="482" y="300" width="208" height="44" rx="11" fill="#e6eae0" stroke="rgba(138,160,142,.55)"
                     stroke-width="1.3" stroke-dasharray="4 5" />
-                  <text x="500" y="327" fill="#8a857a" font-family="'IBM Plex Mono',monospace"
+                  <text x="500" y="327" fill="#5b6b5e" font-family="'IBM Plex Mono',monospace"
                     font-size="11.5">3rd-party Profile service</text>
                 </g>
-                <text x="597" y="291" fill="#9a9488" font-family="'IBM Plex Mono',monospace" font-size="10">may
+                <text x="597" y="291" fill="#5b6b5e" font-family="'IBM Plex Mono',monospace" font-size="10">may
                   resolve</text>
               </svg>
-              <p style="text-align:center;color:#56514a;font-size:14.5px;margin:24px auto 0;max-width:640px"
+              <p style="text-align:center;color:#39473d;font-size:14.5px;margin:24px auto 0;max-width:640px"
                 data-i18n="cmp.cap">Agents hold their own Ed25519 private keys and can use the same Agent ID on any
                 compatible host. Profile data is descriptive only; write authorization comes from Identity signatures
                 and room state.</p>
@@ -756,203 +657,203 @@
           <div data-reveal
             style="opacity:1;transform:none;transition:opacity .7s,transform .7s;max-width:720px;margin-bottom:44px">
             <span
-              style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:oklch(0.5 0.14 255)"
+              style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e"
               data-i18n="pr.eyebrow">03 — Design</span>
             <h2
               style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
               data-i18n="pr.title">Design goals</h2>
-            <p style="color:#56514a;font-size:18px;margin:0" data-i18n="pr.sub">A few consistent goals run through all
+            <p style="color:#39473d;font-size:18px;margin:0" data-i18n="pr.sub">A few consistent goals run through all
               four specifications.</p>
           </div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px" data-principles>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:14px;padding:22px">
+              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:14px;padding:22px">
               <div
-                style="width:38px;height:38px;border-radius:10px;background:oklch(0.6 0.16 255 / .1);display:flex;align-items:center;justify-content:center;margin-bottom:14px">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:38px;height:38px;border-radius:10px;background:#e6eae0;display:flex;align-items:center;justify-content:center;margin-bottom:14px">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6l8-4z" />
                 </svg></div>
-              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:600" data-i18n="pr.1t">Self-certifying</h3>
-              <p style="margin:0;color:#6b665b;font-size:13.5px;line-height:1.55" data-i18n="pr.1d">Identity derives
+              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:500" data-i18n="pr.1t">Self-certifying</h3>
+              <p style="margin:0;color:#5b6b5e;font-size:13.5px;line-height:1.55" data-i18n="pr.1d">Identity derives
                 from a public key and is checked by signature. No central registry to trust.</p>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .05s,transform .7s .05s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:14px;padding:22px">
+              style="opacity:1;transform:none;transition:opacity .7s .05s,transform .7s .05s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:14px;padding:22px">
               <div
-                style="width:38px;height:38px;border-radius:10px;background:oklch(0.6 0.16 255 / .1);display:flex;align-items:center;justify-content:center;margin-bottom:14px">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:38px;height:38px;border-radius:10px;background:#e6eae0;display:flex;align-items:center;justify-content:center;margin-bottom:14px">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <circle cx="12" cy="12" r="3" />
                   <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" />
                 </svg></div>
-              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:600" data-i18n="pr.2t">Host-neutral</h3>
-              <p style="margin:0;color:#6b665b;font-size:13.5px;line-height:1.55" data-i18n="pr.2d">Any service can
+              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:500" data-i18n="pr.2t">Host-neutral</h3>
+              <p style="margin:0;color:#5b6b5e;font-size:13.5px;line-height:1.55" data-i18n="pr.2d">Any service can
                 verify an agent's action without owning its identity. Agents are not locked in.</p>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .1s,transform .7s .1s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:14px;padding:22px">
+              style="opacity:1;transform:none;transition:opacity .7s .1s,transform .7s .1s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:14px;padding:22px">
               <div
-                style="width:38px;height:38px;border-radius:10px;background:oklch(0.6 0.16 255 / .1);display:flex;align-items:center;justify-content:center;margin-bottom:14px">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:38px;height:38px;border-radius:10px;background:#e6eae0;display:flex;align-items:center;justify-content:center;margin-bottom:14px">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <path d="M4 7h16M4 12h16M4 17h10" />
                   <path d="M18 15l3 3-3 3" />
                 </svg></div>
-              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:600" data-i18n="pr.3t">Portable events</h3>
-              <p style="margin:0;color:#6b665b;font-size:13.5px;line-height:1.55" data-i18n="pr.3d">Signed events stay
+              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:500" data-i18n="pr.3t">Portable events</h3>
+              <p style="margin:0;color:#5b6b5e;font-size:13.5px;line-height:1.55" data-i18n="pr.3d">Signed events stay
                 verifiable after export, archival, or transfer between services.</p>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .15s,transform .7s .15s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:14px;padding:22px">
+              style="opacity:1;transform:none;transition:opacity .7s .15s,transform .7s .15s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:14px;padding:22px">
               <div
-                style="width:38px;height:38px;border-radius:10px;background:oklch(0.6 0.16 255 / .1);display:flex;align-items:center;justify-content:center;margin-bottom:14px">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:38px;height:38px;border-radius:10px;background:#e6eae0;display:flex;align-items:center;justify-content:center;margin-bottom:14px">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <rect x="4" y="4" width="16" height="16" rx="2" />
                   <path d="M8 9h8M8 13h6" />
                 </svg></div>
-              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:600" data-i18n="pr.4t">Canonical bytes</h3>
-              <p style="margin:0;color:#6b665b;font-size:13.5px;line-height:1.55" data-i18n="pr.4d">Hashes are computed
+              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:500" data-i18n="pr.4t">Canonical bytes</h3>
+              <p style="margin:0;color:#5b6b5e;font-size:13.5px;line-height:1.55" data-i18n="pr.4d">Hashes are computed
                 over deterministic JCS JSON, and signatures cover those hashes.</p>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:14px;padding:22px">
+              style="opacity:1;transform:none;transition:opacity .7s,transform .7s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:14px;padding:22px">
               <div
-                style="width:38px;height:38px;border-radius:10px;background:oklch(0.6 0.16 255 / .1);display:flex;align-items:center;justify-content:center;margin-bottom:14px">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:38px;height:38px;border-radius:10px;background:#e6eae0;display:flex;align-items:center;justify-content:center;margin-bottom:14px">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <circle cx="12" cy="12" r="9" />
                   <path d="M3 12h18" />
                   <path d="M12 3a15 15 0 0 1 0 18" />
                 </svg></div>
-              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:600" data-i18n="pr.5t">Small kernel</h3>
-              <p style="margin:0;color:#6b665b;font-size:13.5px;line-height:1.55" data-i18n="pr.5d">The protocol fixes
+              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:500" data-i18n="pr.5t">Small kernel</h3>
+              <p style="margin:0;color:#5b6b5e;font-size:13.5px;line-height:1.55" data-i18n="pr.5d">The protocol fixes
                 lifecycle, membership, and verification. Everything else is a room-declared type.</p>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .05s,transform .7s .05s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:14px;padding:22px">
+              style="opacity:1;transform:none;transition:opacity .7s .05s,transform .7s .05s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:14px;padding:22px">
               <div
-                style="width:38px;height:38px;border-radius:10px;background:oklch(0.6 0.16 255 / .1);display:flex;align-items:center;justify-content:center;margin-bottom:14px">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:38px;height:38px;border-radius:10px;background:#e6eae0;display:flex;align-items:center;justify-content:center;margin-bottom:14px">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <path
                     d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4" />
                 </svg></div>
-              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:600" data-i18n="pr.6t">Hosts verify, agents
+              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:500" data-i18n="pr.6t">Hosts verify, agents
                 interpret</h3>
-              <p style="margin:0;color:#6b665b;font-size:13.5px;line-height:1.55" data-i18n="pr.6d">Hosts check
+              <p style="margin:0;color:#5b6b5e;font-size:13.5px;line-height:1.55" data-i18n="pr.6d">Hosts check
                 signatures, state, permissions, and schemas — not application semantics.</p>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .1s,transform .7s .1s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:14px;padding:22px">
+              style="opacity:1;transform:none;transition:opacity .7s .1s,transform .7s .1s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:14px;padding:22px">
               <div
-                style="width:38px;height:38px;border-radius:10px;background:oklch(0.6 0.16 255 / .1);display:flex;align-items:center;justify-content:center;margin-bottom:14px">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:38px;height:38px;border-radius:10px;background:#e6eae0;display:flex;align-items:center;justify-content:center;margin-bottom:14px">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <circle cx="12" cy="12" r="9" />
                   <path d="M12 7v5l3 3" />
                 </svg></div>
-              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:600" data-i18n="pr.7t">Time-bounded rooms</h3>
-              <p style="margin:0;color:#6b665b;font-size:13.5px;line-height:1.55" data-i18n="pr.7d">A room has a start
+              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:500" data-i18n="pr.7t">Time-bounded rooms</h3>
+              <p style="margin:0;color:#5b6b5e;font-size:13.5px;line-height:1.55" data-i18n="pr.7d">A room has a start
                 and an end. After it ends, it becomes read-only.</p>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .15s,transform .7s .15s;background:#fbfaf6;border:1px solid rgba(28,26,20,.12);border-radius:14px;padding:22px">
+              style="opacity:1;transform:none;transition:opacity .7s .15s,transform .7s .15s;background:#fdfefb;border:1px solid rgba(16,29,23,.12);border-radius:14px;padding:22px">
               <div
-                style="width:38px;height:38px;border-radius:10px;background:oklch(0.6 0.16 255 / .1);display:flex;align-items:center;justify-content:center;margin-bottom:14px">
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="oklch(0.5 0.14 255)"
+                style="width:38px;height:38px;border-radius:10px;background:#e6eae0;display:flex;align-items:center;justify-content:center;margin-bottom:14px">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#101d17"
                   stroke-width="2">
                   <path d="M4 7l4-4 4 4M8 3v10M20 17l-4 4-4-4M16 21V11" />
                 </svg></div>
-              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:600" data-i18n="pr.8t">Verifiable transcript</h3>
-              <p style="margin:0;color:#6b665b;font-size:13.5px;line-height:1.55" data-i18n="pr.8d">Accepted events form
+              <h3 style="font-size:15.5px;margin:0 0 7px;font-weight:500" data-i18n="pr.8t">Verifiable transcript</h3>
+              <p style="margin:0;color:#5b6b5e;font-size:13.5px;line-height:1.55" data-i18n="pr.8d">Accepted events form
                 a per-room hash chain. Archives verify offline, type definitions included.</p>
             </div>
           </div>
         </section>
 
         <section id="sdks"
-          style="background:#efece2;border-top:1px solid rgba(28,26,20,.1);border-bottom:1px solid rgba(28,26,20,.1)">
+          style="background:#e6eae0;border-top:1px solid rgba(16,29,23,.1);border-bottom:1px solid rgba(16,29,23,.1)">
           <div style="max-width:1180px;margin:0 auto;padding:88px 28px;scroll-margin-top:84px">
             <div data-reveal
               style="opacity:1;transform:none;transition:opacity .7s,transform .7s;max-width:720px;margin-bottom:44px">
               <span
-                style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:oklch(0.5 0.14 255)"
+                style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e"
                 data-i18n="sdk.eyebrow">04 — SDKs</span>
               <h2
                 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
                 data-i18n="sdk.title">The same flow in every SDK</h2>
-              <p style="color:#56514a;font-size:18px;margin:0" data-i18n="sdk.sub">Framework-neutral building blocks:
+              <p style="color:#39473d;font-size:18px;margin:0" data-i18n="sdk.sub">Framework-neutral building blocks:
                 Agent ID encoding, signed envelopes, profile materialization, Discourse payloads, permission helpers,
                 and HTTP clients. Private keys stay on the agent side.</p>
             </div>
             <div style="display:grid;grid-template-columns:.85fr 1.15fr;gap:24px;align-items:start" data-sdkgrid>
               <div data-reveal style="opacity:1;transform:none;transition:opacity .7s,transform .7s">
                 <div data-installrow data-cmd="cargo add agent-protocols"
-                  style="display:flex;align-items:center;gap:12px;border:1px solid rgba(28,26,20,.14);border-radius:11px;padding:13px 15px;background:#fbfaf6;margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer">
-                  <span style="color:#9a9488;min-width:78px">Rust</span><code
-                    style="color:#1c1a14">cargo add agent-protocols</code>
-                  <span data-copyicon style="margin-left:auto;color:#9a9488;display:flex"><svg viewBox="0 0 24 24"
+                  style="display:flex;align-items:center;gap:12px;border:1px solid rgba(16,29,23,.14);border-radius:11px;padding:13px 15px;background:#fdfefb;margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer">
+                  <span style="color:#5b6b5e;min-width:78px">Rust</span><code
+                    style="color:#101d17">cargo add agent-protocols</code>
+                  <span data-copyicon style="margin-left:auto;color:#5b6b5e;display:flex"><svg viewBox="0 0 24 24"
                       width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                       <rect x="9" y="9" width="11" height="11" rx="2" />
                       <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                     </svg></span>
                 </div>
                 <div data-installrow data-cmd="npm install agent-protocols"
-                  style="display:flex;align-items:center;gap:12px;border:1px solid rgba(28,26,20,.14);border-radius:11px;padding:13px 15px;background:#fbfaf6;margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer">
-                  <span style="color:#9a9488;min-width:78px">TypeScript</span><code
-                    style="color:#1c1a14">npm install agent-protocols</code>
-                  <span data-copyicon style="margin-left:auto;color:#9a9488;display:flex"><svg viewBox="0 0 24 24"
+                  style="display:flex;align-items:center;gap:12px;border:1px solid rgba(16,29,23,.14);border-radius:11px;padding:13px 15px;background:#fdfefb;margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer">
+                  <span style="color:#5b6b5e;min-width:78px">TypeScript</span><code
+                    style="color:#101d17">npm install agent-protocols</code>
+                  <span data-copyicon style="margin-left:auto;color:#5b6b5e;display:flex"><svg viewBox="0 0 24 24"
                       width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                       <rect x="9" y="9" width="11" height="11" rx="2" />
                       <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                     </svg></span>
                 </div>
                 <div data-installrow data-cmd="pip install agent-protocols"
-                  style="display:flex;align-items:center;gap:12px;border:1px solid rgba(28,26,20,.14);border-radius:11px;padding:13px 15px;background:#fbfaf6;margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer">
-                  <span style="color:#9a9488;min-width:78px">Python</span><code
-                    style="color:#1c1a14">pip install agent-protocols</code>
-                  <span data-copyicon style="margin-left:auto;color:#9a9488;display:flex"><svg viewBox="0 0 24 24"
+                  style="display:flex;align-items:center;gap:12px;border:1px solid rgba(16,29,23,.14);border-radius:11px;padding:13px 15px;background:#fdfefb;margin-bottom:10px;font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer">
+                  <span style="color:#5b6b5e;min-width:78px">Python</span><code
+                    style="color:#101d17">pip install agent-protocols</code>
+                  <span data-copyicon style="margin-left:auto;color:#5b6b5e;display:flex"><svg viewBox="0 0 24 24"
                       width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                       <rect x="9" y="9" width="11" height="11" rx="2" />
                       <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                     </svg></span>
                 </div>
-                <p style="color:#6b665b;font-size:13.5px;line-height:1.6;margin:18px 0 0" data-i18n="sdk.note">Generate
+                <p style="color:#5b6b5e;font-size:13.5px;line-height:1.6;margin:18px 0 0" data-i18n="sdk.note">Generate
                   a signer, build an event, sign its canonical SHA3-256 hash, and read back the materialized result —
                   identical shape across Rust, TypeScript, and Python.</p>
                 <a href="https://github.com/ldclabs/agent-protocols#sdks" target="_blank" rel="noopener"
-                  style="display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:14px;font-weight:600;color:oklch(0.5 0.14 255);text-decoration:none"><span
+                  style="display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:14px;font-weight:500;color:#c13527;text-decoration:none"><span
                     data-i18n="sdk.docs">SDK documentation</span><svg viewBox="0 0 24 24" width="14" height="14"
                     fill="none" stroke="currentColor" stroke-width="2.5">
                     <path d="M5 12h14M13 6l6 6-6 6" />
                   </svg></a>
               </div>
               <div data-reveal
-                style="opacity:1;transform:none;transition:opacity .7s .08s,transform .7s .08s;border:1px solid rgba(28,26,20,.14);border-radius:16px;background:#1c1a14;overflow:hidden">
+                style="opacity:1;transform:none;transition:opacity .7s .08s,transform .7s .08s;border:1px solid rgba(16,29,23,.14);border-radius:16px;background:#101d17;overflow:hidden">
                 <div
                   style="display:flex;gap:4px;padding:9px 9px 0;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.25)"
                   data-tabs>
                   <button data-tab="rust"
-                    style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#f4f1e9;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.08);border-bottom:none;border-radius:9px 9px 0 0;padding:9px 15px;cursor:pointer"><span
-                      style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:oklch(0.64 0.14 55)"></span>Rust</button>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#eff1ea;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.08);border-bottom:none;border-radius:9px 9px 0 0;padding:9px 15px;cursor:pointer"><span
+                      style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:#8aa08e"></span>Rust</button>
                   <button data-tab="ts"
-                    style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#9a9488;background:transparent;border:1px solid transparent;border-bottom:none;border-radius:9px 9px 0 0;padding:9px 15px;cursor:pointer"><span
-                      style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:oklch(0.55 0.16 350)"></span>TypeScript</button>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#8aa08e;background:transparent;border:1px solid transparent;border-bottom:none;border-radius:9px 9px 0 0;padding:9px 15px;cursor:pointer"><span
+                      style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:#8aa08e"></span>TypeScript</button>
                   <button data-tab="py"
-                    style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#9a9488;background:transparent;border:1px solid transparent;border-bottom:none;border-radius:9px 9px 0 0;padding:9px 15px;cursor:pointer"><span
-                      style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:oklch(0.55 0.15 255)"></span>Python</button>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#8aa08e;background:transparent;border:1px solid transparent;border-bottom:none;border-radius:9px 9px 0 0;padding:9px 15px;cursor:pointer"><span
+                      style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:#8aa08e"></span>Python</button>
                 </div>
                 <div style="position:relative">
                   <button data-sdkcopy
-                    style="position:absolute;top:12px;right:12px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#bdb8a8;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:6px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;z-index:2"><svg
+                    style="position:absolute;top:12px;right:12px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8aa08e;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:6px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;z-index:2"><svg
                       viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
                       <rect x="9" y="9" width="11" height="11" rx="2" />
                       <path d="M5 15V5a2 2 0 0 1 2-2h10" />
                     </svg><span data-i18n="copy">Copy</span></button>
                   <pre data-sdkcode
-                    style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;padding:22px 20px;min-height:340px;overflow:auto;color:#cbc6ba;tab-size:2"></pre>
+                    style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;padding:22px 20px;min-height:340px;overflow:auto;color:#dce5d8;tab-size:2"></pre>
                 </div>
               </div>
             </div>
@@ -963,12 +864,12 @@
           <div data-reveal
             style="opacity:1;transform:none;transition:opacity .7s,transform .7s;max-width:760px;margin-bottom:44px">
             <span
-              style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:oklch(0.5 0.14 255)"
+              style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e"
               data-i18n="ty.eyebrow">05 — Discourse · type system</span>
             <h2
               style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
               data-i18n="ty.title">A small kernel, extended by types</h2>
-            <p style="color:#56514a;font-size:18px;margin:0" data-i18n="ty.sub">The kernel defines a handful of built-in
+            <p style="color:#39473d;font-size:18px;margin:0" data-i18n="ty.sub">The kernel defines a handful of built-in
               event kinds. Any other behavior — polls, citations, turn control, knowledge graphs, even WebRTC signaling
               — is declared per room as a typed, schema-validated event.</p>
           </div>
@@ -976,73 +877,73 @@
             <div data-reveal style="opacity:1;transform:none;transition:opacity .7s,transform .7s">
               <div style="display:flex;flex-direction:column;gap:12px">
                 <div
-                  style="display:flex;gap:14px;align-items:flex-start;border:1px solid rgba(28,26,20,.12);border-radius:12px;padding:16px 18px;background:#fbfaf6">
+                  style="display:flex;gap:14px;align-items:flex-start;border:1px solid rgba(16,29,23,.12);border-radius:12px;padding:16px 18px;background:#fdfefb">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;flex:none;margin-top:1px;background:oklch(0.64 0.14 55 / .15);color:oklch(0.5 0.13 55)">message</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;padding:4px 10px;border-radius:7px;flex:none;margin-top:1px;background:rgba(16,29,23,.07);color:#101d17">message</span>
                   <div>
-                    <h4 style="margin:0 0 3px;font-size:15px;font-weight:600" data-i18n="ty.k1t">Discussion content</h4>
-                    <p style="margin:0;color:#6b665b;font-size:13.5px" data-i18n="ty.k1d">The discourse itself, sent by
+                    <h4 style="margin:0 0 3px;font-size:15px;font-weight:500" data-i18n="ty.k1t">Discussion content</h4>
+                    <p style="margin:0;color:#5b6b5e;font-size:13.5px" data-i18n="ty.k1d">The discourse itself, sent by
                       moderators and speakers.</p>
                   </div>
                 </div>
                 <div
-                  style="display:flex;gap:14px;align-items:flex-start;border:1px solid rgba(28,26,20,.12);border-radius:12px;padding:16px 18px;background:#fbfaf6">
+                  style="display:flex;gap:14px;align-items:flex-start;border:1px solid rgba(16,29,23,.12);border-radius:12px;padding:16px 18px;background:#fdfefb">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;flex:none;margin-top:1px;background:oklch(0.55 0.16 350 / .13);color:oklch(0.5 0.15 350)">signal</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;padding:4px 10px;border-radius:7px;flex:none;margin-top:1px;background:rgba(16,29,23,.07);color:#101d17">signal</span>
                   <div>
-                    <h4 style="margin:0 0 3px;font-size:15px;font-weight:600" data-i18n="ty.k2t">Lightweight responses
+                    <h4 style="margin:0 0 3px;font-size:15px;font-weight:500" data-i18n="ty.k2t">Lightweight responses
                     </h4>
-                    <p style="margin:0;color:#6b665b;font-size:13.5px" data-i18n="ty.k2d">Reactions, votes, and
+                    <p style="margin:0;color:#5b6b5e;font-size:13.5px" data-i18n="ty.k2d">Reactions, votes, and
                       acknowledgements — open to all members, observers included.</p>
                   </div>
                 </div>
                 <div
-                  style="display:flex;gap:14px;align-items:flex-start;border:1px solid rgba(28,26,20,.12);border-radius:12px;padding:16px 18px;background:#fbfaf6">
+                  style="display:flex;gap:14px;align-items:flex-start;border:1px solid rgba(16,29,23,.12);border-radius:12px;padding:16px 18px;background:#fdfefb">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;flex:none;margin-top:1px;background:oklch(0.55 0.15 255 / .14);color:oklch(0.5 0.14 255)">control</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;padding:4px 10px;border-radius:7px;flex:none;margin-top:1px;background:rgba(16,29,23,.07);color:#101d17">control</span>
                   <div>
-                    <h4 style="margin:0 0 3px;font-size:15px;font-weight:600" data-i18n="ty.k3t">Coordination &amp;
+                    <h4 style="margin:0 0 3px;font-size:15px;font-weight:500" data-i18n="ty.k3t">Coordination &amp;
                       synthesis</h4>
-                    <p style="margin:0;color:#6b665b;font-size:13.5px" data-i18n="ty.k3d">Turns, graphs, and artifacts —
+                    <p style="margin:0;color:#5b6b5e;font-size:13.5px" data-i18n="ty.k3d">Turns, graphs, and artifacts —
                       restricted to moderators.</p>
                   </div>
                 </div>
               </div>
               <div style="margin-top:22px">
-                <div style="font-size:13px;color:#9a9488;font-family:'IBM Plex Mono',monospace;margin-bottom:9px"
+                <div style="font-size:13px;color:#5b6b5e;font-family:'IBM Plex Mono',monospace;margin-bottom:9px"
                   data-i18n="ty.packs">Registered type packs</div>
                 <div style="display:flex;flex-wrap:wrap;gap:9px">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(28,26,20,.14);border-radius:9px;padding:8px 12px;background:#fbfaf6;color:#6b665b"><span
-                      style="color:oklch(0.5 0.14 255)">adp:</span>reactions/1.0</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(16,29,23,.14);border-radius:9px;padding:8px 12px;background:#fdfefb;color:#5b6b5e"><span
+                      style="color:#c13527">adp:</span>reactions/1.0</span>
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(28,26,20,.14);border-radius:9px;padding:8px 12px;background:#fbfaf6;color:#6b665b"><span
-                      style="color:oklch(0.5 0.14 255)">adp:</span>deliberation/1.0</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(16,29,23,.14);border-radius:9px;padding:8px 12px;background:#fdfefb;color:#5b6b5e"><span
+                      style="color:#c13527">adp:</span>deliberation/1.0</span>
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(28,26,20,.14);border-radius:9px;padding:8px 12px;background:#fbfaf6;color:#6b665b"><span
-                      style="color:oklch(0.5 0.14 255)">adp:</span>curation/1.0</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(16,29,23,.14);border-radius:9px;padding:8px 12px;background:#fdfefb;color:#5b6b5e"><span
+                      style="color:#c13527">adp:</span>curation/1.0</span>
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(28,26,20,.14);border-radius:9px;padding:8px 12px;background:#fbfaf6;color:#6b665b"><span
-                      style="color:oklch(0.5 0.14 255)">adp:</span>moderation/1.0</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(16,29,23,.14);border-radius:9px;padding:8px 12px;background:#fdfefb;color:#5b6b5e"><span
+                      style="color:#c13527">adp:</span>moderation/1.0</span>
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(28,26,20,.14);border-radius:9px;padding:8px 12px;background:#fbfaf6;color:#6b665b"><span
-                      style="color:oklch(0.5 0.14 255)">adp:</span>realtime/1.0</span>
+                    style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;border:1px solid rgba(16,29,23,.14);border-radius:9px;padding:8px 12px;background:#fdfefb;color:#5b6b5e"><span
+                      style="color:#c13527">adp:</span>realtime/1.0</span>
                 </div>
               </div>
             </div>
             <div data-reveal
-              style="opacity:1;transform:none;transition:opacity .7s .08s,transform .7s .08s;border:1px solid rgba(28,26,20,.14);border-radius:16px;background:#1c1a14;overflow:hidden">
+              style="opacity:1;transform:none;transition:opacity .7s .08s,transform .7s .08s;border:1px solid rgba(16,29,23,.14);border-radius:16px;background:#101d17;overflow:hidden">
               <div
                 style="display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.25)">
-                <span style="width:11px;height:11px;border-radius:50%;background:oklch(0.55 0.16 350)"></span>
-                <span style="width:11px;height:11px;border-radius:50%;background:oklch(0.64 0.14 55)"></span>
-                <span style="width:11px;height:11px;border-radius:50%;background:oklch(0.55 0.15 255)"></span>
+                <span style="width:11px;height:11px;border-radius:50%;background:rgba(255,255,255,.2)"></span>
+                <span style="width:11px;height:11px;border-radius:50%;background:rgba(255,255,255,.2)"></span>
+                <span style="width:11px;height:11px;border-radius:50%;background:rgba(255,255,255,.2)"></span>
                 <span
-                  style="margin-left:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a9488">type.define
+                  style="margin-left:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8aa08e">type.define
                   — review.finding</span>
               </div>
               <pre data-typecode
-                style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;padding:20px;overflow:auto;color:#cbc6ba;tab-size:2"></pre>
+                style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.7;padding:20px;overflow:auto;color:#dce5d8;tab-size:2"></pre>
             </div>
           </div>
 
@@ -1050,7 +951,7 @@
             <div style="text-align:center;margin-bottom:26px">
               <h3 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:22px;margin:0 0 8px"
                 data-i18n="chain.title">Records are linked in a hash chain</h3>
-              <p style="color:#56514a;font-size:14.5px;max-width:600px;margin:0 auto" data-i18n="chain.sub">Each room
+              <p style="color:#39473d;font-size:14.5px;max-width:600px;margin:0 auto" data-i18n="chain.sub">Each room
                 assigns a sequential <code style="font-family:'IBM Plex Mono',monospace">seq</code> and links records by
                 hash. Archives replay the chain and verify every signature offline.</p>
             </div>
@@ -1058,125 +959,125 @@
               style="display:flex;align-items:stretch;justify-content:center;gap:0;overflow-x:auto;padding:6px 4px 12px;scrollbar-width:thin">
               <!-- block 1 -->
               <div
-                style="flex:0 0 auto;position:relative;width:184px;border:1px solid rgba(28,26,20,.14);border-radius:13px;background:#fbfaf6;padding:14px 15px;animation:ap-chainglow 5.2s ease-in-out infinite;animation-delay:0s">
+                style="flex:0 0 auto;position:relative;width:184px;border:1px solid rgba(16,29,23,.14);border-radius:13px;background:#fdfefb;padding:14px 15px">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:oklch(0.5 0.14 255);background:oklch(0.55 0.15 255 / .12);border-radius:6px;padding:2px 7px">seq
+                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;color:#101d17;background:rgba(16,29,23,.07);border-radius:4px;padding:2px 7px">seq
                     1</span>
                   <span
-                    style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:oklch(0.62 0.14 150);align-items:center;justify-content:center;animation:ap-checkpop 5.2s ease-in-out infinite;animation-delay:0s"><svg
+                    style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:#2f6b4f;align-items:center;justify-content:center;animation:ap-checkpop 5.2s ease-in-out infinite;animation-delay:0s"><svg
                       viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#fff" stroke-width="3.5">
                       <path d="M20 6L9 17l-5-5" />
                     </svg></span>
                 </div>
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1c1a14;margin-bottom:10px">
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#101d17;margin-bottom:10px">
                   room.create</div>
                 <div
-                  style="border-top:1px dashed rgba(28,26,20,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9488">prev <span
-                      style="color:#bdb8a8">— genesis</span></div>
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9488">hash <span
-                      style="color:oklch(0.5 0.14 255);font-weight:600">a91f…b7</span></div>
+                  style="border-top:1px dashed rgba(16,29,23,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">prev <span
+                      style="color:#5b6b5e">— genesis</span></div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">hash <span
+                      style="color:#c13527;font-weight:500">a91f…b7</span></div>
                 </div>
               </div>
               <!-- connector -->
               <div style="flex:0 0 auto;position:relative;width:44px;align-self:center;height:24px">
                 <svg viewBox="0 0 44 24" width="44" height="24" style="position:absolute;inset:0">
-                  <line x1="2" y1="12" x2="36" y2="12" stroke="#cfc9ba" stroke-width="2" />
-                  <path d="M34 7l6 5-6 5" fill="none" stroke="#cfc9ba" stroke-width="2" />
+                  <line x1="2" y1="12" x2="36" y2="12" stroke="rgba(138,160,142,.55)" stroke-width="2" />
+                  <path d="M34 7l6 5-6 5" fill="none" stroke="rgba(138,160,142,.55)" stroke-width="2" />
                 </svg>
                 <span
-                  style="position:absolute;top:7px;width:9px;height:9px;border-radius:50%;background:oklch(0.62 0.14 150);box-shadow:0 0 8px oklch(0.62 0.14 150);animation:ap-flowdot 5.2s ease-in-out infinite;animation-delay:.35s"></span>
+                  style="position:absolute;top:7px;width:9px;height:9px;border-radius:50%;background:#2f6b4f;animation:ap-flowdot 5.2s ease-in-out infinite;animation-delay:.35s"></span>
               </div>
               <!-- block 2 -->
               <div
-                style="flex:0 0 auto;position:relative;width:184px;border:1px solid rgba(28,26,20,.14);border-radius:13px;background:#fbfaf6;padding:14px 15px;animation:ap-chainglow 5.2s ease-in-out infinite;animation-delay:.7s">
+                style="flex:0 0 auto;position:relative;width:184px;border:1px solid rgba(16,29,23,.14);border-radius:13px;background:#fdfefb;padding:14px 15px">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:oklch(0.5 0.14 255);background:oklch(0.55 0.15 255 / .12);border-radius:6px;padding:2px 7px">seq
+                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;color:#101d17;background:rgba(16,29,23,.07);border-radius:4px;padding:2px 7px">seq
                     2</span>
                   <span
-                    style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:oklch(0.62 0.14 150);align-items:center;justify-content:center;animation:ap-checkpop 5.2s ease-in-out infinite;animation-delay:.7s"><svg
+                    style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:#2f6b4f;align-items:center;justify-content:center;animation:ap-checkpop 5.2s ease-in-out infinite;animation-delay:.7s"><svg
                       viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#fff" stroke-width="3.5">
                       <path d="M20 6L9 17l-5-5" />
                     </svg></span>
                 </div>
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1c1a14;margin-bottom:10px">
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#101d17;margin-bottom:10px">
                   room.join</div>
                 <div
-                  style="border-top:1px dashed rgba(28,26,20,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9488">prev <span
-                      style="color:oklch(0.5 0.14 255);font-weight:600">a91f…b7</span></div>
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9488">hash <span
-                      style="color:oklch(0.5 0.14 255);font-weight:600">4kQ2…th</span></div>
+                  style="border-top:1px dashed rgba(16,29,23,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">prev <span
+                      style="color:#c13527;font-weight:500">a91f…b7</span></div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">hash <span
+                      style="color:#c13527;font-weight:500">4kQ2…th</span></div>
                 </div>
               </div>
               <div style="flex:0 0 auto;position:relative;width:44px;align-self:center;height:24px">
                 <svg viewBox="0 0 44 24" width="44" height="24" style="position:absolute;inset:0">
-                  <line x1="2" y1="12" x2="36" y2="12" stroke="#cfc9ba" stroke-width="2" />
-                  <path d="M34 7l6 5-6 5" fill="none" stroke="#cfc9ba" stroke-width="2" />
+                  <line x1="2" y1="12" x2="36" y2="12" stroke="rgba(138,160,142,.55)" stroke-width="2" />
+                  <path d="M34 7l6 5-6 5" fill="none" stroke="rgba(138,160,142,.55)" stroke-width="2" />
                 </svg>
                 <span
-                  style="position:absolute;top:7px;width:9px;height:9px;border-radius:50%;background:oklch(0.62 0.14 150);box-shadow:0 0 8px oklch(0.62 0.14 150);animation:ap-flowdot 5.2s ease-in-out infinite;animation-delay:1.05s"></span>
+                  style="position:absolute;top:7px;width:9px;height:9px;border-radius:50%;background:#2f6b4f;animation:ap-flowdot 5.2s ease-in-out infinite;animation-delay:1.05s"></span>
               </div>
               <!-- block 3 -->
               <div
-                style="flex:0 0 auto;position:relative;width:184px;border:1px solid rgba(28,26,20,.14);border-radius:13px;background:#fbfaf6;padding:14px 15px;animation:ap-chainglow 5.2s ease-in-out infinite;animation-delay:1.4s">
+                style="flex:0 0 auto;position:relative;width:184px;border:1px solid rgba(16,29,23,.14);border-radius:13px;background:#fdfefb;padding:14px 15px">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:oklch(0.5 0.14 255);background:oklch(0.55 0.15 255 / .12);border-radius:6px;padding:2px 7px">seq
+                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;color:#101d17;background:rgba(16,29,23,.07);border-radius:4px;padding:2px 7px">seq
                     3</span>
                   <span
-                    style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:oklch(0.62 0.14 150);align-items:center;justify-content:center;animation:ap-checkpop 5.2s ease-in-out infinite;animation-delay:1.4s"><svg
+                    style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:#2f6b4f;align-items:center;justify-content:center;animation:ap-checkpop 5.2s ease-in-out infinite;animation-delay:1.4s"><svg
                       viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#fff" stroke-width="3.5">
                       <path d="M20 6L9 17l-5-5" />
                     </svg></span>
                 </div>
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1c1a14;margin-bottom:10px">
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#101d17;margin-bottom:10px">
                   message</div>
                 <div
-                  style="border-top:1px dashed rgba(28,26,20,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9488">prev <span
-                      style="color:oklch(0.5 0.14 255);font-weight:600">4kQ2…th</span></div>
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9488">hash <span
-                      style="color:oklch(0.5 0.14 255);font-weight:600">7mX1…qd</span></div>
+                  style="border-top:1px dashed rgba(16,29,23,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">prev <span
+                      style="color:#c13527;font-weight:500">4kQ2…th</span></div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">hash <span
+                      style="color:#c13527;font-weight:500">7mX1…qd</span></div>
                 </div>
               </div>
               <div style="flex:0 0 auto;position:relative;width:44px;align-self:center;height:24px">
                 <svg viewBox="0 0 44 24" width="44" height="24" style="position:absolute;inset:0">
-                  <line x1="2" y1="12" x2="36" y2="12" stroke="#cfc9ba" stroke-width="2" />
-                  <path d="M34 7l6 5-6 5" fill="none" stroke="#cfc9ba" stroke-width="2" />
+                  <line x1="2" y1="12" x2="36" y2="12" stroke="rgba(138,160,142,.55)" stroke-width="2" />
+                  <path d="M34 7l6 5-6 5" fill="none" stroke="rgba(138,160,142,.55)" stroke-width="2" />
                 </svg>
                 <span
-                  style="position:absolute;top:7px;width:9px;height:9px;border-radius:50%;background:oklch(0.62 0.14 150);box-shadow:0 0 8px oklch(0.62 0.14 150);animation:ap-flowdot 5.2s ease-in-out infinite;animation-delay:1.75s"></span>
+                  style="position:absolute;top:7px;width:9px;height:9px;border-radius:50%;background:#2f6b4f;animation:ap-flowdot 5.2s ease-in-out infinite;animation-delay:1.75s"></span>
               </div>
               <!-- block 4 archive -->
               <div
-                style="flex:0 0 auto;position:relative;width:184px;border:1px solid oklch(0.64 0.14 55 / .5);border-radius:13px;background:oklch(0.64 0.14 55 / .08);padding:14px 15px;animation:ap-chainglow 5.2s ease-in-out infinite;animation-delay:2.1s">
+                style="flex:0 0 auto;position:relative;width:184px;border:1px solid #e7c4b6;border-radius:13px;background:#f5e0d8;padding:14px 15px">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
                   <span
-                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:oklch(0.5 0.13 55);background:oklch(0.64 0.14 55 / .18);border-radius:6px;padding:2px 7px">seq
+                    style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;color:#a32a1f;background:rgba(193,53,39,.12);border-radius:4px;padding:2px 7px">seq
                     n</span>
                   <span
-                    style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:oklch(0.62 0.14 150);align-items:center;justify-content:center;animation:ap-checkpop 5.2s ease-in-out infinite;animation-delay:2.1s"><svg
+                    style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:#2f6b4f;align-items:center;justify-content:center;animation:ap-checkpop 5.2s ease-in-out infinite;animation-delay:2.1s"><svg
                       viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#fff" stroke-width="3.5">
                       <path d="M20 6L9 17l-5-5" />
                     </svg></span>
                 </div>
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1c1a14;margin-bottom:10px">
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#101d17;margin-bottom:10px">
                   archive</div>
                 <div
-                  style="border-top:1px dashed oklch(0.64 0.14 55 / .35);padding-top:9px;display:flex;flex-direction:column;gap:5px">
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9488">prev <span
-                      style="color:oklch(0.5 0.14 255);font-weight:600">7mX1…qd</span></div>
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9488">root <span
-                      style="color:oklch(0.5 0.13 55);font-weight:600">Xe2k…Q</span></div>
+                  style="border-top:1px dashed #e7c4b6;padding-top:9px;display:flex;flex-direction:column;gap:5px">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">prev <span
+                      style="color:#c13527;font-weight:500">7mX1…qd</span></div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">root <span
+                      style="color:#a32a1f;font-weight:500">Xe2k…Q</span></div>
                 </div>
               </div>
             </div>
             <div style="display:flex;justify-content:center;margin-top:8px">
               <span
-                style="display:inline-flex;align-items:center;gap:9px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:oklch(0.45 0.13 150);background:oklch(0.62 0.14 150 / .1);border:1px solid oklch(0.62 0.14 150 / .3);border-radius:999px;padding:8px 16px;animation:ap-vpulse 5.2s ease-in-out infinite;animation-delay:2.4s">
+                style="display:inline-flex;align-items:center;gap:9px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#a32a1f;background:rgba(193,53,39,.08);border:1px solid #e7c4b6;border-radius:6px;padding:8px 16px">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4">
                   <path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6l8-4z" />
                   <path d="M9.2 12l2 2 3.6-3.8" />
@@ -1184,7 +1085,7 @@
                 <span data-i18n="chain.badge">chain verified · offline</span>
               </span>
             </div>
-            <p style="text-align:center;color:#6b665b;font-size:13.5px;max-width:600px;margin:20px auto 0;line-height:1.6"
+            <p style="text-align:center;color:#5b6b5e;font-size:13.5px;max-width:600px;margin:20px auto 0;line-height:1.6"
               data-i18n="chain.note">Each record signs the hash of the one before it. Change a single byte and every
               later hash — and signature — breaks. The whole room verifies offline, no server required.</p>
           </div>
@@ -1192,7 +1093,7 @@
 
         <section style="max-width:1180px;margin:0 auto;padding:40px 28px 96px">
           <div data-reveal
-            style="opacity:1;transform:none;transition:opacity .7s,transform .7s;border:1px solid rgba(28,26,20,.14);border-radius:24px;background:#1c1a14;color:#f4f1e9;padding:64px 40px;text-align:center;position:relative;overflow:hidden">
+            style="opacity:1;transform:none;transition:opacity .7s,transform .7s;border:1px solid rgba(16,29,23,.14);border-radius:24px;background:#101d17;color:#eff1ea;padding:64px 40px;text-align:center;position:relative;overflow:hidden">
             <div aria-hidden="true"
               style="position:absolute;inset:0;opacity:.5;background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:48px 48px;-webkit-mask-image:radial-gradient(80% 120% at 50% 0%,#000,transparent 75%);mask-image:radial-gradient(80% 120% at 50% 0%,#000,transparent 75%)">
             </div>
@@ -1200,17 +1101,17 @@
               <h2
                 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,40px);line-height:1.1;margin:0 0 16px"
                 data-i18n="cta.title">Implement the protocols</h2>
-              <p style="color:#bdb8a8;font-size:18px;max-width:560px;margin:0 auto 30px" data-i18n="cta.sub">The
+              <p style="color:#8aa08e;font-size:18px;max-width:560px;margin:0 auto 30px" data-i18n="cta.sub">The
                 specifications are drafts. Test vectors, JSON Schemas, and conformance tests will land before a stable
                 1.0. Implementation feedback and proposals are welcome.</p>
               <div style="display:flex;gap:13px;justify-content:center;flex-wrap:wrap">
                 <a href="https://github.com/ldclabs/agent-protocols/tree/main/docs/protocols" target="_blank"
                   rel="noopener"
-                  style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:600;padding:14px 22px;border-radius:11px;background:#f4f1e9;color:#1c1a14;border:1px solid #f4f1e9"
+                  style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:500;padding:14px 22px;border-radius:11px;background:#eff1ea;color:#101d17;border:1px solid #eff1ea"
                   data-i18n="cta.b1">Read the specifications</a>
                 <a href="https://github.com/ldclabs/agent-protocols/blob/main/CONTRIBUTING.md" target="_blank"
                   rel="noopener"
-                  style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:600;padding:14px 22px;border-radius:11px;background:transparent;color:#f4f1e9;border:1px solid rgba(255,255,255,.25)"
+                  style="display:inline-flex;align-items:center;gap:9px;text-decoration:none;font-size:15px;font-weight:500;padding:14px 22px;border-radius:11px;background:transparent;color:#eff1ea;border:1px solid rgba(255,255,255,.25)"
                   data-i18n="cta.b2">Contribute</a>
               </div>
             </div>
@@ -1219,78 +1120,78 @@
 
         <!--SECTIONS-->
 
-        <footer style="border-top:1px solid rgba(28,26,20,.12);padding:56px 0 40px;margin-top:40px">
+        <footer style="border-top:1px solid rgba(16,29,23,.12);padding:56px 0 40px;margin-top:40px">
           <div style="max-width:1180px;margin:0 auto;padding:0 28px">
             <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:32px" data-footgrid>
               <div>
                 <a href="#top" style="display:flex;align-items:center;gap:11px;text-decoration:none;color:inherit">
                   <svg viewBox="0 0 100 100" width="28" height="28" fill="none" aria-hidden="true">
-                    <line x1="50" y1="26" x2="27" y2="73" stroke="#1c1a14" stroke-width="3.5" />
-                    <line x1="50" y1="26" x2="73" y2="73" stroke="#1c1a14" stroke-width="3.5" />
-                    <line x1="27" y1="73" x2="73" y2="73" stroke="#1c1a14" stroke-width="3.5" stroke-dasharray="3 5" />
-                    <circle cx="50" cy="26" r="11" fill="oklch(0.55 0.15 255)" />
-                    <circle cx="27" cy="73" r="10" fill="oklch(0.64 0.14 55)" />
-                    <circle cx="73" cy="73" r="10" fill="oklch(0.55 0.16 350)" />
+                    <line x1="50" y1="26" x2="27" y2="73" stroke="#101d17" stroke-width="3.5" />
+                    <line x1="50" y1="26" x2="73" y2="73" stroke="#101d17" stroke-width="3.5" />
+                    <line x1="27" y1="73" x2="73" y2="73" stroke="#101d17" stroke-width="3.5" stroke-dasharray="3 5" />
+                    <circle cx="50" cy="26" r="11" fill="#c13527" />
+                    <circle cx="27" cy="73" r="10" fill="none" stroke="#101d17" stroke-width="3.5" />
+                    <circle cx="73" cy="73" r="10" fill="none" stroke="#101d17" stroke-width="3.5" />
                   </svg>
-                  <span style="font-weight:600;font-size:15px">Agent Protocols</span>
+                  <span style="font-weight:500;font-size:15px">Agent Protocols</span>
                 </a>
                 <p data-i18n="foot.tag"
-                  style="font-size:13.5px;color:#6b665b;max-width:290px;margin:14px 0 0;line-height:1.6">An open
+                  style="font-size:13.5px;color:#5b6b5e;max-width:290px;margin:14px 0 0;line-height:1.6">An open
                   specification repository for interoperable autonomous agents, maintained in English and Simplified
                   Chinese.</p>
               </div>
               <div>
                 <h5 data-i18n="foot.specs"
-                  style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#9a9488;margin:0 0 16px;font-weight:600">
+                  style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e;margin:0 0 16px;font-weight:500">
                   Specifications</h5>
                 <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-identity/1.0.md"
                   target="_blank" rel="noopener"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
                   Identity 1.0</a>
                 <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-profile/1.0.md"
                   target="_blank" rel="noopener"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
                   Profile 1.0</a>
                 <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.md"
                   target="_blank" rel="noopener"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
                   Delegation 1.0</a>
                 <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.md"
                   target="_blank" rel="noopener"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">Agent
                   Discourse 1.0</a>
               </div>
               <div>
                 <h5 data-i18n="foot.sdksh"
-                  style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#9a9488;margin:0 0 16px;font-weight:600">
+                  style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e;margin:0 0 16px;font-weight:500">
                   SDKs</h5>
                 <a href="https://github.com/ldclabs/agent-protocols/tree/main/crates/agent-protocols" target="_blank"
                   rel="noopener"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Rust</a>
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">Rust</a>
                 <a href="https://github.com/ldclabs/agent-protocols/tree/main/packages/agent-protocols" target="_blank"
                   rel="noopener"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">TypeScript</a>
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">TypeScript</a>
                 <a href="https://github.com/ldclabs/agent-protocols/tree/main/python/agent-protocols" target="_blank"
                   rel="noopener"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Python</a>
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">Python</a>
               </div>
               <div>
                 <h5 data-i18n="foot.project"
-                  style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#9a9488;margin:0 0 16px;font-weight:600">
+                  style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#5b6b5e;margin:0 0 16px;font-weight:500">
                   Project</h5>
                 <a href="https://github.com/ldclabs/agent-protocols" target="_blank" rel="noopener"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">GitHub</a>
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">GitHub</a>
                 <a href="https://github.com/ldclabs/agent-protocols/blob/main/CONTRIBUTING.md" target="_blank"
                   rel="noopener" data-i18n="foot.contrib"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">Contributing</a>
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">Contributing</a>
                 <a href="https://github.com/ldclabs/agent-protocols/blob/main/LICENSE" target="_blank" rel="noopener"
                   data-i18n="foot.license"
-                  style="display:block;color:#6b665b;font-size:14px;margin-bottom:10px;text-decoration:none">MIT
+                  style="display:block;color:#5b6b5e;font-size:14px;margin-bottom:10px;text-decoration:none">MIT
                   License</a>
               </div>
             </div>
             <div
-              style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:44px;padding-top:24px;border-top:1px solid rgba(28,26,20,.12);font-size:13px;color:#9a9488">
+              style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:44px;padding-top:24px;border-top:1px solid rgba(16,29,23,.12);font-size:13px;color:#5b6b5e">
               <span data-i18n="foot.copy">© 2026 LDC Labs · Released under the MIT License</span>
               <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">agent-identity · agent-profile ·
                 agent-delegation · agent-discourse · Draft</span>
@@ -1447,14 +1348,17 @@ profile  = materialize_profile(envelope)`,
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
-  highlightJson(src) {
+  highlightJson(src, dark) {
+    const c = dark
+      ? { key: "#a9c4de", str: "#a3c8ab", num: "#d9b36a", bool: "#d9b36a" }
+      : { key: "#46648a", str: "#2f6b4f", num: "#6e5316", bool: "#8e3b2f" };
     return this.esc(src).replace(
       /("(?:[^"\\]|\\.)*")(\s*:)?|\b(\d[\d.]*)\b|\b(true|false|null)\b/g,
       (m, str, colon, num, bool) => {
-        if (str && colon) return '<span style="color:oklch(0.62 0.13 255)">' + str + "</span>" + colon;
-        if (str) return '<span style="color:oklch(0.74 0.12 75)">' + str + "</span>";
-        if (num) return '<span style="color:oklch(0.72 0.13 45)">' + num + "</span>";
-        if (bool) return '<span style="color:oklch(0.7 0.13 320)">' + bool + "</span>";
+        if (str && colon) return '<span style="color:' + c.key + '">' + str + "</span>" + colon;
+        if (str) return '<span style="color:' + c.str + '">' + str + "</span>";
+        if (num) return '<span style="color:' + c.num + '">' + num + "</span>";
+        if (bool) return '<span style="color:' + c.bool + '">' + bool + "</span>";
         return m;
       }
     );
@@ -1464,10 +1368,10 @@ profile  = materialize_profile(envelope)`,
     return this.esc(src).replace(
       /(\/\/[^\n]*|#[^\n]*)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|\b(\d[\d_.]*)\b|\b(use|let|const|import|from|fn|pub|return|new|def|async|await|struct)\b/g,
       (m, com, str, num, kw) => {
-        if (com) return '<span style="color:#7d786c;font-style:italic">' + com + "</span>";
-        if (str) return '<span style="color:oklch(0.74 0.12 75)">' + str + "</span>";
-        if (num) return '<span style="color:oklch(0.72 0.13 45)">' + num + "</span>";
-        if (kw) return '<span style="color:oklch(0.72 0.12 300)">' + kw + "</span>";
+        if (com) return '<span style="color:#8aa08e;font-style:italic">' + com + "</span>";
+        if (str) return '<span style="color:#a3c8ab">' + str + "</span>";
+        if (num) return '<span style="color:#d9b36a">' + num + "</span>";
+        if (kw) return '<span style="color:#a9c4de">' + kw + "</span>";
         return m;
       }
     );
@@ -1475,12 +1379,12 @@ profile  = materialize_profile(envelope)`,
 
   renderHeroCode() {
     const pre = this.el && this.el.querySelector("[data-herocode]");
-    if (pre) pre.innerHTML = this.highlightJson(this.HERO_JSON);
+    if (pre) pre.innerHTML = this.highlightJson(this.HERO_JSON, false);
   }
 
   renderType() {
     const pre = this.el && this.el.querySelector("[data-typecode]");
-    if (pre) pre.innerHTML = this.highlightJson(this.TYPE_JSON);
+    if (pre) pre.innerHTML = this.highlightJson(this.TYPE_JSON, true);
   }
 
   renderSdk() {
@@ -1509,7 +1413,7 @@ profile  = materialize_profile(envelope)`,
         this.sdkLang = t.getAttribute("data-tab");
         tabs.forEach((x) => {
           const on = x === t;
-          x.style.color = on ? "#f4f1e9" : "#9a9488";
+          x.style.color = on ? "#eff1ea" : "#8aa08e";
           x.style.background = on ? "rgba(255,255,255,.07)" : "transparent";
           x.style.borderColor = on ? "rgba(255,255,255,.08)" : "transparent";
           x.style.borderBottom = "none";
@@ -1536,7 +1440,7 @@ profile  = materialize_profile(envelope)`,
       r.addEventListener("click", () => {
         this.copy(r.getAttribute("data-cmd"));
         const ic = r.querySelector("[data-copyicon]");
-        if (ic) { const h = ic.innerHTML; ic.textContent = "✓"; ic.style.color = "oklch(0.55 0.16 150)"; setTimeout(() => { ic.innerHTML = h; ic.style.color = "#9a9488"; }, 1100); }
+        if (ic) { const h = ic.innerHTML; ic.textContent = "✓"; ic.style.color = "#2f6b4f"; setTimeout(() => { ic.innerHTML = h; ic.style.color = "#5b6b5e"; }, 1100); }
       });
     });
     const sc = this.el && this.el.querySelector("[data-sdkcopy]");
@@ -1601,7 +1505,7 @@ profile  = materialize_profile(envelope)`,
       "prob.q4": "它代表谁行动——谁说了算？",
       "prob.a4": "智能体可以自称代表任何人。却没有可移植、可撤销的凭证，证明某个人或组织确实授权了它。",
       "prob.s4": "由 Agent Delegation 解决",
-      "prob.bridge": "<strong style=\"color:#fff;font-weight:600\">Agent Protocols</strong> 定义了最小的签名原语——身份、档案、委托、讨论——让任意两个由任何人构建的智能体，都能彼此可验证地识别、描述、代表与对话。无中心注册表，无强制主机。",
+      "prob.bridge": "<strong style=\"color:#eff1ea;font-weight:500\">Agent Protocols</strong> 定义了最小的签名原语——身份、档案、委托、讨论——让任意两个由任何人构建的智能体，都能彼此可验证地识别、描述、代表与对话。无中心注册表，无强制主机。",
       "hero.cta1": "阅读协议", "hero.cta2": "查看 SDK", "hero.s1": "规范", "hero.s2": "签名方案", "hero.s3": "SDK",
       "hero.verified": "签名已验证", "hero.trust": "基于开放标准",
       "proto.eyebrow": "01 — 规范", "proto.title": "四个协议",
