@@ -9,11 +9,13 @@ import {
   DelegationGrantPayload,
   delegationGrantEvent,
   delegationRevokeEvent,
+  isPrincipalAlias,
   materializeDelegationCredential,
   validateDelegationEnvelope,
   validateDelegationGrantPayload,
   validateDelegationQueryRequest,
   validatePrincipalDocument,
+  validatePrincipalResolution,
 } from "./delegation.js";
 
 test("validates and materializes delegation grant events", () => {
@@ -22,7 +24,7 @@ test("validates and materializes delegation grant events", () => {
   const payload: DelegationGrantPayload = {
     id: "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
     principal: {
-      id: "https://al.ink/yan",
+      id: "https://api.al.ink/d9c6a99cne5g00a6scn0",
       type: "person",
       name: "Yan",
     },
@@ -38,9 +40,7 @@ test("validates and materializes delegation grant events", () => {
   );
 
   assert.doesNotThrow(() => validateDelegationEnvelope(envelope));
-  const credential = materializeDelegationCredential(envelope, {
-    statusUrl: "https://al.ink/v1/delegations/del/status",
-  });
+  const credential = materializeDelegationCredential(envelope);
 
   assert.equal(credential.protocol, DELEGATION_PROTOCOL);
   assert.equal(credential.controller, controller.agentId());
@@ -54,7 +54,7 @@ test("validates revocation events and rejects invalid payloads", () => {
   const envelope = controller.signEvent(
     delegationRevokeEvent(controller.agentId(), 1_779_753_700_000, 2, {
       id: "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
-      principal_id: "https://al.ink/yan",
+      principal_id: "https://api.al.ink/d9c6a99cne5g00a6scn0",
       reason: "rotated_primary_agent",
     }),
   );
@@ -79,7 +79,8 @@ test("validates principal documents and event protocol", () => {
     validatePrincipalDocument({
       id: "https://profiles.example.com/org/acme",
       controllers: [controller.agentId()],
-      delegations_url: "https://profiles.example.com/v1/delegations/query",
+      aliases: ["https://profiles.example.com/acme"],
+      delegation_query_url: "https://profiles.example.com/v1/delegations/query",
     }),
   );
   assert.throws(() =>
@@ -126,7 +127,7 @@ test("grant expiry is checked against not_before and created_at separately", () 
   const subject = AgentSigner.fromSeed(new Uint8Array(32).fill(46));
   const base: DelegationGrantPayload = {
     id: "del_1",
-    principal: { id: "https://al.ink/yan" },
+    principal: { id: "https://api.al.ink/d9c6a99cne5g00a6scn0" },
     subject: subject.agentId(),
     scopes: ["inbox.screen"],
   };
@@ -161,20 +162,49 @@ test("grant expiry is checked against not_before and created_at separately", () 
   assert.equal(controller.agentId().startsWith("did:agent:"), true);
 });
 
-test("delegation queries require subject or principal_id", () => {
+test("public delegation queries are existence checks over both subject and principal_id", () => {
   const subject = AgentSigner.fromSeed(new Uint8Array(32).fill(47)).agentId();
-  validateDelegationQueryRequest({ subject });
-  validateDelegationQueryRequest({ principal_id: "https://al.ink/yan", limit: 20 });
+  const principal_id = "https://api.al.ink/d9c6a99cne5g00a6scn0";
+  validateDelegationQueryRequest({ subject, principal_id, limit: 20 });
+
+  // Enumerating one side is not a public query.
+  for (const request of [{ subject }, { principal_id }]) {
+    assert.throws(
+      () => validateDelegationQueryRequest(request),
+      /must include both subject and principal_id/,
+    );
+    validateDelegationQueryRequest(request, { allowEnumeration: true });
+  }
   assert.throws(
-    () => validateDelegationQueryRequest({ status: "active" }),
+    () => validateDelegationQueryRequest({ status: "active" }, { allowEnumeration: true }),
     /at least one of subject or principal_id/,
   );
   assert.throws(
-    () => validateDelegationQueryRequest({ subject, limit: 0 }),
+    () => validateDelegationQueryRequest({ subject, principal_id, limit: 0 }),
     /positive integer/,
   );
   assert.throws(
-    () => validateDelegationQueryRequest({ principal_id: "http://al.ink/yan" }),
+    () => validateDelegationQueryRequest({ subject, principal_id: "http://al.ink/yan" }),
     /HTTPS/,
   );
+});
+
+test("principal documents bind controllers only when read at their own id", () => {
+  const controller = AgentSigner.fromSeed(new Uint8Array(32).fill(48));
+  const document = {
+    id: "https://api.al.ink/d9c6a99cne5g00a6scn0",
+    controllers: [controller.agentId()],
+    aliases: ["https://al.ink/yan"],
+  };
+
+  validatePrincipalResolution(document, "https://api.al.ink/d9c6a99cne5g00a6scn0");
+  // A copy served away from its identifier carries no authority.
+  assert.throws(
+    () => validatePrincipalResolution(document, "https://impostor.example.com/yan"),
+    /was served at/,
+  );
+
+  assert.equal(isPrincipalAlias(document, "https://al.ink/yan"), true);
+  assert.equal(isPrincipalAlias(document, "https://impostor.example.com/yan"), false);
+  assert.equal(isPrincipalAlias({ id: "https://x.example.com", controllers: [] }, "https://x.example.com"), false);
 });

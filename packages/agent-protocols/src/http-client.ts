@@ -1,5 +1,7 @@
 import {
   validateDelegationQueryRequest,
+  validatePrincipalDocument,
+  validatePrincipalResolution,
   type DelegationCredential,
   type DelegationEventsResponse,
   type DelegationPayload,
@@ -300,11 +302,18 @@ export class DelegationClient {
     return this.getJson("/.well-known/agent-delegation");
   }
 
+  /**
+   * Resolves a principal document per Agent Delegation Section 5.3. A document
+   * is authoritative only when read at its own `id`, so one served elsewhere
+   * (an alias hosting a copy rather than redirecting) is discarded and
+   * `document.id` is resolved once more.
+   */
   async principal(principalUrl = this.baseUrl): Promise<PrincipalDocument> {
-    const response = await this.fetchImpl(principalUrl, {
-      headers: { accept: "application/json" },
-    });
-    return readJson<PrincipalDocument>(response);
+    const first = await this.readPrincipal(principalUrl);
+    if (first.document.id === first.resolvedUrl) return first.document;
+    const canonical = await this.readPrincipal(first.document.id);
+    validatePrincipalResolution(canonical.document, canonical.resolvedUrl);
+    return canonical.document;
   }
 
   async delegation(delegationId: string): Promise<DelegationCredential> {
@@ -329,11 +338,28 @@ export class DelegationClient {
     return this.postJson("/v1/delegations", envelope);
   }
 
+  /**
+   * Public queries are existence checks and carry both `subject` and
+   * `principal_id`. Pass `allowEnumeration` only for a request the service has
+   * authorized to enumerate one side.
+   */
   async queryDelegations(
     request: DelegationQueryRequest,
+    options: { allowEnumeration?: boolean } = {},
   ): Promise<DelegationQueryResponse> {
-    validateDelegationQueryRequest(request);
+    validateDelegationQueryRequest(request, options);
     return this.postJson("/v1/delegations/query", request);
+  }
+
+  private async readPrincipal(
+    url: string,
+  ): Promise<{ document: PrincipalDocument; resolvedUrl: string }> {
+    const response = await this.fetchImpl(url, {
+      headers: { accept: "application/json" },
+    });
+    const document = await readJson<PrincipalDocument>(response);
+    validatePrincipalDocument(document);
+    return { document, resolvedUrl: (response as { url?: string }).url || url };
   }
 
   private async getJson<T>(path: string): Promise<T> {

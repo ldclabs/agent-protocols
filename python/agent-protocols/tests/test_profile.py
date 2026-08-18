@@ -20,10 +20,10 @@ class ProfileTests(unittest.TestCase):
             "links": [{"name": "Homepage", "url": "https://example.com", "rel": "homepage"}],
             "delegations": [
                 {
-                    "principal": {"id": "https://al.ink/yan", "type": "person", "name": "Yan"},
+                    "id": "del_1",
+                    "principal": {"id": "https://api.al.ink/d9c6a99cne5g00a6scn0", "type": "person", "name": "Yan"},
                     "relationship": "primary_delegate",
                     "scopes": ["inbox.screen"],
-                    "credential_url": "https://al.ink/v1/delegations/del_1",
                 }
             ],
         }

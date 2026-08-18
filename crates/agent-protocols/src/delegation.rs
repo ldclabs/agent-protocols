@@ -61,11 +61,15 @@ pub struct PrincipalDocument {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
+    /// Other HTTPS URLs that lead to this principal. Aliases are not identities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<PrincipalLink>,
     pub controllers: Vec<AgentId>,
+    /// Delegation query endpoint for this principal; answers existence checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegations_url: Option<String>,
+    pub delegation_query_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -140,8 +144,6 @@ pub struct DelegationCredential {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
     pub status: DelegationStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status_url: Option<String>,
     pub updated_at: i64,
     pub event_id: String,
 }
@@ -179,6 +181,8 @@ pub struct DelegationQueryRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<DelegationStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
@@ -192,8 +196,6 @@ pub struct DelegationSummary {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scopes: Vec<String>,
     pub status: DelegationStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -248,10 +250,38 @@ pub fn validate_principal_document(document: &PrincipalDocument) -> Result<()> {
     for controller in &document.controllers {
         controller.public_key_bytes()?;
     }
-    if let Some(url) = &document.delegations_url {
-        validate_https_url(url, "delegations_url")?;
+    for alias in &document.aliases {
+        validate_https_url(alias, "alias")?;
+    }
+    if let Some(url) = &document.delegation_query_url {
+        validate_https_url(url, "delegation_query_url")?;
     }
     Ok(())
+}
+
+/// Checks the authoritative-read rule of Agent Delegation Section 5.3: a
+/// principal document binds controller keys only when it is read at its own
+/// `id`. A document served anywhere else is a copy; its `controllers` must be
+/// discarded and `document.id` resolved instead.
+pub fn validate_principal_resolution(
+    document: &PrincipalDocument,
+    resolved_url: &str,
+) -> Result<()> {
+    if document.id == resolved_url {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidPayload(format!(
+            "principal document id {} was served at {resolved_url}",
+            document.id
+        )))
+    }
+}
+
+/// Reports whether `url` is an alias the principal itself acknowledges. Any
+/// origin can redirect to any principal, so an alias must not be shown as a
+/// name for the principal unless it is listed here.
+pub fn is_principal_alias(document: &PrincipalDocument, url: &str) -> bool {
+    document.aliases.iter().any(|alias| alias == url)
 }
 
 pub fn validate_delegation_grant_payload(
@@ -281,12 +311,24 @@ pub fn validate_delegation_grant_payload(
     Ok(())
 }
 
-/// A delegation query MUST include at least one of `subject` or
-/// `principal_id`. `limit` defaults to 20; services SHOULD cap it at 100.
-pub fn validate_delegation_query_request(request: &DelegationQueryRequest) -> Result<()> {
-    if request.subject.is_none() && request.principal_id.is_none() {
+/// A public delegation query is an existence check and must include both
+/// `subject` and `principal_id`. Omitting either side makes it an enumeration
+/// query, which services must authorize before answering; pass
+/// `allow_enumeration` when building such an authorized request. `limit`
+/// defaults to 20; services SHOULD cap it at 100.
+pub fn validate_delegation_query_request(
+    request: &DelegationQueryRequest,
+    allow_enumeration: bool,
+) -> Result<()> {
+    if allow_enumeration {
+        if request.subject.is_none() && request.principal_id.is_none() {
+            return Err(SdkError::InvalidPayload(
+                "query must include at least one of subject or principal_id".to_owned(),
+            ));
+        }
+    } else if request.subject.is_none() || request.principal_id.is_none() {
         return Err(SdkError::InvalidPayload(
-            "query must include at least one of subject or principal_id".to_owned(),
+            "public query must include both subject and principal_id".to_owned(),
         ));
     }
     if let Some(subject) = &request.subject {
@@ -336,7 +378,6 @@ pub fn validate_delegation_envelope(envelope: &Envelope<DelegationPayload>) -> R
 pub fn materialize_delegation_credential(
     envelope: &Envelope<DelegationGrantPayload>,
     status: DelegationStatus,
-    status_url: Option<String>,
     updated_at: Option<i64>,
 ) -> Result<DelegationCredential> {
     verify_envelope(envelope)?;
@@ -366,7 +407,6 @@ pub fn materialize_delegation_credential(
         not_before: payload.not_before,
         expires_at: payload.expires_at,
         status,
-        status_url,
         updated_at: updated_at.unwrap_or(envelope.event.created_at),
         event_id: envelope.hash.clone(),
     })
@@ -410,7 +450,7 @@ mod tests {
         let mut payload = DelegationGrantPayload::new(
             "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
             PrincipalDescriptor {
-                id: "https://al.ink/yan".to_owned(),
+                id: "https://api.al.ink/d9c6a99cne5g00a6scn0".to_owned(),
                 kind: Some("person".to_owned()),
                 name: Some("Yan".to_owned()),
             },
@@ -433,13 +473,8 @@ mod tests {
             serde_json::from_value(envelope_value).unwrap();
 
         validate_delegation_envelope(&envelope_for_validation).unwrap();
-        let credential = materialize_delegation_credential(
-            &envelope,
-            DelegationStatus::Active,
-            Some("https://al.ink/v1/delegations/del/status".to_owned()),
-            None,
-        )
-        .unwrap();
+        let credential =
+            materialize_delegation_credential(&envelope, DelegationStatus::Active, None).unwrap();
 
         assert_eq!(credential.protocol, PROTOCOL);
         assert_eq!(credential.controller, controller.agent_id());
@@ -457,7 +492,7 @@ mod tests {
                 2,
                 DelegationRevokePayload {
                     id: "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q".to_owned(),
-                    principal_id: "https://al.ink/yan".to_owned(),
+                    principal_id: "https://api.al.ink/d9c6a99cne5g00a6scn0".to_owned(),
                     reason: Some("rotated_primary_agent".to_owned()),
                 },
             ))
@@ -480,7 +515,7 @@ mod tests {
         let controller = AgentSigner::from_seed([36; 32]);
         let base = DelegationGrantPayload::new(
             "del_1",
-            PrincipalDescriptor::new("https://al.ink/yan"),
+            PrincipalDescriptor::new("https://api.al.ink/d9c6a99cne5g00a6scn0"),
             controller.agent_id(),
             vec!["inbox.screen".to_owned()],
         );
@@ -502,26 +537,74 @@ mod tests {
     }
 
     #[test]
-    fn delegation_queries_require_subject_or_principal() {
+    fn public_delegation_queries_carry_both_subject_and_principal() {
         let subject = AgentSigner::from_seed([37; 32]).agent_id();
-        validate_delegation_query_request(&DelegationQueryRequest {
+        let principal_id = "https://api.al.ink/d9c6a99cne5g00a6scn0".to_owned();
+        let public = DelegationQueryRequest {
             subject: Some(subject.clone()),
-            ..DelegationQueryRequest::default()
-        })
-        .unwrap();
-        validate_delegation_query_request(&DelegationQueryRequest {
-            principal_id: Some("https://al.ink/yan".to_owned()),
+            principal_id: Some(principal_id.clone()),
             limit: Some(20),
             ..DelegationQueryRequest::default()
-        })
-        .unwrap();
-        assert!(validate_delegation_query_request(&DelegationQueryRequest::default()).is_err());
-        assert!(validate_delegation_query_request(&DelegationQueryRequest {
-            subject: Some(subject),
-            limit: Some(0),
-            ..DelegationQueryRequest::default()
-        })
+        };
+        validate_delegation_query_request(&public, false).unwrap();
+
+        // Enumerating one side is not a public query.
+        for one_sided in [
+            DelegationQueryRequest {
+                subject: Some(subject.clone()),
+                ..DelegationQueryRequest::default()
+            },
+            DelegationQueryRequest {
+                principal_id: Some(principal_id),
+                ..DelegationQueryRequest::default()
+            },
+        ] {
+            assert!(validate_delegation_query_request(&one_sided, false).is_err());
+            validate_delegation_query_request(&one_sided, true).unwrap();
+        }
+
+        assert!(
+            validate_delegation_query_request(&DelegationQueryRequest::default(), true).is_err()
+        );
+        assert!(validate_delegation_query_request(
+            &DelegationQueryRequest {
+                limit: Some(0),
+                ..public
+            },
+            false
+        )
         .is_err());
+    }
+
+    #[test]
+    fn principal_documents_bind_controllers_only_at_their_own_id() {
+        let controller = AgentSigner::from_seed([38; 32]);
+        let document = PrincipalDocument {
+            id: "https://api.al.ink/d9c6a99cne5g00a6scn0".to_owned(),
+            kind: None,
+            name: None,
+            description: None,
+            avatar_url: None,
+            aliases: vec!["https://al.ink/yan".to_owned()],
+            links: Vec::new(),
+            controllers: vec![controller.agent_id()],
+            delegation_query_url: None,
+            updated_at: None,
+            extra: BTreeMap::new(),
+        };
+
+        validate_principal_resolution(&document, "https://api.al.ink/d9c6a99cne5g00a6scn0")
+            .unwrap();
+        // A copy served away from its identifier carries no authority.
+        assert!(
+            validate_principal_resolution(&document, "https://impostor.example.com/yan").is_err()
+        );
+
+        assert!(is_principal_alias(&document, "https://al.ink/yan"));
+        assert!(!is_principal_alias(
+            &document,
+            "https://impostor.example.com/yan"
+        ));
     }
 
     #[test]
@@ -533,9 +616,12 @@ mod tests {
             name: None,
             description: None,
             avatar_url: None,
+            aliases: vec!["https://profiles.example.com/acme".to_owned()],
             links: Vec::new(),
             controllers: vec![controller.agent_id()],
-            delegations_url: Some("https://profiles.example.com/v1/delegations/query".to_owned()),
+            delegation_query_url: Some(
+                "https://profiles.example.com/v1/delegations/query".to_owned(),
+            ),
             updated_at: None,
             extra: BTreeMap::new(),
         };

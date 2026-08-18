@@ -2,9 +2,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::delegation::{
-    DelegationCredential, DelegationEventsResponse, DelegationQueryRequest,
-    DelegationQueryResponse, DelegationServiceDiscovery, DelegationStatusDocument,
-    PrincipalDocument,
+    validate_principal_document, validate_principal_resolution, DelegationCredential,
+    DelegationEventsResponse, DelegationQueryRequest, DelegationQueryResponse,
+    DelegationServiceDiscovery, DelegationStatusDocument, PrincipalDocument,
 };
 use crate::discourse::{
     AgentStatus, AgentStatusGetResponse, AgentStatusInput, AgentStatusListResponse,
@@ -477,16 +477,34 @@ impl DelegationClient {
             .await?)
     }
 
+    /// Resolves a principal document per Agent Delegation Section 5.3. A
+    /// document is authoritative only when read at its own `id`, so one served
+    /// elsewhere (an alias hosting a copy rather than redirecting) is discarded
+    /// and `document.id` is resolved once more.
     pub async fn principal(&self, principal_url: Option<&str>) -> Result<PrincipalDocument> {
-        Ok(self
+        let start = principal_url.unwrap_or_else(|| self.base_url.trim_end_matches('/'));
+        let (document, resolved) = self.read_principal(start).await?;
+        if document.id == resolved {
+            return Ok(document);
+        }
+        let canonical_id = document.id.clone();
+        let (canonical, resolved) = self.read_principal(&canonical_id).await?;
+        validate_principal_resolution(&canonical, &resolved)?;
+        Ok(canonical)
+    }
+
+    async fn read_principal(&self, url: &str) -> Result<(PrincipalDocument, String)> {
+        let response = self
             .inner
-            .get(principal_url.unwrap_or_else(|| self.base_url.trim_end_matches('/')))
+            .get(url)
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await?
-            .error_for_status()?
-            .json()
-            .await?)
+            .error_for_status()?;
+        let resolved = response.url().to_string();
+        let document: PrincipalDocument = response.json().await?;
+        validate_principal_document(&document)?;
+        Ok((document, resolved))
     }
 
     pub async fn delegation(&self, delegation_id: &str) -> Result<DelegationCredential> {
@@ -537,11 +555,15 @@ impl DelegationClient {
             .await?)
     }
 
+    /// Public queries are existence checks and carry both `subject` and
+    /// `principal_id`. Pass `allow_enumeration` only for a request the service
+    /// has authorized to enumerate one side.
     pub async fn query_delegations(
         &self,
         request: &DelegationQueryRequest,
+        allow_enumeration: bool,
     ) -> Result<DelegationQueryResponse> {
-        crate::delegation::validate_delegation_query_request(request)?;
+        crate::delegation::validate_delegation_query_request(request, allow_enumeration)?;
         Ok(self
             .inner
             .post(self.url("/v1/delegations/query"))

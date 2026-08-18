@@ -35,6 +35,9 @@ pub struct ProfileLink {
     pub rel: ProfileLinkRel,
 }
 
+/// Discovery hint only. It carries no service URLs: the publishing agent is the
+/// party whose claim is checked, so clients resolve the principal document at
+/// `principal.id` and query the service it names.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ProfileDelegationHint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,9 +47,6 @@ pub struct ProfileDelegationHint {
     pub relationship: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scopes: Vec<String>,
-    pub credential_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -223,16 +223,14 @@ mod tests {
             rel: ProfileLinkRel::Homepage,
         });
         payload.delegations.push(ProfileDelegationHint {
-            id: None,
+            id: Some("del_1".to_owned()),
             principal: PrincipalDescriptor {
-                id: "https://al.ink/yan".to_owned(),
+                id: "https://api.al.ink/d9c6a99cne5g00a6scn0".to_owned(),
                 kind: Some("person".to_owned()),
                 name: Some("Yan".to_owned()),
             },
             relationship: Some("primary_delegate".to_owned()),
             scopes: vec!["inbox.screen".to_owned()],
-            credential_url: "https://al.ink/v1/delegations/del_1".to_owned(),
-            status_url: None,
         });
         let expected_extra = payload.extra.clone();
         let event = profile_update_event(signer.agent_id(), 1_779_753_600_000, 1, payload);

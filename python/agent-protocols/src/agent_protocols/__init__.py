@@ -46,12 +46,14 @@ from .delegation import (
     DELEGATION_REVOKE,
     delegation_grant_event,
     delegation_revoke_event,
+    is_principal_alias,
     materialize_delegation_credential,
     validate_delegation_envelope,
     validate_delegation_grant_payload,
     validate_delegation_query_request,
     validate_delegation_revoke_payload,
     validate_principal_document,
+    validate_principal_resolution,
 )
 
 __all__ = [
@@ -77,6 +79,7 @@ __all__ = [
     "event_hash_bytes",
     "latest_profile_update",
     "materialize_profile",
+    "is_principal_alias",
     "materialize_delegation_credential",
     "profile_update_event",
     "public_key_bytes",
@@ -92,6 +95,7 @@ __all__ = [
     "validate_delegation_revoke_payload",
     "validate_nonce",
     "validate_principal_document",
+    "validate_principal_resolution",
     "validate_profile_update",
     "verify_envelope",
     "verify_event_hash",

@@ -461,20 +461,26 @@ fn discourse_client_round_trips_every_endpoint() {
 
 #[test]
 fn delegation_client_round_trips_every_endpoint() {
+    const PRINCIPAL_ID: &str = "https://api.al.ink/d9c6a99cne5g00a6scn0";
     let server = MockServer::start();
     let aid = sample_agent_id();
     let credential_body = format!(
-        r#"{{"id":"del_1","protocol":"agent-delegation/1.0","principal":{{"id":"https://al.ink/yan"}},"controller":"{aid}","subject":"{aid}","scopes":["inbox.screen"],"status":"active","updated_at":1,"event_id":"e"}}"#
+        r#"{{"id":"del_1","protocol":"agent-delegation/1.0","principal":{{"id":"{PRINCIPAL_ID}"}},"controller":"{aid}","subject":"{aid}","scopes":["inbox.screen"],"status":"active","updated_at":1,"event_id":"e"}}"#
     );
     let status_body = r#"{"id":"del_1","status":"active","checked_at":2,"event_id":"e"}"#;
 
     server.enqueue(
         200,
-        r#"{"protocol":"agent-delegation/1.0","service":"https://al.ink","endpoints":{"delegations":"https://al.ink/v1/delegations"}}"#,
+        r#"{"protocol":"agent-delegation/1.0","service":"https://api.al.ink","endpoints":{"delegations":"https://api.al.ink/v1/delegations"}}"#,
     );
+    // Served at its own `id` so resolution stops here instead of following the
+    // document off to a real network host.
     server.enqueue(
         200,
-        format!(r#"{{"id":"https://al.ink/yan","controllers":["{aid}"]}}"#),
+        format!(
+            r#"{{"id":"{}/yan","controllers":["{aid}"]}}"#,
+            server.base_url
+        ),
     );
     server.enqueue(200, credential_body);
     server.enqueue(200, status_body);
@@ -490,11 +496,13 @@ fn delegation_client_round_trips_every_endpoint() {
 
         let discovery = client.protocol().await.unwrap();
         assert_eq!(discovery.protocol, "agent-delegation/1.0");
-        let principal = client
+        // Principal identifiers must be HTTPS, so a plain-HTTP mock origin can
+        // never publish a valid principal document.
+        let err = client
             .principal(Some(&format!("{}/yan", server.base_url)))
             .await
-            .unwrap();
-        assert_eq!(principal.controllers, vec![agent_id.clone()]);
+            .unwrap_err();
+        assert!(err.to_string().contains("HTTPS"), "{err}");
         let credential = client.delegation("del_1").await.unwrap();
         assert_eq!(credential.id, "del_1");
         let status = client.delegation_status("del_1").await.unwrap();
@@ -509,7 +517,7 @@ fn delegation_client_round_trips_every_endpoint() {
                 1,
                 DelegationRevokePayload {
                     id: "del_1".to_owned(),
-                    principal_id: "https://al.ink/yan".to_owned(),
+                    principal_id: PRINCIPAL_ID.to_owned(),
                     reason: None,
                 },
             ))
@@ -517,12 +525,16 @@ fn delegation_client_round_trips_every_endpoint() {
         let response = client.submit_delegation_event(&envelope).await.unwrap();
         assert_eq!(response["status"], "active");
         let query = client
-            .query_delegations(&DelegationQueryRequest {
-                subject: Some(agent_id),
-                status: Some(DelegationStatus::Active),
-                limit: Some(20),
-                ..DelegationQueryRequest::default()
-            })
+            .query_delegations(
+                &DelegationQueryRequest {
+                    subject: Some(agent_id),
+                    principal_id: Some(PRINCIPAL_ID.to_owned()),
+                    status: Some(DelegationStatus::Active),
+                    limit: Some(20),
+                    ..DelegationQueryRequest::default()
+                },
+                false,
+            )
             .await
             .unwrap();
         assert!(query.result.is_empty());

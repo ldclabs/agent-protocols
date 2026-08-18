@@ -30,13 +30,16 @@ export interface ProfileLink {
   rel: ProfileLinkRel;
 }
 
+/**
+ * Discovery hint only. It carries no service URLs: the publishing agent is the
+ * party whose claim is checked, so clients resolve the principal document at
+ * `principal.id` and query the service it names.
+ */
 export interface ProfileDelegationHint {
   id?: string;
   principal: PrincipalDescriptor;
   relationship?: string;
   scopes?: string[];
-  credential_url: string;
-  status_url?: string;
 }
 
 export interface ProfileUpdatePayload {

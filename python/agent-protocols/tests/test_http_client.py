@@ -164,10 +164,16 @@ class DiscourseClientTests(unittest.TestCase):
         self.assertEqual(session.calls[4][3], {"state": "idle", "expires_at": 2})
 
 
+PRINCIPAL_ID = "https://api.al.ink/d9c6a99cne5g00a6scn0"
+PRINCIPAL_DOCUMENT = {"id": PRINCIPAL_ID, "controllers": [AGENT_ID], "aliases": ["https://al.ink/yan"]}
+
+
 class DelegationClientTests(unittest.TestCase):
     def test_every_endpoint_uses_expected_method_and_path(self):
-        session = FakeSession([FakeResponse({"ok": True}) for _ in range(7)])
-        client = DelegationClient("https://al.ink/", session=session)
+        responses = [FakeResponse({"ok": True}) for _ in range(7)]
+        responses[1] = FakeResponse(PRINCIPAL_DOCUMENT)
+        session = FakeSession(responses)
+        client = DelegationClient("https://api.al.ink/", session=session)
         envelope = {
             "hash": "h",
             "event": {
@@ -176,29 +182,52 @@ class DelegationClientTests(unittest.TestCase):
                 "actor": AGENT_ID,
                 "created_at": 1,
                 "nonce": 1,
-                "payload": {"id": "del_1", "principal_id": "https://al.ink/yan"},
+                "payload": {"id": "del_1", "principal_id": PRINCIPAL_ID},
             },
             "signature": "s",
         }
 
         client.protocol()
-        client.principal("https://al.ink/yan")
+        client.principal(PRINCIPAL_ID)
         client.delegation("del_1")
         client.delegation_status("del_1")
         client.delegation_events("del_1")
         client.submit_delegation_event(envelope)
-        client.query_delegations({"subject": AGENT_ID, "status": "active", "limit": 20})
+        client.query_delegations(
+            {"subject": AGENT_ID, "principal_id": PRINCIPAL_ID, "status": "active", "limit": 20}
+        )
 
         urls = [call[1] for call in session.calls]
-        self.assertEqual(urls[0], "https://al.ink/.well-known/agent-delegation")
-        self.assertEqual(urls[1], "https://al.ink/yan")
+        self.assertEqual(urls[0], "https://api.al.ink/.well-known/agent-delegation")
+        self.assertEqual(urls[1], PRINCIPAL_ID)
         self.assertEqual(session.calls[1][2], {"Accept": "application/json"})
-        self.assertEqual(urls[2], "https://al.ink/v1/delegations/del_1")
-        self.assertEqual(urls[3], "https://al.ink/v1/delegations/del_1/status")
-        self.assertEqual(urls[4], "https://al.ink/v1/delegations/del_1/events")
-        self.assertEqual((session.calls[5][0], urls[5]), ("POST", "https://al.ink/v1/delegations"))
-        self.assertEqual((session.calls[6][0], urls[6]), ("POST", "https://al.ink/v1/delegations/query"))
+        self.assertEqual(urls[2], "https://api.al.ink/v1/delegations/del_1")
+        self.assertEqual(urls[3], "https://api.al.ink/v1/delegations/del_1/status")
+        self.assertEqual(urls[4], "https://api.al.ink/v1/delegations/del_1/events")
+        self.assertEqual((session.calls[5][0], urls[5]), ("POST", "https://api.al.ink/v1/delegations"))
+        self.assertEqual(
+            (session.calls[6][0], urls[6]), ("POST", "https://api.al.ink/v1/delegations/query")
+        )
         self.assertEqual(session.calls[6][3]["status"], "active")
+
+    def test_principal_served_away_from_its_id_is_re_resolved(self):
+        session = FakeSession([FakeResponse(PRINCIPAL_DOCUMENT), FakeResponse(PRINCIPAL_DOCUMENT)])
+        client = DelegationClient("https://api.al.ink/", session=session)
+
+        # The alias hosts a copy instead of redirecting, so the canonical id is read.
+        resolved = client.principal("https://al.ink/yan")
+
+        self.assertEqual(resolved["id"], PRINCIPAL_ID)
+        self.assertEqual([call[1] for call in session.calls], ["https://al.ink/yan", PRINCIPAL_ID])
+
+        impostor = FakeSession(
+            [
+                FakeResponse(PRINCIPAL_DOCUMENT),
+                FakeResponse({"id": "https://impostor.example.com/yan", "controllers": [AGENT_ID]}),
+            ]
+        )
+        with self.assertRaisesRegex(Exception, "was served at"):
+            DelegationClient("https://api.al.ink/", session=impostor).principal("https://al.ink/yan")
 
 
 class HelperTests(unittest.TestCase):

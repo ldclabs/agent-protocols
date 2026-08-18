@@ -29,6 +29,7 @@ function makeFetch(responses: QueuedResponse[] = []) {
     return {
       ok: queued.ok ?? true,
       status: queued.status ?? 200,
+      url: String(url),
       json: async () => queued.body,
       text: async () =>
         typeof queued.body === "string"
@@ -40,6 +41,7 @@ function makeFetch(responses: QueuedResponse[] = []) {
 }
 
 const AGENT_ID = AgentSigner.fromSeed(new Uint8Array(32).fill(1)).agentId();
+const PRINCIPAL_ID = "https://api.al.ink/d9c6a99cne5g00a6scn0";
 
 test("ProfileClient calls every endpoint with the right method and path", async () => {
   const { fetchImpl, calls } = makeFetch([
@@ -183,16 +185,16 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
     {
       body: {
         protocol: "agent-delegation/1.0",
-        service: "https://al.ink",
-        endpoints: { delegations: "https://al.ink/v1/delegations" },
+        service: "https://api.al.ink",
+        endpoints: { delegations: "https://api.al.ink/v1/delegations" },
       },
     },
-    { body: { id: "https://al.ink/yan", controllers: [AGENT_ID] } },
+    { body: { id: PRINCIPAL_ID, controllers: [AGENT_ID] } },
     {
       body: {
         id: "del_1",
         protocol: "agent-delegation/1.0",
-        principal: { id: "https://al.ink/yan" },
+        principal: { id: PRINCIPAL_ID },
         controller: AGENT_ID,
         subject: AGENT_ID,
         scopes: ["inbox.screen"],
@@ -206,10 +208,10 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
     { body: { id: "del_1", status: "revoked", checked_at: 3, event_id: "e2" } },
     { body: { result: [] } },
   ]);
-  const client = new DelegationClient("https://al.ink/", fetchImpl);
+  const client = new DelegationClient("https://api.al.ink/", fetchImpl);
 
   await client.protocol();
-  await client.principal("https://al.ink/yan");
+  await client.principal(PRINCIPAL_ID);
   await client.delegation("del_1");
   await client.delegationStatus("del_1");
   await client.delegationEvents("del_1");
@@ -221,22 +223,53 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
       actor: AGENT_ID,
       created_at: 1,
       nonce: 1,
-      payload: { id: "del_1", principal_id: "https://al.ink/yan" },
+      payload: { id: "del_1", principal_id: PRINCIPAL_ID },
     },
     signature: "s",
   });
-  await client.queryDelegations({ subject: AGENT_ID, status: "active", limit: 20 });
+  await client.queryDelegations({
+    subject: AGENT_ID,
+    principal_id: PRINCIPAL_ID,
+    status: "active",
+    limit: 20,
+  });
 
-  assert.equal(calls[0].url, "https://al.ink/.well-known/agent-delegation");
-  assert.equal(calls[1].url, "https://al.ink/yan");
+  assert.equal(calls[0].url, "https://api.al.ink/.well-known/agent-delegation");
+  assert.equal(calls[1].url, PRINCIPAL_ID);
   assert.deepEqual(calls[1].init?.headers, { accept: "application/json" });
-  assert.equal(calls[2].url, "https://al.ink/v1/delegations/del_1");
-  assert.equal(calls[3].url, "https://al.ink/v1/delegations/del_1/status");
-  assert.equal(calls[4].url, "https://al.ink/v1/delegations/del_1/events");
-  assert.equal(calls[5].url, "https://al.ink/v1/delegations");
+  assert.equal(calls[2].url, "https://api.al.ink/v1/delegations/del_1");
+  assert.equal(calls[3].url, "https://api.al.ink/v1/delegations/del_1/status");
+  assert.equal(calls[4].url, "https://api.al.ink/v1/delegations/del_1/events");
+  assert.equal(calls[5].url, "https://api.al.ink/v1/delegations");
   assert.equal(calls[5].init?.method, "POST");
-  assert.equal(calls[6].url, "https://al.ink/v1/delegations/query");
+  assert.equal(calls[6].url, "https://api.al.ink/v1/delegations/query");
   assert.match(String(calls[6].init?.body), /inbox|active|limit/);
+});
+
+test("DelegationClient re-resolves a principal document served away from its id", async () => {
+  const document = { id: PRINCIPAL_ID, controllers: [AGENT_ID], aliases: ["https://al.ink/yan"] };
+  const { fetchImpl, calls } = makeFetch([{ body: document }, { body: document }]);
+  const client = new DelegationClient("https://api.al.ink/", fetchImpl);
+
+  // The alias hosts a copy instead of redirecting, so the canonical id is read.
+  const resolved = await client.principal("https://al.ink/yan");
+
+  assert.equal(resolved.id, PRINCIPAL_ID);
+  assert.equal(calls[0].url, "https://al.ink/yan");
+  assert.equal(calls[1].url, PRINCIPAL_ID);
+
+  // A copy that never leads to an authoritative read is rejected.
+  const impostor = makeFetch([
+    { body: { id: PRINCIPAL_ID, controllers: [AGENT_ID] } },
+    { body: { id: "https://impostor.example.com/yan", controllers: [AGENT_ID] } },
+  ]);
+  await assert.rejects(
+    () =>
+      new DelegationClient("https://api.al.ink/", impostor.fetchImpl).principal(
+        "https://al.ink/yan",
+      ),
+    /was served at/,
+  );
 });
 
 test("DiscourseClient supports public rooms, my rooms, and agent status endpoints", async () => {

@@ -12,7 +12,7 @@ The crate is intentionally framework-neutral:
 
 - `identity`: `did:agent:` encoding, JCS canonicalization, event hashes, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
 - `profile`: `profile.update` payloads, Profile documents, delegation discovery hints, discovery responses, validation, materialization.
-- `delegation`: Agent Delegation principal documents, grant/revoke payloads, credential documents, status/query shapes, validation, and materialization.
+- `delegation`: Agent Delegation principal documents and alias resolution, grant/revoke payloads, credential documents, status/query shapes, validation, and materialization.
 - `discourse`: ADP kernel payloads, the room type system (type definitions, pack imports, type registry, JSON Schema payload validation), join request types, roles, room states, protocol discovery, archive manifests, room-path checks, kind-based permission and state helpers.
 - `http_client`: optional `reqwest` clients behind the `http-client` feature.
 - `local_connector`: optional Local Agent Protocols MCP connector core behind the `local-connector` feature.

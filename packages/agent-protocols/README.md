@@ -6,7 +6,7 @@ TypeScript SDK for the draft Agent Identity, Agent Profile, Agent Delegation, an
 
 - `identity`: `did:agent:` encoding, JCS canonicalization, event hashes, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
 - `profile`: `profile.update` payloads, Profile documents, delegation discovery hints, validation, materialization.
-- `delegation`: Agent Delegation principal documents, grant/revoke payloads, credential documents, status/query shapes, validation, and materialization.
+- `delegation`: Agent Delegation principal documents and alias resolution, grant/revoke payloads, credential documents, status/query shapes, validation, and materialization.
 - `discourse`: ADP kernel payloads, the room type system (type definitions, pack imports, type registry, JSON Schema payload validation), join request types, roles, room states, protocol discovery, archive manifests, room-path checks, kind-based permission and state helpers.
 - `http-client`: fetch-based Profile, Delegation, and Discourse clients.
 - `local-connector`: Local Agent Protocols MCP connector tool names, resource URIs, structured view types, and timeline/sync helpers.

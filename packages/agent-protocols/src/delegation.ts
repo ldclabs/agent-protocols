@@ -37,9 +37,12 @@ export interface PrincipalDescriptor {
 export interface PrincipalDocument extends PrincipalDescriptor {
   description?: string;
   avatar_url?: string;
+  /** Other HTTPS URLs that lead to this principal. Aliases are not identities. */
+  aliases?: string[];
   links?: PrincipalLink[];
   controllers: AgentId[];
-  delegations_url?: string;
+  /** Delegation query endpoint for this principal; answers existence checks. */
+  delegation_query_url?: string;
   updated_at?: number;
   extra?: Record<string, unknown>;
 }
@@ -77,7 +80,6 @@ export interface DelegationCredential {
   not_before?: number;
   expires_at?: number;
   status: DelegationStatus;
-  status_url?: string;
   updated_at: number;
   event_id: string;
 }
@@ -105,6 +107,7 @@ export interface DelegationServiceDiscovery {
 export interface DelegationQueryRequest {
   subject?: AgentId;
   principal_id?: string;
+  id?: string;
   status?: DelegationStatus;
   limit?: number;
 }
@@ -115,7 +118,6 @@ export interface DelegationSummary {
   principal: PrincipalDescriptor;
   scopes?: string[];
   status: DelegationStatus;
-  status_url?: string;
 }
 
 export interface DelegationQueryResponse {
@@ -167,9 +169,45 @@ export function validatePrincipalDocument(document: PrincipalDocument): void {
     );
   }
   for (const controller of document.controllers) validateAgentId(controller);
-  if (document.delegations_url !== undefined) {
-    validateHttpsUrl(document.delegations_url, "delegations_url");
+  if (document.aliases !== undefined) {
+    if (!Array.isArray(document.aliases)) {
+      throw protocolError("invalid_principal", "aliases must be an array");
+    }
+    for (const alias of document.aliases) validateHttpsUrl(alias, "alias");
   }
+  if (document.delegation_query_url !== undefined) {
+    validateHttpsUrl(document.delegation_query_url, "delegation_query_url");
+  }
+}
+
+/**
+ * Checks the authoritative-read rule of Agent Delegation Section 5.3: a
+ * principal document binds controller keys only when it is read at its own
+ * `id`. A document served anywhere else is a copy; its `controllers` MUST be
+ * discarded and `document.id` resolved instead.
+ */
+export function validatePrincipalResolution(
+  document: PrincipalDocument,
+  resolvedUrl: string,
+): void {
+  if (document.id !== resolvedUrl) {
+    throw protocolError(
+      "invalid_principal",
+      `principal document id ${document.id} was served at ${resolvedUrl}`,
+    );
+  }
+}
+
+/**
+ * Reports whether `url` is an alias the principal itself acknowledges. Any
+ * origin can redirect to any principal, so an alias MUST NOT be shown as a
+ * name for the principal unless it is listed here.
+ */
+export function isPrincipalAlias(
+  document: PrincipalDocument,
+  url: string,
+): boolean {
+  return document.aliases?.includes(url) ?? false;
 }
 
 export function validateDelegationGrantPayload(
@@ -206,16 +244,27 @@ export function validateDelegationGrantPayload(
 }
 
 /**
- * A delegation query MUST include at least one of `subject` or
- * `principal_id`. `limit` defaults to 20; services SHOULD cap it at 100.
+ * A public delegation query is an existence check and MUST include both
+ * `subject` and `principal_id`. Omitting either side makes it an enumeration
+ * query, which services MUST authorize before answering; pass
+ * `allowEnumeration` when building such an authorized request. `limit`
+ * defaults to 20; services SHOULD cap it at 100.
  */
 export function validateDelegationQueryRequest(
   request: DelegationQueryRequest,
+  options: { allowEnumeration?: boolean } = {},
 ): void {
-  if (request.subject === undefined && request.principal_id === undefined) {
+  if (options.allowEnumeration) {
+    if (request.subject === undefined && request.principal_id === undefined) {
+      throw protocolError(
+        "invalid_delegation",
+        "query must include at least one of subject or principal_id",
+      );
+    }
+  } else if (request.subject === undefined || request.principal_id === undefined) {
     throw protocolError(
       "invalid_delegation",
-      "query must include at least one of subject or principal_id",
+      "public query must include both subject and principal_id",
     );
   }
   if (request.subject !== undefined) validateAgentId(request.subject);
@@ -271,7 +320,6 @@ export function materializeDelegationCredential(
   envelope: Envelope<DelegationGrantPayload>,
   options: {
     status?: DelegationStatus;
-    statusUrl?: string;
     updatedAt?: number;
   } = {},
 ): DelegationCredential {
@@ -295,7 +343,6 @@ export function materializeDelegationCredential(
     not_before: payload.not_before,
     expires_at: payload.expires_at,
     status: options.status ?? "active",
-    status_url: options.statusUrl,
     updated_at: options.updatedAt ?? envelope.event.created_at,
     event_id: envelope.hash,
   };

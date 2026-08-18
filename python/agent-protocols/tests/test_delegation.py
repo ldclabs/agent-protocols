@@ -21,7 +21,7 @@ class DelegationTests(unittest.TestCase):
         payload = {
             "id": "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
             "principal": {
-                "id": "https://al.ink/yan",
+                "id": "https://api.al.ink/d9c6a99cne5g00a6scn0",
                 "type": "person",
                 "name": "Yan",
             },
@@ -37,10 +37,7 @@ class DelegationTests(unittest.TestCase):
         )
 
         validate_delegation_envelope(envelope)
-        credential = materialize_delegation_credential(
-            envelope,
-            status_url="https://al.ink/v1/delegations/del/status",
-        )
+        credential = materialize_delegation_credential(envelope)
 
         self.assertEqual(envelope["event"]["type"], DELEGATION_GRANT)
         self.assertEqual(credential["protocol"], DELEGATION_PROTOCOL)
@@ -58,7 +55,7 @@ class DelegationTests(unittest.TestCase):
                 2,
                 {
                     "id": "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
-                    "principal_id": "https://al.ink/yan",
+                    "principal_id": "https://api.al.ink/d9c6a99cne5g00a6scn0",
                     "reason": "rotated_primary_agent",
                 },
             )
@@ -82,7 +79,8 @@ class DelegationTests(unittest.TestCase):
             {
                 "id": "https://profiles.example.com/org/acme",
                 "controllers": [controller.agent_id()],
-                "delegations_url": "https://profiles.example.com/v1/delegations/query",
+                "aliases": ["https://profiles.example.com/acme"],
+                "delegation_query_url": "https://profiles.example.com/v1/delegations/query",
             }
         )
         with self.assertRaises(Exception):
@@ -133,7 +131,7 @@ class Revision20260704DelegationTests(unittest.TestCase):
         subject = AgentSigner.from_seed(bytes([46]) * 32).agent_id()
         base = {
             "id": "del_1",
-            "principal": {"id": "https://al.ink/yan"},
+            "principal": {"id": "https://api.al.ink/d9c6a99cne5g00a6scn0"},
             "subject": subject,
             "scopes": ["inbox.screen"],
         }
@@ -152,15 +150,51 @@ class Revision20260704DelegationTests(unittest.TestCase):
             {**base, "not_before": 500, "expires_at": 1500}, 1000
         )
 
-    def test_delegation_queries_require_subject_or_principal(self):
+    def test_public_delegation_queries_carry_both_subject_and_principal(self):
         from agent_protocols.delegation import validate_delegation_query_request
         from agent_protocols.errors import AgentProtocolError
         from agent_protocols.identity import AgentSigner
 
         subject = AgentSigner.from_seed(bytes([47]) * 32).agent_id()
-        validate_delegation_query_request({"subject": subject})
-        validate_delegation_query_request({"principal_id": "https://al.ink/yan", "limit": 20})
+        principal_id = "https://api.al.ink/d9c6a99cne5g00a6scn0"
+        validate_delegation_query_request(
+            {"subject": subject, "principal_id": principal_id, "limit": 20}
+        )
+
+        # Enumerating one side is not a public query.
+        for request in ({"subject": subject}, {"principal_id": principal_id}):
+            with self.assertRaisesRegex(
+                AgentProtocolError, "must include both subject and principal_id"
+            ):
+                validate_delegation_query_request(request)
+            validate_delegation_query_request(request, allow_enumeration=True)
+
         with self.assertRaisesRegex(AgentProtocolError, "at least one of subject or principal_id"):
-            validate_delegation_query_request({"status": "active"})
+            validate_delegation_query_request({"status": "active"}, allow_enumeration=True)
         with self.assertRaisesRegex(AgentProtocolError, "positive integer"):
-            validate_delegation_query_request({"subject": subject, "limit": 0})
+            validate_delegation_query_request(
+                {"subject": subject, "principal_id": principal_id, "limit": 0}
+            )
+
+    def test_principal_documents_bind_controllers_only_at_their_own_id(self):
+        from agent_protocols.delegation import (
+            is_principal_alias,
+            validate_principal_resolution,
+        )
+        from agent_protocols.errors import AgentProtocolError
+        from agent_protocols.identity import AgentSigner
+
+        document = {
+            "id": "https://api.al.ink/d9c6a99cne5g00a6scn0",
+            "controllers": [AgentSigner.from_seed(bytes([48]) * 32).agent_id()],
+            "aliases": ["https://al.ink/yan"],
+        }
+
+        validate_principal_resolution(document, "https://api.al.ink/d9c6a99cne5g00a6scn0")
+        # A copy served away from its identifier carries no authority.
+        with self.assertRaisesRegex(AgentProtocolError, "was served at"):
+            validate_principal_resolution(document, "https://impostor.example.com/yan")
+
+        self.assertTrue(is_principal_alias(document, "https://al.ink/yan"))
+        self.assertFalse(is_principal_alias(document, "https://impostor.example.com/yan"))
+        self.assertFalse(is_principal_alias({"id": "https://x.example.com"}, "https://x.example.com"))

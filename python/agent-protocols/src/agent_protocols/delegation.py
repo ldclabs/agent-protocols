@@ -44,8 +44,34 @@ def validate_principal_document(document: PrincipalDocument) -> None:
         )
     for controller in controllers:
         validate_agent_id(controller)
-    if document.get("delegations_url") is not None:
-        _validate_https_url(document["delegations_url"], "delegations_url")
+    aliases = document.get("aliases")
+    if aliases is not None:
+        if not isinstance(aliases, list):
+            raise AgentProtocolError("invalid_principal", "aliases must be an array")
+        for alias in aliases:
+            _validate_https_url(alias, "alias")
+    if document.get("delegation_query_url") is not None:
+        _validate_https_url(document["delegation_query_url"], "delegation_query_url")
+
+
+def validate_principal_resolution(document: PrincipalDocument, resolved_url: str) -> None:
+    """Checks the authoritative-read rule of Agent Delegation Section 5.3: a
+    principal document binds controller keys only when it is read at its own
+    `id`. A document served anywhere else is a copy; its `controllers` must be
+    discarded and `document["id"]` resolved instead."""
+    if document.get("id") != resolved_url:
+        raise AgentProtocolError(
+            "invalid_principal",
+            f"principal document id {document.get('id')} was served at {resolved_url}",
+        )
+
+
+def is_principal_alias(document: PrincipalDocument, url: str) -> bool:
+    """Reports whether `url` is an alias the principal itself acknowledges. Any
+    origin can redirect to any principal, so an alias must not be shown as a
+    name for the principal unless it is listed here."""
+    aliases = document.get("aliases")
+    return isinstance(aliases, list) and url in aliases
 
 
 def validate_delegation_grant_payload(
@@ -78,15 +104,28 @@ def validate_delegation_grant_payload(
             )
 
 
-def validate_delegation_query_request(request: dict[str, Any]) -> None:
-    """A delegation query MUST include at least one of `subject` or
-    `principal_id`. `limit` defaults to 20; services SHOULD cap it at 100."""
+def validate_delegation_query_request(
+    request: dict[str, Any],
+    *,
+    allow_enumeration: bool = False,
+) -> None:
+    """A public delegation query is an existence check and must include both
+    `subject` and `principal_id`. Omitting either side makes it an enumeration
+    query, which services must authorize before answering; pass
+    `allow_enumeration` when building such an authorized request. `limit`
+    defaults to 20; services SHOULD cap it at 100."""
     subject = request.get("subject")
     principal_id = request.get("principal_id")
-    if subject is None and principal_id is None:
+    if allow_enumeration:
+        if subject is None and principal_id is None:
+            raise AgentProtocolError(
+                "invalid_delegation",
+                "query must include at least one of subject or principal_id",
+            )
+    elif subject is None or principal_id is None:
         raise AgentProtocolError(
             "invalid_delegation",
-            "query must include at least one of subject or principal_id",
+            "public query must include both subject and principal_id",
         )
     if subject is not None:
         validate_agent_id(subject)
@@ -125,7 +164,6 @@ def materialize_delegation_credential(
     envelope: Envelope,
     *,
     status: str = "active",
-    status_url: str | None = None,
     updated_at: int | None = None,
 ) -> DelegationCredential:
     validate_delegation_envelope(envelope)
@@ -148,7 +186,6 @@ def materialize_delegation_credential(
         "not_before": payload.get("not_before"),
         "expires_at": payload.get("expires_at"),
         "status": status,
-        "status_url": status_url,
         "updated_at": updated_at if updated_at is not None else event["created_at"],
         "event_id": envelope["hash"],
     }
