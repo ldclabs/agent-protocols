@@ -52,6 +52,11 @@ export const RESOURCE_ROOM_AGENT_STATUS_SUFFIX = "/agent-status";
 export type LocalConnectorToolName =
   | typeof TOOL_IDENTITY_CURRENT
   | typeof TOOL_HOSTS_LIST
+  | typeof TOOL_PRINCIPAL_RESOLVE
+  | typeof TOOL_DELEGATION_CHECK
+  | typeof TOOL_DELEGATIONS_LIST
+  | typeof TOOL_DELEGATION_GRANT
+  | typeof TOOL_DELEGATION_REVOKE
   | typeof TOOL_ROOMS_SEARCH
   | typeof TOOL_ROOMS_LIST
   | typeof TOOL_ROOM_OPEN
