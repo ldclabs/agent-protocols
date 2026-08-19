@@ -231,14 +231,29 @@ class DelegationClient:
     def query_delegations(
         self,
         request: dict[str, Any],
-        *,
-        allow_enumeration: bool = False,
+        jwt: str | None = None,
     ) -> dict[str, Any]:
         """Public queries are existence checks and carry both `subject` and
-        `principal_id`. Pass `allow_enumeration` only for a request the service
-        has authorized to enumerate one side."""
-        validate_delegation_query_request(request, allow_enumeration=allow_enumeration)
-        return self._post("/v1/delegations/query", request)
+        `principal_id`. Passing a request JWT authorizes an enumeration query,
+        which a service must otherwise refuse."""
+        return self.query_delegations_at(
+            self.base_url + "/v1/delegations/query", request, jwt
+        )
+
+    def query_delegations_at(
+        self,
+        query_url: str,
+        request: dict[str, Any],
+        jwt: str | None = None,
+    ) -> dict[str, Any]:
+        """Queries the endpoint a principal document names in its
+        `delegation_query_url`. That is how a relying party reaches the
+        authoritative service for a principal without trusting a URL supplied
+        by whoever presented the credential."""
+        validate_delegation_query_request(request, allow_enumeration=jwt is not None)
+        response = self.session.post(query_url, json=request, headers=_auth_headers(jwt))
+        response.raise_for_status()
+        return response.json()
 
     def _read_principal(self, url: str) -> tuple[dict[str, Any], str]:
         response = self.session.get(url, headers={"Accept": "application/json"})

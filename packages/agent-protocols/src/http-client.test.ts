@@ -246,6 +246,31 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
   assert.match(String(calls[6].init?.body), /inbox|active|limit/);
 });
 
+test("delegation enumeration requires a request JWT and queries the principal's endpoint", async () => {
+  const { fetchImpl, calls } = makeFetch([{ body: { result: [] } }, { body: { result: [] } }]);
+  const client = new DelegationClient("https://api.al.ink/", fetchImpl);
+
+  // Enumerating one side without authorization never leaves the client.
+  await assert.rejects(
+    () => client.queryDelegations({ subject: AGENT_ID }),
+    /must include both subject and principal_id/,
+  );
+
+  await client.queryDelegations({ subject: AGENT_ID }, "jwt-enumerate");
+  assert.equal(calls[0].url, "https://api.al.ink/v1/delegations/query");
+  assert.equal(
+    (calls[0].init?.headers as Record<string, string>).authorization,
+    "Bearer jwt-enumerate",
+  );
+
+  // A principal-anchored query goes to the endpoint the principal names.
+  await client.queryDelegationsAt("https://delegations.example.com/query", {
+    subject: AGENT_ID,
+    principal_id: PRINCIPAL_ID,
+  });
+  assert.equal(calls[1].url, "https://delegations.example.com/query");
+});
+
 test("DelegationClient re-resolves a principal document served away from its id", async () => {
   const document = { id: PRINCIPAL_ID, controllers: [AGENT_ID], aliases: ["https://al.ink/yan"] };
   const { fetchImpl, calls } = makeFetch([{ body: document }, { body: document }]);

@@ -43,7 +43,20 @@ import {
   unixTimeSecs,
   withMentions,
 } from "../identity.js";
-import { DiscourseClient, FetchLike, ProfileClient } from "../http-client.js";
+import {
+  DelegationClient,
+  DiscourseClient,
+  FetchLike,
+  ProfileClient,
+} from "../http-client.js";
+import {
+  DelegationGrantPayload,
+  PrincipalDocument,
+  delegationGrantEvent,
+  delegationRevokeEvent,
+  isPrincipalAlias,
+  validateDelegationGrantPayload,
+} from "../delegation.js";
 import {
   AgentProfile,
   ProfileUpdatePayload,
@@ -67,6 +80,11 @@ import {
   TOOL_JOIN_REQUEST_REVIEW,
   TOOL_PROFILE_UPDATE,
   TOOL_ROOMS_LIST,
+  TOOL_PRINCIPAL_RESOLVE,
+  TOOL_DELEGATION_CHECK,
+  TOOL_DELEGATIONS_LIST,
+  TOOL_DELEGATION_GRANT,
+  TOOL_DELEGATION_REVOKE,
   TOOL_ROOMS_SEARCH,
   TOOL_ROOM_CREATE,
   TOOL_ROOM_JOIN,
@@ -118,6 +136,11 @@ import {
   RoomTimelineInput,
   RoomUnreadInput,
   RoomsListInput,
+  PrincipalResolveInput,
+  DelegationCheckInput,
+  DelegationsListInput,
+  DelegationGrantInput,
+  DelegationRevokeInput,
   RoomsSearchInput,
 } from "./inputs.js";
 import {
@@ -422,6 +445,16 @@ export class LocalConnector {
         return this.identityCurrent();
       case TOOL_HOSTS_LIST:
         return this.hostsList();
+      case TOOL_PRINCIPAL_RESOLVE:
+        return this.principalResolve(input as PrincipalResolveInput);
+      case TOOL_DELEGATION_CHECK:
+        return this.delegationCheck(input as DelegationCheckInput);
+      case TOOL_DELEGATIONS_LIST:
+        return this.delegationsList(input as DelegationsListInput);
+      case TOOL_DELEGATION_GRANT:
+        return this.delegationGrant(input as DelegationGrantInput);
+      case TOOL_DELEGATION_REVOKE:
+        return this.delegationRevoke(input as DelegationRevokeInput);
       case TOOL_ROOMS_SEARCH:
         return this.roomsSearch(input as RoomsSearchInput);
       case TOOL_ROOMS_LIST:
@@ -924,6 +957,140 @@ export class LocalConnector {
       draft_id: input.draft_id,
       pending_count: this.state.drafts.size,
     };
+  }
+
+  /**
+   * Resolves a principal per Agent Delegation Section 5.3 and reports whether
+   * the requested URL is an alias the principal acknowledges. Any origin can
+   * redirect to any principal, so an unlisted URL is never presented as a name
+   * for it.
+   */
+  private async resolvePrincipal(
+    url: string,
+  ): Promise<{ document: PrincipalDocument; alias: boolean }> {
+    const document = await this.delegationClient(url).principal(url);
+    return {
+      document,
+      alias: document.id !== url && isPrincipalAlias(document, url),
+    };
+  }
+
+  /**
+   * Resolves the principal and refuses when the active Agent ID is not one of
+   * its controller keys, so a grant that could never be accepted is not signed
+   * or transmitted.
+   */
+  private async controllerPrincipal(
+    principalId: string,
+  ): Promise<PrincipalDocument> {
+    const { document } = await this.resolvePrincipal(principalId);
+    const active = this.agentId();
+    if (!document.controllers.includes(active)) {
+      throw invalidPayload(
+        `active agent ${active} is not a controller key of ${document.id}`,
+      );
+    }
+    return document;
+  }
+
+  private async principalResolve(
+    input: PrincipalResolveInput,
+  ): Promise<unknown> {
+    const { document, alias } = await this.resolvePrincipal(input.url);
+    return {
+      canonical_id: document.id,
+      requested_url: input.url,
+      alias,
+      principal: document,
+    };
+  }
+
+  private async delegationCheck(input: DelegationCheckInput): Promise<unknown> {
+    const { document } = await this.resolvePrincipal(input.principal_id);
+    // The authoritative service is the one the principal names, never one
+    // supplied by whoever presented a credential.
+    const queryUrl = document.delegation_query_url;
+    if (queryUrl === undefined) {
+      throw invalidPayload(
+        `principal ${document.id} publishes no delegation_query_url`,
+      );
+    }
+    const response = await this.delegationClient(queryUrl).queryDelegationsAt(
+      queryUrl,
+      {
+        subject: input.subject ?? this.agentId(),
+        principal_id: document.id,
+        id: input.id,
+        status: input.status,
+      },
+    );
+    return {
+      canonical_id: document.id,
+      query_url: queryUrl,
+      delegations: response.result,
+    };
+  }
+
+  private async delegationsList(input: DelegationsListInput): Promise<unknown> {
+    // Enumerating one subject requires authorization; the connector proves the
+    // active identity and never enumerates anyone else.
+    const jwt = this.requestJwt(input.delegation_service);
+    const response = await this.delegationClient(
+      input.delegation_service,
+    ).queryDelegations(
+      {
+        subject: this.agentId(),
+        status: input.status,
+        limit: input.limit,
+      },
+      jwt,
+    );
+    return { delegations: response.result };
+  }
+
+  private async delegationGrant(input: DelegationGrantInput): Promise<unknown> {
+    const principal = await this.controllerPrincipal(input.principal_id);
+    const payload: DelegationGrantPayload = {
+      id: input.id,
+      principal: { id: principal.id },
+      subject: input.subject,
+      relationship: input.relationship,
+      scopes: input.scopes,
+      constraints: input.constraints,
+      not_before: input.not_before,
+      expires_at: input.expires_at,
+    };
+    const createdAt = unixTimeMillis();
+    validateDelegationGrantPayload(payload, createdAt);
+    const envelope = this.signer.signEvent(
+      delegationGrantEvent(
+        this.agentId(),
+        createdAt,
+        this.nonces.nextNonce(),
+        payload,
+      ),
+    );
+    const credential = await this.delegationClient(
+      input.delegation_service,
+    ).submitDelegationEvent(envelope);
+    return { credential, envelope };
+  }
+
+  private async delegationRevoke(
+    input: DelegationRevokeInput,
+  ): Promise<unknown> {
+    const principal = await this.controllerPrincipal(input.principal_id);
+    const envelope = this.signer.signEvent(
+      delegationRevokeEvent(this.agentId(), unixTimeMillis(), this.nonces.nextNonce(), {
+        id: input.id,
+        principal_id: principal.id,
+        reason: input.reason,
+      }),
+    );
+    const result = await this.delegationClient(
+      input.delegation_service,
+    ).submitDelegationEvent(envelope);
+    return { result, envelope };
   }
 
   private async profileUpdate(input: ProfileUpdateInput): Promise<unknown> {
@@ -1666,5 +1833,9 @@ export class LocalConnector {
 
   private profileClient(url: string): ProfileClient {
     return new ProfileClient(url, this.fetchImpl);
+  }
+
+  private delegationClient(url: string): DelegationClient {
+    return new DelegationClient(url, this.fetchImpl);
   }
 }

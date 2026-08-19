@@ -340,15 +340,43 @@ export class DelegationClient {
 
   /**
    * Public queries are existence checks and carry both `subject` and
-   * `principal_id`. Pass `allowEnumeration` only for a request the service has
-   * authorized to enumerate one side.
+   * `principal_id`. Passing a request JWT authorizes an enumeration query,
+   * which a service must otherwise refuse.
    */
   async queryDelegations(
     request: DelegationQueryRequest,
-    options: { allowEnumeration?: boolean } = {},
+    jwt?: string,
   ): Promise<DelegationQueryResponse> {
-    validateDelegationQueryRequest(request, options);
-    return this.postJson("/v1/delegations/query", request);
+    return this.queryDelegationsAt(
+      this.url("/v1/delegations/query"),
+      request,
+      jwt,
+    );
+  }
+
+  /**
+   * Queries the endpoint a principal document names in its
+   * `delegation_query_url`. That is how a relying party reaches the
+   * authoritative service for a principal without trusting a URL supplied by
+   * whoever presented the credential.
+   */
+  async queryDelegationsAt(
+    queryUrl: string,
+    request: DelegationQueryRequest,
+    jwt?: string,
+  ): Promise<DelegationQueryResponse> {
+    validateDelegationQueryRequest(request, {
+      allowEnumeration: jwt !== undefined,
+    });
+    const response = await this.fetchImpl(queryUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(jwt ? { authorization: `Bearer ${jwt}` } : {}),
+      },
+      body: JSON.stringify(request),
+    });
+    return readJson<DelegationQueryResponse>(response);
   }
 
   private async readPrincipal(

@@ -164,8 +164,7 @@ fn applies_room_records_into_members_timeline_and_inbox() {
         profile_service: None,
         last_checked_at: None,
     });
-    connector
-        .accept_room_response("https://api.example.test", room_response("room1", &creator));
+    connector.accept_room_response("https://api.example.test", room_response("room1", &creator));
 
     let join_envelope = speaker
         .sign_event(discourse_event(
@@ -261,8 +260,7 @@ fn room_head_mismatch_holds_message_draft_before_network_submit() {
     let speaker = signer(2);
     let creator = signer(5);
     let mut connector = LocalConnector::new(active);
-    connector
-        .accept_room_response("https://api.example.test", room_response("room1", &creator));
+    connector.accept_room_response("https://api.example.test", room_response("room1", &creator));
 
     let message = MessageCreatePayload::text("new context");
     let message_envelope = speaker
@@ -453,8 +451,7 @@ fn rejects_non_signal_records_not_based_on_room_head() {
         ))
         .unwrap();
     let stale_message =
-        build_server_record("room1", 3, Some(signal_hash), 123, stale_message_envelope)
-            .unwrap();
+        build_server_record("room1", 3, Some(signal_hash), 123, stale_message_envelope).unwrap();
 
     let err = connector
         .apply_record(typed_record_to_value(stale_message).unwrap())
@@ -530,8 +527,7 @@ fn member_remove_records_project_removal_bans_and_inbox() {
             },
         ))
         .unwrap();
-    let remove =
-        build_server_record("room1", 3, Some(join_hash), 121, remove_envelope).unwrap();
+    let remove = build_server_record("room1", 3, Some(join_hash), 121, remove_envelope).unwrap();
     connector
         .apply_host_record(
             "https://api.example.test",
@@ -667,6 +663,37 @@ fn duplicate_room_ids_across_hosts_require_a_host_input() {
 }
 
 #[test]
+fn standard_tools_cover_the_delegation_surface() {
+    let tools = standard_tool_definitions();
+    let find = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"))
+    };
+
+    // Reads reach other origins, so they are open-world but never writes.
+    for name in [
+        TOOL_PRINCIPAL_RESOLVE,
+        TOOL_DELEGATION_CHECK,
+        TOOL_DELEGATIONS_LIST,
+    ] {
+        let tool = find(name);
+        assert!(tool.annotations.read_only_hint, "{name} must be read-only");
+        assert!(tool.annotations.open_world_hint, "{name} reaches remotes");
+    }
+
+    // Grant and revoke sign envelopes, so they are neither read-only nor
+    // idempotent.
+    for name in [TOOL_DELEGATION_GRANT, TOOL_DELEGATION_REVOKE] {
+        let tool = find(name);
+        assert!(!tool.annotations.read_only_hint, "{name} signs");
+        assert!(!tool.annotations.idempotent_hint, "{name} consumes a nonce");
+        assert!(tool.annotations.open_world_hint);
+    }
+}
+
+#[test]
 fn standard_tools_exclude_host_mutation_and_mark_timeline_writable() {
     let tools = standard_tool_definitions();
     assert!(!tools
@@ -699,7 +726,6 @@ fn signs_profile_update_without_exposing_private_key() {
 #[test]
 fn payload_with_references_stores_references_under_extra() {
     let payload =
-        payload_with_references(json!({"instruction": "answer"}), vec!["abc".to_owned()])
-            .unwrap();
+        payload_with_references(json!({"instruction": "answer"}), vec!["abc".to_owned()]).unwrap();
     assert_eq!(payload["extra"]["references"][0], "abc");
 }

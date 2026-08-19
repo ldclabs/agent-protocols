@@ -210,6 +210,25 @@ class DelegationClientTests(unittest.TestCase):
         )
         self.assertEqual(session.calls[6][3]["status"], "active")
 
+    def test_enumeration_requires_a_jwt_and_queries_the_principal_endpoint(self):
+        session = FakeSession([FakeResponse({"result": []}), FakeResponse({"result": []})])
+        client = DelegationClient("https://api.al.ink/", session=session)
+
+        # Enumerating one side without authorization never leaves the client.
+        with self.assertRaisesRegex(Exception, "must include both subject and principal_id"):
+            client.query_delegations({"subject": AGENT_ID})
+
+        client.query_delegations({"subject": AGENT_ID}, "jwt-enumerate")
+        self.assertEqual(session.calls[0][1], "https://api.al.ink/v1/delegations/query")
+        self.assertEqual(session.calls[0][2], {"Authorization": "Bearer jwt-enumerate"})
+
+        # A principal-anchored query goes to the endpoint the principal names.
+        client.query_delegations_at(
+            "https://delegations.example.com/query",
+            {"subject": AGENT_ID, "principal_id": PRINCIPAL_ID},
+        )
+        self.assertEqual(session.calls[1][1], "https://delegations.example.com/query")
+
     def test_principal_served_away_from_its_id_is_re_resolved(self):
         session = FakeSession([FakeResponse(PRINCIPAL_DOCUMENT), FakeResponse(PRINCIPAL_DOCUMENT)])
         client = DelegationClient("https://api.al.ink/", session=session)

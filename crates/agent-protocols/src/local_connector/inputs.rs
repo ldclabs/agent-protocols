@@ -6,10 +6,62 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use crate::delegation::DelegationStatus;
 use crate::discourse::{JoinDecision, Role, TypeDeclaration, Visibility};
 use crate::identity::AgentId;
 
 use super::views::{DraftAction, HeadMismatchPolicy, RoomMemberStatus};
+
+#[derive(Deserialize)]
+pub(crate) struct PrincipalResolveInput {
+    pub url: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DelegationCheckInput {
+    pub principal_id: String,
+    #[serde(default)]
+    pub subject: Option<AgentId>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub status: Option<DelegationStatus>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DelegationsListInput {
+    pub delegation_service: String,
+    #[serde(default)]
+    pub status: Option<DelegationStatus>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DelegationGrantInput {
+    pub delegation_service: String,
+    pub id: String,
+    pub principal_id: String,
+    pub subject: AgentId,
+    #[serde(default)]
+    pub relationship: Option<String>,
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub constraints: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub not_before: Option<i64>,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DelegationRevokeInput {
+    pub delegation_service: String,
+    pub id: String,
+    pub principal_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
 
 #[derive(Deserialize)]
 pub(crate) struct RoomsSearchInput {

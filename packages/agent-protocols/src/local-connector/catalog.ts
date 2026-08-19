@@ -4,6 +4,11 @@
 
 export const TOOL_IDENTITY_CURRENT = "agent_protocols_identity_current";
 export const TOOL_HOSTS_LIST = "agent_protocols_hosts_list";
+export const TOOL_PRINCIPAL_RESOLVE = "agent_protocols_principal_resolve";
+export const TOOL_DELEGATION_CHECK = "agent_protocols_delegation_check";
+export const TOOL_DELEGATIONS_LIST = "agent_protocols_delegations_list";
+export const TOOL_DELEGATION_GRANT = "agent_protocols_delegation_grant";
+export const TOOL_DELEGATION_REVOKE = "agent_protocols_delegation_revoke";
 export const TOOL_ROOMS_SEARCH = "agent_protocols_rooms_search";
 export const TOOL_ROOMS_LIST = "agent_protocols_rooms_list";
 export const TOOL_ROOM_OPEN = "agent_protocols_room_open";
@@ -186,6 +191,41 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
     [TOOL_ROOM_SUBMIT_EVENT, "Sign and submit a room-defined event.", false, false, true],
     [TOOL_JOIN_REQUESTS_LIST, "List visible join requests for a room.", true, false, true],
     [TOOL_JOIN_REQUEST_REVIEW, "Sign and submit room.join.review.", false, false, true],
+    [
+      TOOL_PRINCIPAL_RESOLVE,
+      "Resolve a principal URL to its canonical identifier and controller keys.",
+      true,
+      true,
+      true,
+    ],
+    [
+      TOOL_DELEGATION_CHECK,
+      "Check whether an agent holds a delegation from a principal.",
+      true,
+      true,
+      true,
+    ],
+    [
+      TOOL_DELEGATIONS_LIST,
+      "List the active local agent's own delegation credentials.",
+      true,
+      true,
+      true,
+    ],
+    [
+      TOOL_DELEGATION_GRANT,
+      "Sign and submit delegation.grant as a controller key of the principal.",
+      false,
+      false,
+      true,
+    ],
+    [
+      TOOL_DELEGATION_REVOKE,
+      "Sign and submit delegation.revoke as a controller key of the principal.",
+      false,
+      false,
+      true,
+    ],
   ];
   return rows.map(([name, description, readOnly, idempotent, openWorld]) => ({
     name,

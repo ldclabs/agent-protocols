@@ -556,23 +556,33 @@ impl DelegationClient {
     }
 
     /// Public queries are existence checks and carry both `subject` and
-    /// `principal_id`. Pass `allow_enumeration` only for a request the service
-    /// has authorized to enumerate one side.
+    /// `principal_id`. Passing a request JWT authorizes an enumeration query,
+    /// which a service must otherwise refuse.
     pub async fn query_delegations(
         &self,
         request: &DelegationQueryRequest,
-        allow_enumeration: bool,
+        jwt: Option<&str>,
     ) -> Result<DelegationQueryResponse> {
-        crate::delegation::validate_delegation_query_request(request, allow_enumeration)?;
-        Ok(self
-            .inner
-            .post(self.url("/v1/delegations/query"))
-            .json(request)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?)
+        self.query_delegations_at(&self.url("/v1/delegations/query"), request, jwt)
+            .await
+    }
+
+    /// Queries the endpoint a principal document names in its
+    /// `delegation_query_url`. That is how a relying party reaches the
+    /// authoritative service for a principal without trusting a URL supplied
+    /// by whoever presented the credential.
+    pub async fn query_delegations_at(
+        &self,
+        query_url: &str,
+        request: &DelegationQueryRequest,
+        jwt: Option<&str>,
+    ) -> Result<DelegationQueryResponse> {
+        crate::delegation::validate_delegation_query_request(request, jwt.is_some())?;
+        let mut builder = self.inner.post(query_url).json(request);
+        if let Some(jwt) = jwt {
+            builder = builder.bearer_auth(jwt);
+        }
+        Ok(builder.send().await?.error_for_status()?.json().await?)
     }
 
     fn url(&self, path: &str) -> String {

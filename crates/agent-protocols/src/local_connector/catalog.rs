@@ -8,6 +8,11 @@ use serde_json::{json, Value};
 
 pub const TOOL_IDENTITY_CURRENT: &str = "agent_protocols_identity_current";
 pub const TOOL_HOSTS_LIST: &str = "agent_protocols_hosts_list";
+pub const TOOL_PRINCIPAL_RESOLVE: &str = "agent_protocols_principal_resolve";
+pub const TOOL_DELEGATION_CHECK: &str = "agent_protocols_delegation_check";
+pub const TOOL_DELEGATIONS_LIST: &str = "agent_protocols_delegations_list";
+pub const TOOL_DELEGATION_GRANT: &str = "agent_protocols_delegation_grant";
+pub const TOOL_DELEGATION_REVOKE: &str = "agent_protocols_delegation_revoke";
 pub const TOOL_ROOMS_SEARCH: &str = "agent_protocols_rooms_search";
 pub const TOOL_ROOMS_LIST: &str = "agent_protocols_rooms_list";
 pub const TOOL_ROOM_OPEN: &str = "agent_protocols_room_open";
@@ -78,6 +83,41 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
             true,
             true,
             false,
+        ),
+        (
+            TOOL_PRINCIPAL_RESOLVE,
+            "Resolve a principal URL to its canonical identifier and controller keys.",
+            true,
+            true,
+            true,
+        ),
+        (
+            TOOL_DELEGATION_CHECK,
+            "Check whether an agent holds a delegation from a principal.",
+            true,
+            true,
+            true,
+        ),
+        (
+            TOOL_DELEGATIONS_LIST,
+            "List the active local agent's own delegation credentials.",
+            true,
+            true,
+            true,
+        ),
+        (
+            TOOL_DELEGATION_GRANT,
+            "Sign and submit delegation.grant as a controller key of the principal.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_DELEGATION_REVOKE,
+            "Sign and submit delegation.revoke as a controller key of the principal.",
+            false,
+            false,
+            true,
         ),
         (
             TOOL_ROOMS_SEARCH,

@@ -8,6 +8,7 @@ import {
   TypeDeclaration,
   Visibility,
 } from "../discourse.js";
+import { DelegationStatus } from "../delegation.js";
 import { AgentId } from "../identity.js";
 
 import {
@@ -263,6 +264,42 @@ export interface JoinRequestsListInput {
   status?: string;
   limit?: number;
   cursor?: string;
+}
+
+export interface PrincipalResolveInput {
+  url: string;
+}
+
+export interface DelegationCheckInput {
+  principal_id: string;
+  subject?: AgentId;
+  id?: string;
+  status?: DelegationStatus;
+}
+
+export interface DelegationsListInput {
+  delegation_service: string;
+  status?: DelegationStatus;
+  limit?: number;
+}
+
+export interface DelegationGrantInput {
+  delegation_service: string;
+  id: string;
+  principal_id: string;
+  subject: AgentId;
+  relationship?: string;
+  scopes: string[];
+  constraints?: Record<string, unknown>;
+  not_before?: number;
+  expires_at?: number;
+}
+
+export interface DelegationRevokeInput {
+  delegation_service: string;
+  id: string;
+  principal_id: string;
+  reason?: string;
 }
 
 export interface JoinRequestReviewInput {

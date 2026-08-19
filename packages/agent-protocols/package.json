@@ -1,6 +1,6 @@
 {
   "name": "agent-protocols",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "TypeScript SDK for Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols",
   "type": "module",
   "license": "MIT",

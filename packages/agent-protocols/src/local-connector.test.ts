@@ -19,10 +19,15 @@ import {
   RoomStateView,
   RoomWriteResult,
   SyncState,
+  TOOL_DELEGATIONS_LIST,
+  TOOL_DELEGATION_CHECK,
+  TOOL_DELEGATION_GRANT,
+  TOOL_DELEGATION_REVOKE,
   TOOL_DRAFTS_LIST,
   TOOL_DRAFT_DROP,
   TOOL_DRAFT_GET,
   TOOL_INBOX_NEXT,
+  TOOL_PRINCIPAL_RESOLVE,
   TOOL_ROOM_JOIN,
   TOOL_ROOM_MEMBERS_LIST,
   TOOL_ROOM_SEND_MESSAGE,
@@ -84,6 +89,33 @@ test("standardToolDefinitions includes local connector tools and annotations", (
       .openWorldHint,
     true,
   );
+});
+
+test("standardToolDefinitions covers the delegation surface", () => {
+  const tools = standardToolDefinitions();
+  const find = (name: string) => {
+    const tool = tools.find((candidate) => candidate.name === name);
+    assert.ok(tool, `missing tool ${name}`);
+    return tool;
+  };
+
+  // Reads reach other origins, so they are open-world but never writes.
+  for (const name of [
+    TOOL_PRINCIPAL_RESOLVE,
+    TOOL_DELEGATION_CHECK,
+    TOOL_DELEGATIONS_LIST,
+  ]) {
+    assert.equal(find(name).annotations.readOnlyHint, true, name);
+    assert.equal(find(name).annotations.openWorldHint, true, name);
+  }
+
+  // Grant and revoke sign envelopes, so they are neither read-only nor
+  // idempotent.
+  for (const name of [TOOL_DELEGATION_GRANT, TOOL_DELEGATION_REVOKE]) {
+    assert.equal(find(name).annotations.readOnlyHint, false, name);
+    assert.equal(find(name).annotations.idempotentHint, false, name);
+    assert.equal(find(name).annotations.openWorldHint, true, name);
+  }
 });
 
 test("syncStateFromRoomResponse and roomSummaryFromResponse derive room views", () => {

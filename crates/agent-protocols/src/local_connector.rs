@@ -44,6 +44,11 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+use crate::delegation::{
+    delegation_grant_event, delegation_revoke_event, is_principal_alias,
+    validate_delegation_grant_payload, DelegationGrantPayload, DelegationQueryRequest,
+    DelegationRevokePayload, PrincipalDescriptor, PrincipalDocument,
+};
 use crate::discourse::{
     discourse_event, event_type, room_create_event, validate_discourse_envelope,
     validate_room_path, verify_server_record, AgentStatusInput, JoinRequestStatus,
@@ -51,7 +56,9 @@ use crate::discourse::{
     RoomJoinRequestInput, RoomJoinReviewPayload, RoomResponse, ServerRecord, Visibility,
 };
 use crate::error::{Result, SdkError};
-use crate::http_client::{DiscourseClient, ProfileClient, PublicRoomsOptions, RoomEventsOptions};
+use crate::http_client::{
+    DelegationClient, DiscourseClient, ProfileClient, PublicRoomsOptions, RoomEventsOptions,
+};
 use crate::identity::{
     unix_ms, unix_secs, AgentId, AgentSigner, ClientNonceManager, Envelope, RequestBinding,
     RequestJwtClaims, DEFAULT_REQUEST_JWT_TTL_SECS,
@@ -220,6 +227,11 @@ impl LocalConnector {
         match name {
             TOOL_IDENTITY_CURRENT => self.identity_current(),
             TOOL_HOSTS_LIST => self.hosts_list(),
+            TOOL_PRINCIPAL_RESOLVE => self.principal_resolve(parse_input(input)?).await,
+            TOOL_DELEGATION_CHECK => self.delegation_check(parse_input(input)?).await,
+            TOOL_DELEGATIONS_LIST => self.delegations_list(parse_input(input)?).await,
+            TOOL_DELEGATION_GRANT => self.delegation_grant(parse_input(input)?).await,
+            TOOL_DELEGATION_REVOKE => self.delegation_revoke(parse_input(input)?).await,
             TOOL_ROOMS_SEARCH => self.rooms_search(parse_input(input)?).await,
             TOOL_ROOMS_LIST => self.rooms_list(parse_input(input)?),
             TOOL_ROOM_OPEN => self.room_open(parse_input(input)?).await,
@@ -873,6 +885,132 @@ impl LocalConnector {
             "draft_id": input.draft_id,
             "pending_count": self.state.drafts.len()
         }))
+    }
+
+    /// Resolves a principal per Agent Delegation Section 5.3 and reports
+    /// whether the requested URL is an alias the principal acknowledges. Any
+    /// origin can redirect to any principal, so an unlisted URL is never
+    /// presented as a name for it.
+    async fn resolve_principal(&self, url: &str) -> Result<(PrincipalDocument, bool)> {
+        let document = DelegationClient::new(url).principal(Some(url)).await?;
+        let alias = document.id != url && is_principal_alias(&document, url);
+        Ok((document, alias))
+    }
+
+    /// Resolves the principal and refuses when the active Agent ID is not one
+    /// of its controller keys, so a grant that could never be accepted is not
+    /// signed or transmitted.
+    async fn controller_principal(&self, principal_id: &str) -> Result<PrincipalDocument> {
+        let (document, _) = self.resolve_principal(principal_id).await?;
+        let active = self.agent_id();
+        if !document.controllers.contains(&active) {
+            return Err(SdkError::InvalidPayload(format!(
+                "active agent {active} is not a controller key of {}",
+                document.id
+            )));
+        }
+        Ok(document)
+    }
+
+    async fn principal_resolve(&self, input: PrincipalResolveInput) -> Result<Value> {
+        let (document, alias) = self.resolve_principal(&input.url).await?;
+        json_result(json!({
+            "canonical_id": document.id,
+            "requested_url": input.url,
+            "alias": alias,
+            "principal": document,
+        }))
+    }
+
+    async fn delegation_check(&self, input: DelegationCheckInput) -> Result<Value> {
+        let (document, _) = self.resolve_principal(&input.principal_id).await?;
+        // The authoritative service is the one the principal names, never one
+        // supplied by whoever presented a credential.
+        let query_url = document.delegation_query_url.clone().ok_or_else(|| {
+            SdkError::InvalidPayload(format!(
+                "principal {} publishes no delegation_query_url",
+                document.id
+            ))
+        })?;
+        let request = DelegationQueryRequest {
+            subject: Some(input.subject.unwrap_or_else(|| self.agent_id())),
+            principal_id: Some(document.id.clone()),
+            id: input.id,
+            status: input.status,
+            limit: None,
+        };
+        let response = DelegationClient::new(&query_url)
+            .query_delegations_at(&query_url, &request, None)
+            .await?;
+        json_result(json!({
+            "canonical_id": document.id,
+            "query_url": query_url,
+            "delegations": response.result,
+        }))
+    }
+
+    async fn delegations_list(&self, input: DelegationsListInput) -> Result<Value> {
+        // Enumerating one subject requires authorization; the connector proves
+        // the active identity and never enumerates anyone else.
+        let jwt = self.request_jwt(&input.delegation_service)?;
+        let request = DelegationQueryRequest {
+            subject: Some(self.agent_id()),
+            principal_id: None,
+            id: None,
+            status: input.status,
+            limit: input.limit,
+        };
+        let response = DelegationClient::new(&input.delegation_service)
+            .query_delegations(&request, Some(&jwt))
+            .await?;
+        json_result(json!({ "delegations": response.result }))
+    }
+
+    async fn delegation_grant(&mut self, input: DelegationGrantInput) -> Result<Value> {
+        let principal = self.controller_principal(&input.principal_id).await?;
+        let mut payload = DelegationGrantPayload::new(
+            input.id,
+            PrincipalDescriptor::new(principal.id),
+            input.subject,
+            input.scopes,
+        );
+        payload.relationship = input.relationship;
+        payload.constraints = input.constraints;
+        payload.not_before = input.not_before;
+        payload.expires_at = input.expires_at;
+        let created_at = unix_ms();
+        validate_delegation_grant_payload(&payload, Some(created_at))?;
+        let event = delegation_grant_event(
+            self.agent_id(),
+            created_at,
+            self.nonce_manager.next_nonce()?,
+            payload,
+        );
+        let envelope = self.signer.sign_event(event)?;
+        let credential = DelegationClient::new(&input.delegation_service)
+            .submit_delegation_event(&envelope)
+            .await?;
+        json_result(json!({ "credential": credential, "envelope": envelope }))
+    }
+
+    async fn delegation_revoke(&mut self, input: DelegationRevokeInput) -> Result<Value> {
+        let principal = self.controller_principal(&input.principal_id).await?;
+        let payload = DelegationRevokePayload {
+            id: input.id,
+            principal_id: principal.id,
+            reason: input.reason,
+        };
+        let event = delegation_revoke_event(
+            self.agent_id(),
+            unix_ms(),
+            self.nonce_manager.next_nonce()?,
+            payload,
+        );
+        let envelope = self.signer.sign_event(event)?;
+        let result = DelegationClient::new(&input.delegation_service)
+            .submit_delegation_event(&envelope)
+            .await?;
+        json_result(json!({ "result": result, "envelope": envelope }))
     }
 
     async fn profile_update(&mut self, input: ProfileUpdateInput) -> Result<Value> {

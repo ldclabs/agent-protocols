@@ -533,7 +533,7 @@ fn delegation_client_round_trips_every_endpoint() {
                     limit: Some(20),
                     ..DelegationQueryRequest::default()
                 },
-                false,
+                None,
             )
             .await
             .unwrap();
