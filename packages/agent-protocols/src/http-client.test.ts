@@ -189,7 +189,7 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
         endpoints: { delegations: "https://api.al.ink/v1/delegations" },
       },
     },
-    { body: { id: PRINCIPAL_ID, controllers: [AGENT_ID] } },
+    { body: { id: PRINCIPAL_ID, protocol: "agent-delegation/1.0", updated_at: 1000, controllers: [{ id: AGENT_ID, source: "local", valid_from: 0 }] } },
     {
       body: {
         id: "del_1",
@@ -246,6 +246,34 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
   assert.match(String(calls[6].init?.body), /inbox|active|limit/);
 });
 
+test("DelegationClient encodes opaque delegation ids as one path segment", async () => {
+  const { fetchImpl, calls } = makeFetch([
+    { body: {} },
+    { body: {} },
+    { body: {} },
+  ]);
+  const client = new DelegationClient("https://api.example.com", fetchImpl);
+  const id = "a/b?#% 雪";
+
+  await client.delegation(id);
+  await client.delegationStatus(id);
+  await client.delegationEvents(id);
+
+  const encoded = "a%2Fb%3F%23%25%20%E9%9B%AA";
+  assert.deepEqual(
+    calls.map((call) => call.url),
+    [
+      `https://api.example.com/v1/delegations/${encoded}`,
+      `https://api.example.com/v1/delegations/${encoded}/status`,
+      `https://api.example.com/v1/delegations/${encoded}/events`,
+    ],
+  );
+  for (const dotSegment of [".", ".."]) {
+    await assert.rejects(() => client.delegation(dotSegment), /dot segment/);
+  }
+  assert.equal(calls.length, 3, "dot-segment ids were rejected before fetch");
+});
+
 test("delegation enumeration requires a request JWT and queries the principal's endpoint", async () => {
   const { fetchImpl, calls } = makeFetch([{ body: { result: [] } }, { body: { result: [] } }]);
   const client = new DelegationClient("https://api.al.ink/", fetchImpl);
@@ -272,7 +300,7 @@ test("delegation enumeration requires a request JWT and queries the principal's 
 });
 
 test("DelegationClient re-resolves a principal document served away from its id", async () => {
-  const document = { id: PRINCIPAL_ID, controllers: [AGENT_ID], aliases: ["https://al.ink/yan"] };
+  const document = { id: PRINCIPAL_ID, protocol: "agent-delegation/1.0", updated_at: 1000, controllers: [{ id: AGENT_ID, source: "local", valid_from: 0 }], aliases: ["https://al.ink/yan"] };
   const { fetchImpl, calls } = makeFetch([{ body: document }, { body: document }]);
   const client = new DelegationClient("https://api.al.ink/", fetchImpl);
 
@@ -285,8 +313,8 @@ test("DelegationClient re-resolves a principal document served away from its id"
 
   // A copy that never leads to an authoritative read is rejected.
   const impostor = makeFetch([
-    { body: { id: PRINCIPAL_ID, controllers: [AGENT_ID] } },
-    { body: { id: "https://impostor.example.com/yan", controllers: [AGENT_ID] } },
+    { body: { id: PRINCIPAL_ID, protocol: "agent-delegation/1.0", updated_at: 1000, controllers: [{ id: AGENT_ID, source: "local", valid_from: 0 }] } },
+    { body: { id: "https://impostor.example.com/yan", protocol: "agent-delegation/1.0", updated_at: 1000, controllers: [{ id: AGENT_ID, source: "local", valid_from: 0 }] } },
   ]);
   await assert.rejects(
     () =>
@@ -386,4 +414,21 @@ test("sseEventsUrl preserves HTTP schemes and encodes room ids", () => {
     sseEventsUrl("ftp://api.example.com", "r"),
     "ftp://api.example.com/v1/rooms/r/events/live",
   );
+});
+
+test("principal resolution discards malformed copy authority and rejects HTTPS downgrade redirects", async () => {
+  const valid = { id: PRINCIPAL_ID, protocol: "agent-delegation/1.0", updated_at: 1000, controllers: [] };
+  const copy = makeFetch([{ body: { id: PRINCIPAL_ID, controllers: "untrusted junk" } }, { body: valid }]);
+  assert.deepEqual(await new DelegationClient("https://al.ink/yan", copy.fetchImpl).principal(), valid);
+  const requests: string[] = [];
+  const redirect = (async (url: string | URL | Request) => {
+    requests.push(String(url));
+    return new Response(null, { status: 302, headers: { location: "http://insecure.example/p" } });
+  }) as typeof fetch;
+  await assert.rejects(() => new DelegationClient("https://al.ink/yan", redirect).principal(), /HTTPS/);
+  assert.equal(requests.length, 1);
+  let hops = 0;
+  const loop = (async () => { hops++; return new Response(null, { status: 302, headers: { location: "https://al.ink/yan" } }); }) as typeof fetch;
+  await assert.rejects(() => new DelegationClient("https://al.ink/yan", loop).principal(), /redirect/);
+  assert.equal(hops, 6);
 });

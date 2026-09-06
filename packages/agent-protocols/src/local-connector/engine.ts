@@ -1,3 +1,5 @@
+import { HttpResponseError } from "../http-client.js";
+import { validateDelegationEventAuthority, type DelegationCredential } from "../delegation.js";
 // The stateful local connector engine. `LocalConnector` is transport-neutral:
 // it signs on the active agent's behalf, calls an Agent Discourse host over
 // HTTP, materializes local room state by projecting accepted records, derives
@@ -960,7 +962,7 @@ export class LocalConnector {
   }
 
   /**
-   * Resolves a principal per Agent Delegation Section 5.3 and reports whether
+   * Resolves a principal per Agent Delegation Section 3 and reports whether
    * the requested URL is an alias the principal acknowledges. Any origin can
    * redirect to any principal, so an unlisted URL is never presented as a name
    * for it.
@@ -985,7 +987,7 @@ export class LocalConnector {
   ): Promise<PrincipalDocument> {
     const { document } = await this.resolvePrincipal(principalId);
     const active = this.agentId();
-    if (!document.controllers.includes(active)) {
+    if (!document.controllers.some(c => c.id === active && c.delegation !== undefined && c.valid_from <= unixTimeMillis())) {
       throw invalidPayload(
         `active agent ${active} is not a controller key of ${document.id}`,
       );
@@ -1048,48 +1050,41 @@ export class LocalConnector {
     return { delegations: response.result };
   }
 
+  private async delegationPrevious(principal: PrincipalDocument, service: string, id: string): Promise<DelegationCredential | undefined> {
+    this.requestJwt(service); // Enforce the operator host policy before any service request.
+    if (principal.delegation_query_url !== `${service.replace(/\/$/, "")}/v1/delegations/query`) {
+      throw invalidPayload("delegation service does not match principal authority");
+    }
+    try { return await this.delegationClient(service).delegation(id); }
+    catch (error) { if (error instanceof HttpResponseError && error.status === 404) return undefined; throw error; }
+  }
+
   private async delegationGrant(input: DelegationGrantInput): Promise<unknown> {
     const principal = await this.controllerPrincipal(input.principal_id);
+    const previous = await this.delegationPrevious(principal, input.delegation_service, input.id);
     const payload: DelegationGrantPayload = {
-      id: input.id,
-      principal: { id: principal.id },
-      subject: input.subject,
-      relationship: input.relationship,
-      scopes: input.scopes,
-      constraints: input.constraints,
-      not_before: input.not_before,
-      expires_at: input.expires_at,
+      id: input.id, principal: { id: principal.id }, subject: input.subject,
+      relationship: input.relationship, scopes: input.scopes, audiences: input.audiences,
+      constraints: input.constraints, not_before: input.not_before, expires_at: input.expires_at,
     };
     const createdAt = unixTimeMillis();
-    validateDelegationGrantPayload(payload, createdAt);
-    const envelope = this.signer.signEvent(
-      delegationGrantEvent(
-        this.agentId(),
-        createdAt,
-        this.nonces.nextNonce(),
-        payload,
-      ),
-    );
-    const credential = await this.delegationClient(
-      input.delegation_service,
-    ).submitDelegationEvent(envelope);
+    const event = delegationGrantEvent(this.agentId(), createdAt, this.nonces.nextNonce(), payload);
+    validateDelegationEventAuthority(event, principal, createdAt, previous);
+    const envelope = this.signer.signEvent(event);
+    const credential = await this.delegationClient(input.delegation_service).submitDelegationEvent(envelope);
     return { credential, envelope };
   }
 
-  private async delegationRevoke(
-    input: DelegationRevokeInput,
-  ): Promise<unknown> {
+  private async delegationRevoke(input: DelegationRevokeInput): Promise<unknown> {
     const principal = await this.controllerPrincipal(input.principal_id);
-    const envelope = this.signer.signEvent(
-      delegationRevokeEvent(this.agentId(), unixTimeMillis(), this.nonces.nextNonce(), {
-        id: input.id,
-        principal_id: principal.id,
-        reason: input.reason,
-      }),
-    );
-    const result = await this.delegationClient(
-      input.delegation_service,
-    ).submitDelegationEvent(envelope);
+    const previous = await this.delegationPrevious(principal, input.delegation_service, input.id);
+    const createdAt = unixTimeMillis();
+    const event = delegationRevokeEvent(this.agentId(), createdAt, this.nonces.nextNonce(), {
+      id: input.id, principal_id: principal.id, reason: input.reason,
+    });
+    validateDelegationEventAuthority(event, principal, createdAt, previous);
+    const envelope = this.signer.signEvent(event);
+    const result = await this.delegationClient(input.delegation_service).submitDelegationEvent(envelope);
     return { result, envelope };
   }
 
@@ -1550,7 +1545,9 @@ export class LocalConnector {
 
   private requestJwt(host: string): string {
     // The request JWT aud is always the origin of the host API.
-    const audience = serviceOrigin(host);
+    const normalized = normalizeHost(host);
+    this.requireAllowedHost(normalized);
+    const audience = serviceOrigin(normalized);
     const claims = createRequestJwtClaims(
       this.agentId(),
       createRequestBinding(audience),

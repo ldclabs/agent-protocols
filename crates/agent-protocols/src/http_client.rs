@@ -2,9 +2,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::delegation::{
-    validate_principal_document, validate_principal_resolution, DelegationCredential,
-    DelegationEventsResponse, DelegationQueryRequest, DelegationQueryResponse,
-    DelegationServiceDiscovery, DelegationStatusDocument, PrincipalDocument,
+    validate_delegation_id, validate_principal_document, validate_principal_resolution,
+    DelegationCredential, DelegationEventsResponse, DelegationQueryRequest,
+    DelegationQueryResponse, DelegationServiceDiscovery, DelegationStatusDocument,
+    PrincipalDocument,
 };
 use crate::discourse::{
     AgentStatus, AgentStatusGetResponse, AgentStatusInput, AgentStatusListResponse,
@@ -12,6 +13,7 @@ use crate::discourse::{
     RoomJoinRequestStatus, RoomLeavePayload, RoomResponse, ServerRecord,
 };
 use crate::error::Result;
+use crate::error::SdkError;
 use crate::identity::{AgentId, Envelope};
 use crate::profile::{
     AgentProfile, ProfileBatchReadRequest, ProfileBatchReadResponse, ProfileEventsResponse,
@@ -455,7 +457,16 @@ impl DelegationClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            inner: reqwest::Client::new(),
+            inner: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                    if attempt.url().scheme() != "https" || attempt.previous().len() > 5 {
+                        attempt.error("principal redirect must use HTTPS with at most five hops")
+                    } else {
+                        attempt.follow()
+                    }
+                }))
+                .build()
+                .expect("valid HTTPS redirect policy"),
         }
     }
 
@@ -477,23 +488,36 @@ impl DelegationClient {
             .await?)
     }
 
-    /// Resolves a principal document per Agent Delegation Section 5.3. A
+    /// Resolves a principal document per Agent Delegation Section 3. A
     /// document is authoritative only when read at its own `id`, so one served
     /// elsewhere (an alias hosting a copy rather than redirecting) is discarded
     /// and `document.id` is resolved once more.
     pub async fn principal(&self, principal_url: Option<&str>) -> Result<PrincipalDocument> {
         let start = principal_url.unwrap_or_else(|| self.base_url.trim_end_matches('/'));
-        let (document, resolved) = self.read_principal(start).await?;
-        if document.id == resolved {
-            return Ok(document);
-        }
-        let canonical_id = document.id.clone();
-        let (canonical, resolved) = self.read_principal(&canonical_id).await?;
-        validate_principal_resolution(&canonical, &resolved)?;
-        Ok(canonical)
+        let (first, resolved) = self.read_principal(start).await?;
+        let id = first
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| SdkError::InvalidPayload("principal.id required".into()))?;
+        let (value, resolved) = if id == resolved {
+            (first, resolved)
+        } else {
+            self.read_principal(id).await?
+        };
+        let document: PrincipalDocument = serde_json::from_value(value)?;
+        validate_principal_resolution(&document, &resolved)?;
+        validate_principal_document(&document)?;
+        Ok(document)
     }
 
-    async fn read_principal(&self, url: &str) -> Result<(PrincipalDocument, String)> {
+    async fn read_principal(&self, url: &str) -> Result<(Value, String)> {
+        let parsed = url::Url::parse(url)
+            .map_err(|_| SdkError::InvalidPayload("invalid principal URL".into()))?;
+        if parsed.scheme() != "https" {
+            return Err(SdkError::InvalidPayload(
+                "principal resolution requires HTTPS".into(),
+            ));
+        }
         let response = self
             .inner
             .get(url)
@@ -501,16 +525,24 @@ impl DelegationClient {
             .send()
             .await?
             .error_for_status()?;
+        if response.url().scheme() != "https" {
+            return Err(SdkError::InvalidPayload(
+                "principal resolution requires HTTPS".into(),
+            ));
+        }
         let resolved = response.url().to_string();
-        let document: PrincipalDocument = response.json().await?;
-        validate_principal_document(&document)?;
-        Ok((document, resolved))
+        // A copy is parsed only for its canonical ID; its authority shape is irrelevant.
+        Ok((response.json().await?, resolved))
     }
 
     pub async fn delegation(&self, delegation_id: &str) -> Result<DelegationCredential> {
+        validate_delegation_id(delegation_id)?;
         Ok(self
             .inner
-            .get(self.url(&format!("/v1/delegations/{delegation_id}")))
+            .get(self.url(&format!(
+                "/v1/delegations/{}",
+                encode_query_component(delegation_id)
+            )))
             .send()
             .await?
             .error_for_status()?
@@ -519,9 +551,13 @@ impl DelegationClient {
     }
 
     pub async fn delegation_status(&self, delegation_id: &str) -> Result<DelegationStatusDocument> {
+        validate_delegation_id(delegation_id)?;
         Ok(self
             .inner
-            .get(self.url(&format!("/v1/delegations/{delegation_id}/status")))
+            .get(self.url(&format!(
+                "/v1/delegations/{}/status",
+                encode_query_component(delegation_id)
+            )))
             .send()
             .await?
             .error_for_status()?
@@ -530,9 +566,13 @@ impl DelegationClient {
     }
 
     pub async fn delegation_events(&self, delegation_id: &str) -> Result<DelegationEventsResponse> {
+        validate_delegation_id(delegation_id)?;
         Ok(self
             .inner
-            .get(self.url(&format!("/v1/delegations/{delegation_id}/events")))
+            .get(self.url(&format!(
+                "/v1/delegations/{}/events",
+                encode_query_component(delegation_id)
+            )))
             .send()
             .await?
             .error_for_status()?

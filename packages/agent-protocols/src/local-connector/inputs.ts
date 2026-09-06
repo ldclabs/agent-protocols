@@ -290,6 +290,7 @@ export interface DelegationGrantInput {
   subject: AgentId;
   relationship?: string;
   scopes: string[];
+  audiences: string[];
   constraints?: Record<string, unknown>;
   not_before?: number;
   expires_at?: number;

@@ -45,9 +45,9 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 use crate::delegation::{
-    delegation_grant_event, delegation_revoke_event, is_principal_alias,
-    validate_delegation_grant_payload, DelegationGrantPayload, DelegationQueryRequest,
-    DelegationRevokePayload, PrincipalDescriptor, PrincipalDocument,
+    is_principal_alias, validate_delegation_event_authority, DelegationCredential,
+    DelegationGrantPayload, DelegationPayload, DelegationQueryRequest, DelegationRevokePayload,
+    PrincipalDescriptor, PrincipalDocument,
 };
 use crate::discourse::{
     discourse_event, event_type, room_create_event, validate_discourse_envelope,
@@ -59,6 +59,7 @@ use crate::error::{Result, SdkError};
 use crate::http_client::{
     DelegationClient, DiscourseClient, ProfileClient, PublicRoomsOptions, RoomEventsOptions,
 };
+use crate::identity::Event;
 use crate::identity::{
     unix_ms, unix_secs, AgentId, AgentSigner, ClientNonceManager, Envelope, RequestBinding,
     RequestJwtClaims, DEFAULT_REQUEST_JWT_TTL_SECS,
@@ -887,7 +888,7 @@ impl LocalConnector {
         }))
     }
 
-    /// Resolves a principal per Agent Delegation Section 5.3 and reports
+    /// Resolves a principal per Agent Delegation Section 3 and reports
     /// whether the requested URL is an alias the principal acknowledges. Any
     /// origin can redirect to any principal, so an unlisted URL is never
     /// presented as a name for it.
@@ -903,7 +904,11 @@ impl LocalConnector {
     async fn controller_principal(&self, principal_id: &str) -> Result<PrincipalDocument> {
         let (document, _) = self.resolve_principal(principal_id).await?;
         let active = self.agent_id();
-        if !document.controllers.contains(&active) {
+        if !document
+            .controllers
+            .iter()
+            .any(|c| c.id == active && c.delegation.is_some() && c.valid_from <= unix_ms())
+        {
             return Err(SdkError::InvalidPayload(format!(
                 "active agent {active} is not a controller key of {}",
                 document.id
@@ -966,26 +971,54 @@ impl LocalConnector {
         json_result(json!({ "delegations": response.result }))
     }
 
+    async fn delegation_previous(
+        &self,
+        principal: &PrincipalDocument,
+        service: &str,
+        id: &str,
+    ) -> Result<Option<DelegationCredential>> {
+        self.request_jwt(service)?; // Enforce operator host policy before the read.
+        let expected = format!("{}/v1/delegations/query", service.trim_end_matches('/'));
+        if principal.delegation_query_url.as_deref() != Some(&expected) {
+            return Err(SdkError::InvalidPayload(
+                "delegation service does not match principal authority".into(),
+            ));
+        }
+        match DelegationClient::new(service).delegation(id).await {
+            Ok(value) => Ok(Some(value)),
+            Err(SdkError::Http(e)) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     async fn delegation_grant(&mut self, input: DelegationGrantInput) -> Result<Value> {
         let principal = self.controller_principal(&input.principal_id).await?;
+        let previous = self
+            .delegation_previous(&principal, &input.delegation_service, &input.id)
+            .await?;
         let mut payload = DelegationGrantPayload::new(
             input.id,
-            PrincipalDescriptor::new(principal.id),
+            PrincipalDescriptor::new(principal.id.clone()),
             input.subject,
             input.scopes,
+            input.audiences,
         );
         payload.relationship = input.relationship;
         payload.constraints = input.constraints;
         payload.not_before = input.not_before;
         payload.expires_at = input.expires_at;
         let created_at = unix_ms();
-        validate_delegation_grant_payload(&payload, Some(created_at))?;
-        let event = delegation_grant_event(
+        let event = Event::new(
+            crate::delegation::PROTOCOL,
+            crate::delegation::DELEGATION_GRANT,
             self.agent_id(),
             created_at,
             self.nonce_manager.next_nonce()?,
-            payload,
+            DelegationPayload::Grant(payload),
         );
+        validate_delegation_event_authority(&event, &principal, created_at, previous.as_ref())?;
         let envelope = self.signer.sign_event(event)?;
         let credential = DelegationClient::new(&input.delegation_service)
             .submit_delegation_event(&envelope)
@@ -995,17 +1028,23 @@ impl LocalConnector {
 
     async fn delegation_revoke(&mut self, input: DelegationRevokeInput) -> Result<Value> {
         let principal = self.controller_principal(&input.principal_id).await?;
-        let payload = DelegationRevokePayload {
-            id: input.id,
-            principal_id: principal.id,
-            reason: input.reason,
-        };
-        let event = delegation_revoke_event(
+        let previous = self
+            .delegation_previous(&principal, &input.delegation_service, &input.id)
+            .await?;
+        let created_at = unix_ms();
+        let event = Event::new(
+            crate::delegation::PROTOCOL,
+            crate::delegation::DELEGATION_REVOKE,
             self.agent_id(),
-            unix_ms(),
+            created_at,
             self.nonce_manager.next_nonce()?,
-            payload,
+            DelegationPayload::Revoke(DelegationRevokePayload {
+                id: input.id,
+                principal_id: principal.id.clone(),
+                reason: input.reason,
+            }),
         );
+        validate_delegation_event_authority(&event, &principal, created_at, previous.as_ref())?;
         let envelope = self.signer.sign_event(event)?;
         let result = DelegationClient::new(&input.delegation_service)
             .submit_delegation_event(&envelope)
@@ -1510,7 +1549,9 @@ impl LocalConnector {
 
     fn request_jwt(&self, host: &str) -> Result<String> {
         // The request JWT aud is always the origin of the host API.
-        let audience = crate::identity::service_origin(host)?;
+        let host = normalize_host(host);
+        self.require_allowed_host(&host)?;
+        let audience = crate::identity::service_origin(&host)?;
         let claims = RequestJwtClaims::new(
             self.agent_id(),
             RequestBinding::new(audience),

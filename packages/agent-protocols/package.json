@@ -1,6 +1,6 @@
 {
   "name": "agent-protocols",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "TypeScript SDK for Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols",
   "type": "module",
   "license": "MIT",
@@ -49,12 +49,12 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
-    "canonicalize": "^3.0.0",
+    "canonicalize": "^4.0.0",
     "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "tsx": "^4.22.0",
-    "typescript": "^6.0.0"
+    "@types/node": "^26.4.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
   }
 }

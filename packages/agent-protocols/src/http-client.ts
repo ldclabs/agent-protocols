@@ -1,4 +1,5 @@
 import {
+  validateDelegationId,
   validateDelegationQueryRequest,
   validatePrincipalDocument,
   validatePrincipalResolution,
@@ -303,7 +304,7 @@ export class DelegationClient {
   }
 
   /**
-   * Resolves a principal document per Agent Delegation Section 5.3. A document
+   * Resolves a principal document per Agent Delegation Section 3. A document
    * is authoritative only when read at its own `id`, so one served elsewhere
    * (an alias hosting a copy rather than redirecting) is discarded and
    * `document.id` is resolved once more.
@@ -317,19 +318,22 @@ export class DelegationClient {
   }
 
   async delegation(delegationId: string): Promise<DelegationCredential> {
-    return this.getJson(`/v1/delegations/${delegationId}`);
+    validateDelegationId(delegationId);
+    return this.getJson(`/v1/delegations/${encodeURIComponent(delegationId)}`);
   }
 
   async delegationStatus(
     delegationId: string,
   ): Promise<DelegationStatusDocument> {
-    return this.getJson(`/v1/delegations/${delegationId}/status`);
+    validateDelegationId(delegationId);
+    return this.getJson(`/v1/delegations/${encodeURIComponent(delegationId)}/status`);
   }
 
   async delegationEvents(
     delegationId: string,
   ): Promise<DelegationEventsResponse> {
-    return this.getJson(`/v1/delegations/${delegationId}/events`);
+    validateDelegationId(delegationId);
+    return this.getJson(`/v1/delegations/${encodeURIComponent(delegationId)}/events`);
   }
 
   async submitDelegationEvent(
@@ -382,12 +386,22 @@ export class DelegationClient {
   private async readPrincipal(
     url: string,
   ): Promise<{ document: PrincipalDocument; resolvedUrl: string }> {
-    const response = await this.fetchImpl(url, {
-      headers: { accept: "application/json" },
-    });
-    const document = await readJson<PrincipalDocument>(response);
-    validatePrincipalDocument(document);
-    return { document, resolvedUrl: (response as { url?: string }).url || url };
+    for (let redirects = 0; ; redirects++) {
+      if (new URL(url).protocol !== "https:") throw new Error("principal resolution requires HTTPS");
+      const response = await this.fetchImpl(url, { headers: { accept: "application/json" }, redirect: "manual" });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location || redirects >= 5) throw new Error("invalid principal redirect chain");
+        url = new URL(location, url).href;
+        continue;
+      }
+      const document = await readJson<PrincipalDocument>(response);
+      const resolvedUrl = response.url || url;
+      if (new URL(resolvedUrl).protocol !== "https:" || typeof document?.id !== "string" || new URL(document.id).protocol !== "https:") throw new Error("invalid principal HTTPS URL");
+      // Copies contribute only the canonical ID, never authority fields.
+      if (document.id === resolvedUrl) validatePrincipalDocument(document);
+      return { document, resolvedUrl };
+    }
   }
 
   private async getJson<T>(path: string): Promise<T> {
@@ -430,7 +444,12 @@ function addQuery(
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text}`);
+    throw new HttpResponseError(response.status, text);
   }
   return response.json() as Promise<T>;
+}
+
+/** HTTP status is exposed so callers distinguish a missing resource from a failed read. */
+export class HttpResponseError extends Error {
+  constructor(public readonly status: number, body: string) { super(`HTTP ${status}: ${body}`); }
 }

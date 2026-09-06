@@ -1,4 +1,4 @@
-// Pure room-state projection: the ADP Section 6.1 rules that turn an accepted
+// Pure room-state projection: the ADP Section 5.1 rules that turn an accepted
 // ServerRecord into member, timeline, contract, and inbox changes on a
 // LocalRoomState, plus the local-chain validation that gates them and the
 // read-side predicates over room state. Every function is a plain transform

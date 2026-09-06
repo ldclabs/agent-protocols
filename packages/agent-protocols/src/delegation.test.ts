@@ -31,6 +31,7 @@ test("validates and materializes delegation grant events", () => {
     subject: subject.agentId(),
     relationship: "primary_delegate",
     scopes: ["inbox.screen", "meeting.propose"],
+    audiences: ["https://dmsg.net"],
     constraints: { requires_human_approval: ["meeting.accept"] },
     not_before: 1_779_753_600_000,
     expires_at: 1_790_000_000_000,
@@ -40,7 +41,7 @@ test("validates and materializes delegation grant events", () => {
   );
 
   assert.doesNotThrow(() => validateDelegationEnvelope(envelope));
-  const credential = materializeDelegationCredential(envelope);
+  const credential = materializeDelegationCredential(envelope, { acceptedAt: 1_779_753_600_000 });
 
   assert.equal(credential.protocol, DELEGATION_PROTOCOL);
   assert.equal(credential.controller, controller.agentId());
@@ -68,6 +69,7 @@ test("validates revocation events and rejects invalid payloads", () => {
         principal: { id: "http://example.com" },
         subject: controller.agentId(),
         scopes: [],
+        audiences: ["https://dmsg.net"],
       }),
     /HTTPS|scopes/,
   );
@@ -78,7 +80,8 @@ test("validates principal documents and event protocol", () => {
   assert.doesNotThrow(() =>
     validatePrincipalDocument({
       id: "https://profiles.example.com/org/acme",
-      controllers: [controller.agentId()],
+      protocol: DELEGATION_PROTOCOL, updated_at: 1000,
+      controllers: [{ id: controller.agentId(), source: "local", valid_from: 0 }],
       aliases: ["https://profiles.example.com/acme"],
       delegation_query_url: "https://profiles.example.com/v1/delegations/query",
     }),
@@ -103,6 +106,7 @@ test("validates principal documents and event protocol", () => {
       principal: { id: "https://example.com/p" },
       subject: controller.agentId(),
       scopes: ["scope"],
+      audiences: ["https://dmsg.net"],
     }),
   );
   assert.equal(valid.event.type, DELEGATION_GRANT);
@@ -117,6 +121,7 @@ test("rejects malformed HTTPS-like principal URLs", () => {
         principal: { id: principalId },
         subject: signer.agentId(),
         scopes: ["scope"],
+        audiences: ["https://dmsg.net"],
       }),
     );
   }
@@ -130,6 +135,7 @@ test("grant expiry is checked against not_before and created_at separately", () 
     principal: { id: "https://api.al.ink/d9c6a99cne5g00a6scn0" },
     subject: subject.agentId(),
     scopes: ["inbox.screen"],
+    audiences: ["https://dmsg.net"],
   };
 
   // expires_at must be greater than not_before when both are present.
@@ -191,9 +197,10 @@ test("public delegation queries are existence checks over both subject and princ
 
 test("principal documents bind controllers only when read at their own id", () => {
   const controller = AgentSigner.fromSeed(new Uint8Array(32).fill(48));
-  const document = {
+  const document: import("./delegation.js").PrincipalDocument = {
     id: "https://api.al.ink/d9c6a99cne5g00a6scn0",
-    controllers: [controller.agentId()],
+    protocol: DELEGATION_PROTOCOL, updated_at: 1000,
+      controllers: [{ id: controller.agentId(), source: "local", valid_from: 0 }],
     aliases: ["https://al.ink/yan"],
   };
 
@@ -206,5 +213,5 @@ test("principal documents bind controllers only when read at their own id", () =
 
   assert.equal(isPrincipalAlias(document, "https://al.ink/yan"), true);
   assert.equal(isPrincipalAlias(document, "https://impostor.example.com/yan"), false);
-  assert.equal(isPrincipalAlias({ id: "https://x.example.com", controllers: [] }, "https://x.example.com"), false);
+  assert.equal(isPrincipalAlias({ id: "https://x.example.com", protocol: DELEGATION_PROTOCOL, updated_at: 0, controllers: [] }, "https://x.example.com"), false);
 });

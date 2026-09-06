@@ -235,7 +235,15 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
   return rows.map(([name, description, readOnly, idempotent, openWorld]) => ({
     name,
     description,
-    input_schema: { type: "object" },
+    input_schema: name === TOOL_DELEGATION_GRANT ? {
+      type: "object", required: ["delegation_service", "id", "principal_id", "subject", "scopes", "audiences"],
+      properties: {
+        delegation_service: { type: "string" }, id: { type: "string" }, principal_id: { type: "string" }, subject: { type: "string" },
+        scopes: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string" } },
+        audiences: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string" } },
+        relationship: { type: "string" }, constraints: { type: "object" }, not_before: { type: "integer" }, expires_at: { type: "integer" },
+      },
+    } : { type: "object" },
     output_schema: { type: "object" },
     annotations: {
       readOnlyHint: readOnly,

@@ -24,7 +24,7 @@ import { isRecord, normalizeHost } from "./internal.js";
  * `(host, room_id)`: ADP room IDs are only recommended to be globally unique
  * and a connector can be configured with multiple hosts. `head_seq` /
  * `head_hash` are the latest locally verified head-advancing record per ADP
- * Section 6.1.
+ * Section 5.1.
  */
 export interface SyncState {
   host: string;

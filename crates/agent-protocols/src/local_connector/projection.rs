@@ -26,7 +26,7 @@ pub(crate) fn record_advances_room_head(room: &LocalRoomState, record: &ServerRe
     event_type_advances_room_head(room, record.envelope.event.kind.as_str())
 }
 
-/// ADP Section 6.1: room lifecycle, `message`-kind, and `control`-kind records
+/// ADP Section 5.1: room lifecycle, `message`-kind, and `control`-kind records
 /// advance the room head. `signal`-kind records — including the built-in
 /// membership events — only anchor to an accepted record.
 pub(crate) fn event_type_advances_room_head(room: &LocalRoomState, event_type: &str) -> bool {

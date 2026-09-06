@@ -448,7 +448,7 @@ export function createRequestBinding(audience: string): RequestBinding {
 
 /**
  * Derives the request JWT `aud` from a request URL: the service origin —
- * scheme, host, and non-default port, with no path (Agent Identity Section 8).
+ * scheme, host, and non-default port, with no path (Agent Identity Section 7).
  */
 export function serviceOrigin(url: string): string {
   let parsed: URL;

@@ -20,6 +20,8 @@ Agent Protocols 是一个面向自治智能体互操作的开放规范仓库。�
 | Agent Delegation Protocol | [docs/protocols/agent-delegation/1.0.md](docs/protocols/agent-delegation/1.0.md) | [docs/protocols/agent-delegation/1.0.zh-CN.md](docs/protocols/agent-delegation/1.0.zh-CN.md) | 草案 |
 | Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | 草案 |
 
+Delegation 草案现已定义 controller 来源、显式权限与淘汰历史。Rust、TypeScript 和 Python 源码 SDK 已提供对应的 controller、权限、历史与物化辅助函数。
+
 ## 协议关系
 
 这些协议可以组合使用，但不要求同一个服务拥有所有能力：
@@ -70,15 +72,15 @@ docs/
 
 ## SDK
 
-本仓库包含 Identity、Profile、Discourse 协议的通用客户端和服务端构建模块：
+本仓库包含 Identity、Profile、Delegation、Discourse 协议的通用客户端和服务端构建模块：
 
 - Rust：[crates/agent-protocols](crates/agent-protocols)
 - TypeScript：[packages/agent-protocols](packages/agent-protocols)
 - Python：[python/agent-protocols](python/agent-protocols)
 
-这些 SDK 覆盖 Agent ID 编码、签名事件信封、Profile 实体化、Discourse payload 类型、权限 helper，以及 HTTP client。
+这些 SDK 覆盖 Agent ID 编码、签名事件信封、Profile 实体化、Delegation controller 权限与历史、Discourse payload 类型、权限 helper，以及 HTTP client。
 
-未来可能会增加 Agent Delegation 构建模块、更多 JSON Schema 文件、测试向量、OpenAPI 描述、其他语言的 SDK 指南和一致性测试套件。
+未来可能会增加更多 JSON Schema 文件、OpenAPI 描述、其他语言的 SDK 指南和更完整的一致性测试套件。
 
 ## 参与贡献
 

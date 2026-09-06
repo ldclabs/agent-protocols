@@ -28,6 +28,7 @@ class DelegationTests(unittest.TestCase):
             "subject": subject.agent_id(),
             "relationship": "primary_delegate",
             "scopes": ["inbox.screen", "meeting.propose"],
+            "audiences": ["https://dmsg.net"],
             "constraints": {"requires_human_approval": ["meeting.accept"]},
             "not_before": 1_779_753_600_000,
             "expires_at": 1_790_000_000_000,
@@ -37,7 +38,7 @@ class DelegationTests(unittest.TestCase):
         )
 
         validate_delegation_envelope(envelope)
-        credential = materialize_delegation_credential(envelope)
+        credential = materialize_delegation_credential(envelope, accepted_at=1_779_753_600_000)
 
         self.assertEqual(envelope["event"]["type"], DELEGATION_GRANT)
         self.assertEqual(credential["protocol"], DELEGATION_PROTOCOL)
@@ -70,6 +71,7 @@ class DelegationTests(unittest.TestCase):
                     "principal": {"id": "http://example.com"},
                     "subject": controller.agent_id(),
                     "scopes": [],
+                    "audiences": ["https://dmsg.net"],
                 }
             )
 
@@ -78,7 +80,7 @@ class DelegationTests(unittest.TestCase):
         validate_principal_document(
             {
                 "id": "https://profiles.example.com/org/acme",
-                "controllers": [controller.agent_id()],
+                "protocol": DELEGATION_PROTOCOL, "updated_at": 1000, "controllers": [{"id": controller.agent_id(), "source": "local", "valid_from": 0}],
                 "aliases": ["https://profiles.example.com/acme"],
                 "delegation_query_url": "https://profiles.example.com/v1/delegations/query",
             }
@@ -114,6 +116,7 @@ class DelegationTests(unittest.TestCase):
                         "principal": {"id": principal_id},
                         "subject": signer.agent_id(),
                         "scopes": ["scope"],
+                        "audiences": ["https://dmsg.net"],
                     }
                 )
 
@@ -134,6 +137,7 @@ class Revision20260704DelegationTests(unittest.TestCase):
             "principal": {"id": "https://api.al.ink/d9c6a99cne5g00a6scn0"},
             "subject": subject,
             "scopes": ["inbox.screen"],
+            "audiences": ["https://dmsg.net"],
         }
 
         with self.assertRaisesRegex(AgentProtocolError, "greater than not_before"):

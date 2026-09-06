@@ -181,7 +181,7 @@ pub fn builtin_event_class(event_type: &str) -> Option<BuiltinEventClass> {
 }
 
 /// Whether an accepted record of this type advances the room head and must
-/// therefore match the current head when written (Section 6.1). Room
+/// therefore match the current head when written (Section 5.1). Room
 /// lifecycle, `message`-kind, and `control`-kind records advance the head;
 /// `signal`-kind records — including the built-in membership events — only
 /// anchor to an accepted record. Unknown custom types default to

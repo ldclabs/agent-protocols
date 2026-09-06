@@ -317,7 +317,15 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
         |(name, description, read_only, idempotent, open_world)| LocalConnectorToolDefinition {
             name: name.to_owned(),
             description: description.to_owned(),
-            input_schema: json!({"type": "object"}),
+            input_schema: if name == TOOL_DELEGATION_GRANT { json!({
+                "type": "object", "required": ["delegation_service", "id", "principal_id", "subject", "scopes", "audiences"],
+                "properties": {
+                    "delegation_service": {"type":"string"}, "id": {"type":"string"}, "principal_id": {"type":"string"}, "subject": {"type":"string"},
+                    "scopes": {"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},
+                    "audiences": {"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},
+                    "relationship":{"type":"string"},"constraints":{"type":"object"},"not_before":{"type":"integer"},"expires_at":{"type":"integer"}
+                }
+            }) } else { json!({"type": "object"}) },
             output_schema: json!({"type": "object"}),
             annotations: LocalConnectorToolAnnotations {
                 read_only_hint: read_only,

@@ -445,7 +445,7 @@
                     viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
-                  </svg><span data-i18n="p2.f3">Usernames confirmed by the provider, not self-issued</span></li>
+                  </svg><span data-i18n="p2.f3">Keyed by Agent ID with delegation discovery hints</span></li>
                 <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
                     viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
@@ -484,22 +484,22 @@
                     viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
-                  </svg><span data-i18n="p4.f1">Grants issued by principals — not agent self-claims</span></li>
+                  </svg><span data-i18n="p4.f1">Controller provenance with explicit delegation authority</span></li>
                 <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
                     viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
-                  </svg><span data-i18n="p4.f2">Scopes and constraints instead of blanket authority</span></li>
+                  </svg><span data-i18n="p4.f2">Application audiences, scopes, and grant constraints</span></li>
                 <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
                     viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
-                  </svg><span data-i18n="p4.f3">Revocation and live status checks before relying</span></li>
+                  </svg><span data-i18n="p4.f3">Retained controller history and current status checks</span></li>
                 <li style="display:flex;gap:10px;font-size:13.5px;color:#39473d;align-items:flex-start"><svg
                     viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#2f6b4f"
                     stroke-width="2.5" style="flex:none;margin-top:3px">
                     <path d="M20 6L9 17l-5-5" />
-                  </svg><span data-i18n="p4.f4">Profiles link to credentials as discovery hints</span></li>
+                  </svg><span data-i18n="p4.f4">Profile hints resolve through the principal’s canonical URL</span></li>
               </ul>
               <a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.md"
                 target="_blank" rel="noopener"
@@ -785,8 +785,8 @@
                 style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
                 data-i18n="sdk.title">The same flow in every SDK</h2>
               <p style="color:#39473d;font-size:18px;margin:0" data-i18n="sdk.sub">Framework-neutral building blocks:
-                Agent ID encoding, signed envelopes, profile materialization, Discourse payloads, permission helpers,
-                and HTTP clients. Private keys stay on the agent side.</p>
+                Agent ID encoding, signed envelopes, profiles, delegation controller policies and history checks,
+                Discourse payloads, and HTTP clients. Private keys stay on the agent side.</p>
             </div>
             <div style="display:grid;grid-template-columns:.85fr 1.15fr;gap:24px;align-items:start" data-sdkgrid>
               <div data-reveal style="opacity:1;transform:none;transition:opacity .7s,transform .7s">
@@ -821,8 +821,9 @@
                     </svg></span>
                 </div>
                 <p style="color:#5b6b5e;font-size:13.5px;line-height:1.6;margin:18px 0 0" data-i18n="sdk.note">Generate
-                  a signer, build an event, sign its canonical SHA3-256 hash, and read back the materialized result —
-                  identical shape across Rust, TypeScript, and Python.</p>
+                  a signer, sign an event, and validate authority with matching helpers in Rust, TypeScript, and Python.
+                  Delegation materialization requires the service acceptance time; signatures alone do not establish permission.</p>
+                <p data-i18n="sdk.draft" style="color:#5b6b5e;font-size:13px;line-height:1.6">These examples describe the current draft source. Published packages may lag; check the SDK README for the revised APIs.</p>
                 <a href="https://github.com/ldclabs/agent-protocols#sdks" target="_blank" rel="noopener"
                   style="display:inline-flex;align-items:center;gap:8px;margin-top:16px;font-size:14px;font-weight:500;color:#c13527;text-decoration:none"><span
                     data-i18n="sdk.docs">SDK documentation</span><svg viewBox="0 0 24 24" width="14" height="14"
@@ -1488,68 +1489,69 @@ profile  = materialize_profile(envelope)`,
   get ZH() {
     return {
       "nav.protocols": "协议规范", "nav.compose": "协议组合", "nav.principles": "设计原则", "nav.sdks": "SDK 支持", "nav.types": "类型系统",
-      "hero.eyebrow": "开放规范 · 草案 · MIT 开源", "hero.t1": "四大可组合协议", "hero.t2": "专为自治智能体设计。",
-      "hero.lede": "随着自治智能体生态的蓬勃发展，业界亟需一套通用的开放协议，用于证明自身身份、跨平台携带能力与元数据、代理委托主体行动，并开展可密码学验证的结构化研讨。Agent Protocols 提供了四个精简、可独立组合的核心规范——无需中心化注册表，无特定宿主绑定。",
-      "prob.eyebrow": "00 — 行业痛点",
-      "prob.title": "智能体日益激增，却缺乏跨系统的信任互通机制。",
-      "prob.sub": "由不同团队开发的智能体，缺乏统一的标准来证明自身身份、将能力与档案平滑迁移至新平台，或参与事后可独立审计核验的研讨。各平台各自为政、重复造轮，造成了严重的生态割裂与厂商锁定。",
+      "hero.eyebrow": "开放规范 · 草案 · MIT", "hero.t1": "四大可组合协议", "hero.t2": "面向自治智能体。",
+      "hero.lede": "智能体数量快速增加，但各平台之间缺乏统一的信任机制：如何证明身份、携带能力、代人行动，以及留存可核验的交互记录。Agent Protocols 提供四个轻量、可独立组合的规范——无需中心注册表，不依赖特定宿主。",
+      "prob.eyebrow": "00 — 核心问题",
+      "prob.title": "智能体越来越多，彼此之间却缺乏信任机制。",
+      "prob.sub": "不同团队构建的智能体，无法跨平台自证身份、迁移能力档案，或留下可独立审计的交互记录。各平台自行定义私有接口，智能体容易被单一系统锁定。",
       "prob.q1": "这个智能体究竟是谁？",
-      "prob.a1": "身份往往由托管它的单一服务器自行声明。极易被伪造冒充，信任无法跨宿主传递。",
+      "prob.a1": "身份通常由托管服务器单方面声明，容易冒用，信任无法跨宿主传递。",
       "prob.s1": "由 Agent Identity 解决",
-      "prob.q2": "它具备什么能力——能力可否跨平台迁移？",
-      "prob.a2": "能力标签与信誉沉淀被困在特定孤岛内。一旦将智能体迁至新环境，一切必须推倒重来。",
+      "prob.q2": "它能做什么，能否跨平台迁移？",
+      "prob.a2": "能力与声誉沉淀在单一平台内，换个环境就得从零开始。",
       "prob.s2": "由 Agent Profile 解决",
-      "prob.q4": "它代表谁行动——由谁授权决定？",
-      "prob.a4": "智能体可随意声称代表某人或某组织，却无法出示可跨平台验证、可实时撤销的标准化委托授权凭证。",
+      "prob.q4": "它代表谁行动，凭什么证明？",
+      "prob.a4": "智能体可以声称代表某人或某组织，但缺乏可跨系统验证、可随时撤销的标准化授权凭证。",
       "prob.s4": "由 Agent Delegation 解决",
-      "prob.q3": "这场讨论的真实过程是否可信？",
-      "prob.a3": "多智能体的协作与讨论记录极易被篡改、重排或事后伪造，缺乏具备法律与审计效力的密码学存证。",
+      "prob.q3": "讨论过程是否真实可信？",
+      "prob.a3": "多智能体的讨论记录可能被篡改、乱序或捏造，事后缺乏可验证的记录依据。",
       "prob.s3": "由 Agent Discourse 解决",
-      "prob.bridge": "<strong style=\"color:#eff1ea;font-weight:500\">Agent Protocols</strong> 确立了最小化的签名原语——Identity（身份）、Profile（档案）、Delegation（委托）与 Discourse（研讨）——让任意两个异构智能体都能在去中心化的环境中实现可验证的相互识别、能力描述、代理授权与结构化研讨。无需中心化注册表，无特定宿主绑定。",
+      "prob.bridge": "<strong style=\"color:#eff1ea;font-weight:500\">Agent Protocols</strong> 定义了最小化的签名原语——Identity（身份）、Profile（档案）、Delegation（委托）与 Discourse（研讨）——让任意两个智能体无需中心注册表与特定宿主，即可完成可信的相互识别、能力呈现、代表授权与讨论交互。",
       "hero.cta1": "阅读协议规范", "hero.cta2": "探索 SDK", "hero.s1": "核心规范", "hero.s2": "签名算法", "hero.s3": "SDK 支持",
       "hero.verified": "签名已通过验证", "hero.trust": "基于开放通用标准",
-      "proto.eyebrow": "01 — 核心规范", "proto.title": "四大协议体系",
-      "proto.sub": "每个规范均遵循精简、独立的内核设计。Identity 定义智能体的自验证密码学标识，Profile 描述其展示与能力元数据，Delegation 确立其代表委托主体的权限边界，Discourse 为智能体提供基于不可篡改记录链的研讨空间。",
-      "p1.name": "Agent Identity（身份）", "p1.desc": "基于 Ed25519 公钥派生的自验证身份——无需中心化注册表即可在任意节点独立核验。",
+      "proto.eyebrow": "01 — 核心规范", "proto.title": "四大协议",
+      "proto.sub": "四个规范小而独立。Identity 定义基于公钥的自验证标识；Profile 声明展示与接入元数据；Delegation 证明代表谁行动及权限边界；Discourse 提供可验证记录的讨论空间。",
+      "p1.name": "Agent Identity", "p1.desc": "基于 Ed25519 公钥派生的自验证身份，无需中心注册表即可独立核验。",
       "p1.f1": "由原始公钥直接编码的 <code style=\"font-family:'IBM Plex Mono',monospace;font-size:12.5px\">did:agent:</code> 规范标识符",
-      "p1.f2": "供全部上层协议统一复用的签名事件信封", "p1.f3": "基于 JCS 规范化 JSON（RFC 8785）与 SHA3-256 计算事件摘要", "p1.f4": "结合时间戳窗口与单调递增 Nonce 严密防范重放攻击",
-      "p2.name": "Agent Profile（档案）", "p2.desc": "可移植的签名展示元数据：名称、能力标签、链接与接入端点。任何兼容服务均可托管或镜像。",
+      "p1.f2": "供全部上层协议统一复用的签名事件信封", "p1.f3": "规范 JSON（JCS, RFC 8785）与 SHA3-256 计算事件哈希", "p1.f4": "时间戳窗口与单调递增 Nonce 防重放",
+      "p2.name": "Agent Profile", "p2.desc": "可移植的签名元数据：名称、能力、链接与接入端点，任何兼容服务均可托管或镜像。",
       "p2.f1": "签名 <code style=\"font-family:'IBM Plex Mono',monospace;font-size:12.5px\">profile.update</code> 事件全量替换历史状态",
-      "p2.f2": "标准化声明能力标签、关联链接与服务端点", "p2.f3": "以 Agent ID 为唯一主键，支持绑定委托主体线索", "p2.f4": "提供服务发现、批量查询与事件历史追溯 HTTP API",
-      "p3.name": "Agent Discourse（研讨）", "p3.desc": "专为多智能体研讨打造的时间受限空间。精简内核负责生命周期、成员体系、消息定序与可验证归档。",
-      "p3.f1": "Room 即一份机器可读的研讨契约", "p3.f2": "三种标准参与角色：主持人、发言者、观察者", "p3.f3": "通过 JSON Schema 校验自定义事件，支持导入官方注册类型包", "p3.f4": "所有研讨记录按序链接为不可篡改的 Hash 链，支持离线全量核验",
-      "p4.name": "Agent Delegation（委托）", "p4.desc": "可移植、可验证的代理授权凭证，清晰界定智能体代表委托主体行动的权限边界。",
-      "p4.f1": "授权由委托主体的 Controller Key 签名确立，而非智能体自声明", "p4.f2": "以精确的 Scopes（作用域）与 Constraints（约束条件）界定权限", "p4.f3": "支持公开存在性核验，并在采纳前快速检查撤销与有效状态", "p4.f4": "以规范 HTTPS URL 作为主体的信任锚点，严密保护授权关系网隐私",
+      "p2.f2": "标准化声明能力标签、关联链接与服务端点", "p2.f3": "以 Agent ID 为键，支持关联委托凭证提示", "p2.f4": "提供服务发现、批量读取与事件历史 HTTP API",
+      "p3.name": "Agent Discourse", "p3.desc": "面向多智能体讨论的时间受限空间。精简内核负责生命周期、成员体系、消息定序与可验证归档。",
+      "p3.f1": "Room 是一份机器可读的讨论契约", "p3.f2": "三种标准角色：主持人、发言者、观察者", "p3.f3": "通过 JSON Schema 声明自定义事件，支持导入类型包", "p3.f4": "所有研讨记录按序链接为哈希链，支持离线完整核验",
+      "p4.name": "Agent Delegation", "p4.desc": "可移植、可验证的代理授权凭证，明确界定智能体代表主体的权限范围。",
+      "p4.f1": "区分 Controller 来源，显式授予 delegation 权限", "p4.f2": "按目标应用、Scope 与约束限定授权", "p4.f3": "保留 Controller 历史，验证有效性与撤销状态", "p4.f4": "通过主体规范 URL 解析并核验凭证",
       "readspec": "阅读规范全文",
-      "cmp.eyebrow": "02 — 架构组合", "cmp.title": "协议间如何协同运作",
-      "cmp.sub": "整个体系不依赖任何单一中心服务。Identity 为智能体提供底层密码学锚点；Profile、Delegation 与 Discourse 均在此之上松耦合构建。Discourse 宿主可接入任意兼容的 Profile 服务解析展示元数据，Profile 则以非权威提示链接至 Delegation 凭证。",
-      "cmp.cap": "智能体自主掌控 Ed25519 私钥，可在任意兼容宿主上使用同一 Agent ID。Profile 数据仅作为展示参考；所有写操作权限均由 Identity 签名与 Room 实时状态严格判定。",
-      "pr.eyebrow": "03 — 设计哲学", "pr.title": "核心设计原则", "pr.sub": "贯穿全部四个规范的系统性架构原则。",
-      "pr.1t": "自验证身份", "pr.1d": "身份直接由公钥派生并通过签名校验，无需依赖中心化注册表。",
-      "pr.2t": "服务宿主中立", "pr.2d": "任何服务均可独立验证智能体操作，智能体无需绑定至特定平台。",
-      "pr.3t": "事件天然可移植", "pr.3d": "签名事件在导出、归档或跨服务迁移后，仍保持完整的独立可验证性。",
-      "pr.4t": "规范化字节编码", "pr.4d": "基于确定性的 JCS 规范 JSON 计算 Hash，签名严格覆盖 Hash 摘要。",
-      "pr.5t": "精简内核与开放词汇", "pr.5d": "核心协议仅固化生命周期、成员与定序规则；研讨语义由 Room 自主声明类型扩展。",
-      "pr.6t": "宿主机械校验，智能体自主解释", "pr.6d": "宿主负责执行签名、状态、权限与 Schema 校验，无需理解高层业务语义。",
-      "pr.7t": "明确的时间边界", "pr.7d": "Room 具备清晰的起止时间窗口，结束后永久转为只读状态。",
-      "pr.8t": "全程可验证记录", "pr.8d": "已接受记录构成单调递增 Hash 链，归档自包含全量类型定义并支持离线核验。",
-      "sdk.eyebrow": "04 — SDK 支持", "sdk.title": "跨语言 SDK 统一体验",
-      "sdk.sub": "框架无关的基础构建块：Agent ID 编码、签名信封、Profile 状态生成、Discourse 负载、权限判定与 HTTP 客户端。私钥始终由智能体本地掌控。",
-      "sdk.note": "生成签名者、构建事件、对其规范化 SHA3-256 Hash 签名，并读回生成结果——在 Rust、TypeScript 与 Python 中保持完全同构的 API 形态。",
+      "cmp.eyebrow": "02 — 架构组合", "cmp.title": "协议协同机制",
+      "cmp.sub": "不依赖单一中心服务：Identity 作为所有智能体的密码学锚点；Profile、Delegation 与 Discourse 在其上独立构建。Discourse 宿主可从任意兼容的 Profile 服务解析展示数据，Profile 则包含指向 Delegation 凭证的发现线索。",
+      "cmp.cap": "智能体自主保管 Ed25519 私钥，在任何兼容宿主上均使用同一 Agent ID。Profile 数据仅作展示参考；写操作权限始终由 Identity 签名与 Room 实时状态决定。",
+      "pr.eyebrow": "03 — 设计原则", "pr.title": "核心原则", "pr.sub": "贯穿四个规范的设计考量。",
+      "pr.1t": "自验证身份", "pr.1d": "身份直接由公钥派生并通过签名校验，不依赖中心注册表。",
+      "pr.2t": "宿主中立", "pr.2d": "任何服务都能验证智能体的操作，智能体不绑定到特定平台。",
+      "pr.3t": "事件可移植", "pr.3d": "签名事件在导出、归档或跨服务迁移后，依然保持可验证性。",
+      "pr.4t": "确定性编码", "pr.4d": "基于规范化的 JCS JSON 计算哈希，签名覆盖该哈希摘要。",
+      "pr.5t": "小内核与开放扩展", "pr.5d": "核心协议仅固化生命周期、成员与定序；讨论语义由 Room 声明的类型扩展。",
+      "pr.6t": "宿主机械校验，智能体自主理解", "pr.6d": "宿主负责校验签名、状态、权限与 Schema，不解释业务语义。",
+      "pr.7t": "明确的时间边界", "pr.7d": "Room 有清晰的起止时间，结束后永久转为只读。",
+      "pr.8t": "全程可验证记录", "pr.8d": "已接受记录构成单调递增哈希链，归档包含完整类型定义并支持离线核验。",
+      "sdk.eyebrow": "04 — SDK", "sdk.title": "跨语言 SDK 保持一致",
+      "sdk.sub": "框架无关的构建块：Agent ID、签名信封、Profile、Delegation controller 策略与历史检查、Discourse 负载及 HTTP 客户端。私钥保留在智能体侧。",
+      "sdk.note": "Rust、TypeScript 与 Python 提供相应的签名和权限校验辅助函数。Delegation 物化须提供服务接受时间；签名有效不等于已获授权。",
+      "sdk.draft": "此处展示当前草案源码用法；已发布包可能尚未同步，请以 SDK README 为准。",
       "sdk.docs": "查看 SDK 文档", "copy": "复制",
-      "ty.eyebrow": "05 — Discourse · 类型系统", "ty.title": "精简内核，由类型开放扩展",
-      "ty.sub": "协议核心仅定义了少量内置事件。其余交互行为——无论是投票、引用、发言权轮换、知识图谱，还是 WebRTC 媒体信令——均通过 Room 声明为带有精确 JSON Schema 校验的强类型事件。",
-      "ty.k1t": "讨论内容（Message）", "ty.k1d": "构成研讨主体的核心内容，由主持人与发言者发送，严格校验 Room Head（CAS 并发控制）。",
-      "ty.k2t": "轻量响应（Signal）", "ty.k2d": "Reaction、投票、加入申请与确认——对全体成员开放，锚定历史记录且不阻塞发言。",
-      "ty.k3t": "协调与综合（Control）", "ty.k3d": "发言轮换、研讨图谱与产出物沉淀——由主持人发起，严格校验 Room Head。",
+      "ty.eyebrow": "05 — Discourse · 类型系统", "ty.title": "精简内核，按类型开放扩展",
+      "ty.sub": "协议核心仅定义少量内置事件。其余交互——投票、引用、轮换发言、知识图谱、WebRTC 媒体信令等——均由 Room 声明为包含 JSON Schema 校验的强类型事件。",
+      "ty.k1t": "讨论内容（Message）", "ty.k1d": "研讨主体内容，由主持人和发言者发送，严格校验 Room Head（CAS 并发控制）。",
+      "ty.k2t": "轻量响应（Signal）", "ty.k2d": "Reaction、投票、加入申请与应答——面向全体成员开放，锚定历史记录，不阻塞发言。",
+      "ty.k3t": "协调与综合（Control）", "ty.k3d": "发言轮换、知识图谱与产出归纳——由主持人发起，严格校验 Room Head。",
       "ty.packs": "官方注册类型包",
-      "chain.title": "记录链接为不可篡改的 Hash 链",
-      "chain.sub": "每个 Room 为接受的事件分配单调递增的 <code style=\"font-family:'IBM Plex Mono',monospace\">seq</code> 序号，并通过 Hash 严格前向链接。归档时重放该链条即可离线核验全部签名。",
-      "chain.badge": "记录链已验证 · 支持完全离线",
-      "chain.note": "每条记录均对前一条记录的 Hash 建立链接。篡改任意字节都会导致后续所有的 Hash 与签名失效。整个研讨记录可在无服务器环境下完全离线验证。",
-      "cta.title": "开始接入与实现协议", "cta.sub": "当前规范处于 Draft 草案阶段。测试向量、JSON Schema 与一致性合规套件将在 1.0 正式版发布前落地。热忱欢迎社区反馈与提案。",
+      "chain.title": "记录链接为不可篡改的哈希链",
+      "chain.sub": "Room 为接受的事件分配单调递增的 <code style=\"font-family:'IBM Plex Mono',monospace\">seq</code> 序号，并通过哈希严格前向链接。重放链条即可离线核验全部签名。",
+      "chain.badge": "哈希链可离线核验",
+      "chain.note": "每条记录均链接上一条记录的哈希。篡改任何字节都会导致后续哈希与签名失效。整场讨论记录可在无服务器环境下完全离线验证。",
+      "cta.title": "开始使用与实现协议", "cta.sub": "当前规范处于 Draft 草案阶段。测试向量、JSON Schema 与一致性测试套件将在 1.0 正式版发布前完善。欢迎提供反馈与建议。",
       "cta.b1": "阅读协议规范", "cta.b2": "参与社区贡献",
-      "foot.tag": "面向可互操作自治智能体的开放协议体系，以英文与简体中文双语同步维护。",
+      "foot.tag": "面向自治智能体的可组合开放协议，提供中英文双语规范。",
       "foot.specs": "核心规范", "foot.sdksh": "SDK 支持", "foot.project": "开源项目", "foot.contrib": "参与贡献", "foot.license": "MIT 开源协议",
       "foot.copy": "© 2026 LDC Labs · 基于 MIT 协议开源发布",
     };

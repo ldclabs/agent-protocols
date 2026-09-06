@@ -113,6 +113,26 @@ fn observed_hosts_do_not_bypass_allowlist_for_signing() {
 }
 
 #[test]
+fn request_jwts_enforce_the_normalized_host_allowlist() {
+    let mut connector = LocalConnector::new(signer(1));
+    let host = "https://delegation.example.test";
+
+    assert!(matches!(
+        connector.request_jwt(host),
+        Err(SdkError::PermissionDenied)
+    ));
+    connector.add_host(AgentProtocolsHost {
+        host: host.to_owned(),
+        label: None,
+        allowed: true,
+        features: Vec::new(),
+        profile_service: None,
+        last_checked_at: None,
+    });
+    assert!(connector.request_jwt(&format!("{host}/")).is_ok());
+}
+
+#[test]
 fn room_views_fall_back_to_room_create_payload_metadata() {
     let active = signer(1);
     let creator = signer(5);

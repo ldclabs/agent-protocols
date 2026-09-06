@@ -9,6 +9,7 @@ except ImportError:  # pragma: no cover
     requests = None  # type: ignore[assignment]
 
 from .delegation import (
+    validate_delegation_id,
     validate_delegation_query_request,
     validate_principal_document,
     validate_principal_resolution,
@@ -205,7 +206,7 @@ class DelegationClient:
         return self._get("/.well-known/agent-delegation")
 
     def principal(self, principal_url: str | None = None) -> dict[str, Any]:
-        """Resolves a principal document per Agent Delegation Section 5.3. A
+        """Resolves a principal document per Agent Delegation Section 3. A
         document is authoritative only when read at its own `id`, so one served
         elsewhere (an alias hosting a copy rather than redirecting) is discarded
         and `document["id"]` is resolved once more."""
@@ -217,13 +218,16 @@ class DelegationClient:
         return canonical
 
     def delegation(self, delegation_id: str) -> dict[str, Any]:
-        return self._get(f"/v1/delegations/{delegation_id}")
+        validate_delegation_id(delegation_id)
+        return self._get(f"/v1/delegations/{quote(delegation_id, safe='')}")
 
     def delegation_status(self, delegation_id: str) -> dict[str, Any]:
-        return self._get(f"/v1/delegations/{delegation_id}/status")
+        validate_delegation_id(delegation_id)
+        return self._get(f"/v1/delegations/{quote(delegation_id, safe='')}/status")
 
     def delegation_events(self, delegation_id: str) -> dict[str, Any]:
-        return self._get(f"/v1/delegations/{delegation_id}/events")
+        validate_delegation_id(delegation_id)
+        return self._get(f"/v1/delegations/{quote(delegation_id, safe='')}/events")
 
     def submit_delegation_event(self, envelope: Envelope) -> dict[str, Any]:
         return self._post("/v1/delegations", envelope)
@@ -256,11 +260,28 @@ class DelegationClient:
         return response.json()
 
     def _read_principal(self, url: str) -> tuple[dict[str, Any], str]:
-        response = self.session.get(url, headers={"Accept": "application/json"})
-        response.raise_for_status()
-        document = response.json()
-        validate_principal_document(document)
-        return document, getattr(response, "url", None) or url
+        from urllib.parse import urljoin, urlparse
+        for redirects in range(6):
+            if urlparse(url).scheme != "https":
+                raise ValueError("principal resolution requires HTTPS")
+            response = self.session.get(url, headers={"Accept": "application/json"}, allow_redirects=False)
+            if 300 <= getattr(response, "status_code", 200) < 400:
+                location = response.headers.get("location")
+                if not location or redirects >= 5:
+                    raise ValueError("invalid principal redirect chain")
+                url = urljoin(url, location)
+                continue
+            response.raise_for_status()
+            document = response.json()
+            resolved = getattr(response, "url", None) or url
+            if (not isinstance(document, dict) or not isinstance(document.get("id"), str)
+                or urlparse(document["id"]).scheme != "https" or not urlparse(document["id"]).hostname
+                or urlparse(resolved).scheme != "https"):
+                raise ValueError("invalid principal HTTPS URL")
+            if document["id"] == resolved:
+                validate_principal_document(document)
+            return document, resolved
+        raise ValueError("invalid principal redirect chain")
 
     def _get(self, path: str) -> Any:
         response = self.session.get(self.base_url + path)

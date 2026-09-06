@@ -30,7 +30,7 @@ class FakeSession:
         self._responses = list(responses)
         self.calls = []
 
-    def get(self, url, headers=None):
+    def get(self, url, headers=None, **kwargs):
         self.calls.append(("GET", url, headers, None))
         return self._responses.pop(0)
 
@@ -165,7 +165,7 @@ class DiscourseClientTests(unittest.TestCase):
 
 
 PRINCIPAL_ID = "https://api.al.ink/d9c6a99cne5g00a6scn0"
-PRINCIPAL_DOCUMENT = {"id": PRINCIPAL_ID, "controllers": [AGENT_ID], "aliases": ["https://al.ink/yan"]}
+PRINCIPAL_DOCUMENT = {"id": PRINCIPAL_ID, "protocol": "agent-delegation/1.0", "updated_at": 1000, "controllers": [{"id": AGENT_ID, "source": "local", "valid_from": 0}], "aliases": ["https://al.ink/yan"]}
 
 
 class DelegationClientTests(unittest.TestCase):
@@ -210,6 +210,29 @@ class DelegationClientTests(unittest.TestCase):
         )
         self.assertEqual(session.calls[6][3]["status"], "active")
 
+    def test_opaque_delegation_ids_are_encoded_as_one_path_segment(self):
+        session = FakeSession([FakeResponse({}) for _ in range(3)])
+        client = DelegationClient("https://api.example.com", session=session)
+        delegation_id = "a/b?#% 雪"
+
+        client.delegation(delegation_id)
+        client.delegation_status(delegation_id)
+        client.delegation_events(delegation_id)
+
+        encoded = "a%2Fb%3F%23%25%20%E9%9B%AA"
+        self.assertEqual(
+            [call[1] for call in session.calls],
+            [
+                f"https://api.example.com/v1/delegations/{encoded}",
+                f"https://api.example.com/v1/delegations/{encoded}/status",
+                f"https://api.example.com/v1/delegations/{encoded}/events",
+            ],
+        )
+        for dot_segment in (".", ".."):
+            with self.assertRaisesRegex(Exception, "dot segment"):
+                client.delegation(dot_segment)
+        self.assertEqual(len(session.calls), 3)
+
     def test_enumeration_requires_a_jwt_and_queries_the_principal_endpoint(self):
         session = FakeSession([FakeResponse({"result": []}), FakeResponse({"result": []})])
         client = DelegationClient("https://api.al.ink/", session=session)
@@ -242,7 +265,7 @@ class DelegationClientTests(unittest.TestCase):
         impostor = FakeSession(
             [
                 FakeResponse(PRINCIPAL_DOCUMENT),
-                FakeResponse({"id": "https://impostor.example.com/yan", "controllers": [AGENT_ID]}),
+                FakeResponse({"id": "https://impostor.example.com/yan", "protocol": "agent-delegation/1.0", "updated_at": 1000, "controllers": [{"id": AGENT_ID, "source": "local", "valid_from": 0}]}),
             ]
         )
         with self.assertRaisesRegex(Exception, "was served at"):
@@ -284,3 +307,26 @@ class HelperTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class DelegationResolutionRevisionTests(unittest.TestCase):
+    def test_copy_authority_is_discarded(self):
+        session = FakeSession([
+            FakeResponse({"id": PRINCIPAL_ID, "controllers": "untrusted junk"}),
+            FakeResponse(PRINCIPAL_DOCUMENT),
+        ])
+        self.assertEqual(DelegationClient("https://al.ink/yan", session).principal(), PRINCIPAL_DOCUMENT)
+
+    def test_redirects_stay_https_and_bounded(self):
+        class Redirect(FakeResponse):
+            status_code = 302
+            def __init__(self, location):
+                super().__init__({})
+                self.headers = {"location": location}
+        session = FakeSession([Redirect("http://insecure.example/p")])
+        with self.assertRaisesRegex(ValueError, "HTTPS"):
+            DelegationClient("https://al.ink/yan", session).principal()
+        self.assertEqual(len(session.calls), 1)
+        session = FakeSession([Redirect("https://al.ink/yan") for _ in range(6)])
+        with self.assertRaisesRegex(ValueError, "redirect"):
+            DelegationClient("https://al.ink/yan", session).principal()
+        self.assertEqual(len(session.calls), 6)

@@ -1,0 +1,832 @@
+[
+  {
+    "name": "restricted",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": true
+  },
+  {
+    "name": "empty recovery",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [],
+      "updated_at": 1000
+    },
+    "valid": true
+  },
+  {
+    "name": "signing only local",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "local",
+          "valid_from": 100
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": true
+  },
+  {
+    "name": "unrestricted",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": "*"
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": true
+  },
+  {
+    "name": "retired compromised",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [],
+      "updated_at": 1000,
+      "retired_controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          },
+          "retired_at": 500,
+          "invalid_from": 300
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "empty binding interval",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [],
+      "updated_at": 1000,
+      "retired_controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          },
+          "retired_at": 100
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "null",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": null
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "empty",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {}
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown string",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": "all"
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown restriction",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ],
+            "subjects": [
+              "*"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "empty scopes",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "wildcard scope",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "*"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "duplicate scopes",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "x",
+              "x"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "wildcard audience",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "x"
+            ],
+            "audiences": [
+              "*"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source https://DMSG.NET",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://DMSG.NET",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source https://dmsg.net/",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net/",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source https://dmsg.net:443",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net:443",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source http://dmsg.net",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "http://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source https://x@dmsg.net",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://x@dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source https://127.1",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://127.1",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source https://dmsg.net?x",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net?x",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source https://dmsg.net#x",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net#x",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid source https://dmsg.net\\x",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net\\x",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "valid source https://[::1]",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://[::1]",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": true
+  },
+  {
+    "name": "valid source https://dmsg.net:0",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net:0",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": true
+  },
+  {
+    "name": "bad current valid_fromTrue",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": true,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "bad current valid_from-1",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": -1,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "bad current valid_from1001",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 1001,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "bad current valid_from9007199254740992",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 9007199254740992,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "bad current retired_at500",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          },
+          "retired_at": 500
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "bad current invalid_from200",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          },
+          "invalid_from": 200
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "duplicate across lists",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000,
+      "retired_controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          },
+          "retired_at": 500
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "legacy string array",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [
+        "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "missing version",
+    "document": {
+      "id": "https://example.com/p",
+      "controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ],
+      "updated_at": 1000
+    },
+    "valid": false
+  },
+  {
+    "name": "cutoff after retirement",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [],
+      "updated_at": 1000,
+      "retired_controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          },
+          "retired_at": 500,
+          "invalid_from": 501
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "retired missing timestamp",
+    "document": {
+      "id": "https://example.com/p",
+      "protocol": "agent-delegation/1.0",
+      "controllers": [],
+      "updated_at": 1000,
+      "retired_controllers": [
+        {
+          "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
+        }
+      ]
+    },
+    "valid": false
+  }
+]

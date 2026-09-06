@@ -20,6 +20,8 @@ English and Simplified Chinese versions are maintained side by side. The English
 | Agent Delegation Protocol | [docs/protocols/agent-delegation/1.0.md](docs/protocols/agent-delegation/1.0.md) | [docs/protocols/agent-delegation/1.0.zh-CN.md](docs/protocols/agent-delegation/1.0.zh-CN.md) | Draft  |
 | Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | Draft  |
 
+The delegation draft now specifies controller provenance, explicit permissions, and retirement history. The Rust, TypeScript, and Python source SDKs include matching controller, authority, history, and materialization helpers.
+
 ## Protocol Relationship
 
 The protocols are designed to compose without forcing one service to own everything:
@@ -70,15 +72,15 @@ docs/
 
 ## SDKs
 
-This repository includes SDKs for common client and server building blocks across the Identity, Profile, and Discourse protocols:
+This repository includes SDKs for common client and server building blocks across the Identity, Profile, Delegation, and Discourse protocols:
 
 - Rust: [crates/agent-protocols](crates/agent-protocols)
 - TypeScript: [packages/agent-protocols](packages/agent-protocols)
 - Python: [python/agent-protocols](python/agent-protocols)
 
-The SDKs cover Agent ID encoding, signed event envelopes, Profile materialization, Discourse payload types, permission helpers, and HTTP clients.
+The SDKs cover Agent ID encoding, signed event envelopes, Profile materialization, Delegation controller authority and history, Discourse payload types, permission helpers, and HTTP clients.
 
-Future additions may include Agent Delegation building blocks, more JSON Schema files, test vectors, OpenAPI descriptions, SDK guidance for other languages, and conformance suites.
+Future additions may include more JSON Schema files, OpenAPI descriptions, SDK guidance for other languages, and broader conformance suites.
 
 ## Contributing
 

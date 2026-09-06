@@ -41,6 +41,17 @@ from .profile import (
     validate_profile_update,
 )
 from .delegation import (
+    Controller,
+    DelegationPolicy,
+    DelegationAcceptance,
+    validate_controller,
+    validate_delegation_event_authority,
+    validate_delegation_id,
+    validate_delegation_acceptance,
+    validate_historical_delegation,
+    validate_controller_enumeration,
+    validate_delegation_use,
+
     DELEGATION_GRANT,
     DELEGATION_PROTOCOL,
     DELEGATION_REVOKE,
@@ -57,6 +68,17 @@ from .delegation import (
 )
 
 __all__ = [
+    "Controller",
+    "DelegationPolicy",
+    "DelegationAcceptance",
+    "validate_controller",
+    "validate_delegation_event_authority",
+    "validate_delegation_id",
+    "validate_delegation_acceptance",
+    "validate_historical_delegation",
+    "validate_controller_enumeration",
+    "validate_delegation_use",
+
     "AGENT_ID_PREFIX",
     "DELEGATION_GRANT",
     "DELEGATION_PROTOCOL",

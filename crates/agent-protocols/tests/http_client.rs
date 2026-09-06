@@ -465,26 +465,17 @@ fn delegation_client_round_trips_every_endpoint() {
     let server = MockServer::start();
     let aid = sample_agent_id();
     let credential_body = format!(
-        r#"{{"id":"del_1","protocol":"agent-delegation/1.0","principal":{{"id":"{PRINCIPAL_ID}"}},"controller":"{aid}","subject":"{aid}","scopes":["inbox.screen"],"status":"active","updated_at":1,"event_id":"e"}}"#
+        r#"{{"id":"del_1","protocol":"agent-delegation/1.0","principal":{{"id":"{PRINCIPAL_ID}"}},"controller":"{aid}","owner_controller":"{aid}","grant_event_id":"e","accepted_at":1,"subject":"{aid}","scopes":["inbox.screen"],"audiences":["https://dmsg.net"],"status":"active","updated_at":1,"event_id":"e"}}"#
     );
-    let status_body = r#"{"id":"del_1","status":"active","checked_at":2,"event_id":"e"}"#;
+    let status_body = r#"{"protocol":"agent-delegation/1.0","grant_event_id":"e","accepted_at":1,"id":"del_1","status":"active","checked_at":2,"event_id":"e"}"#;
 
     server.enqueue(
         200,
         r#"{"protocol":"agent-delegation/1.0","service":"https://api.al.ink","endpoints":{"delegations":"https://api.al.ink/v1/delegations"}}"#,
     );
-    // Served at its own `id` so resolution stops here instead of following the
-    // document off to a real network host.
-    server.enqueue(
-        200,
-        format!(
-            r#"{{"id":"{}/yan","controllers":["{aid}"]}}"#,
-            server.base_url
-        ),
-    );
     server.enqueue(200, credential_body);
     server.enqueue(200, status_body);
-    server.enqueue(200, r#"{"result":[]}"#);
+    server.enqueue(200, r#"{"result":[],"acceptances":[]}"#);
     server.enqueue(200, status_body);
     server.enqueue(200, r#"{"result":[]}"#);
 
@@ -542,15 +533,52 @@ fn delegation_client_round_trips_every_endpoint() {
 
     let requests = server.requests();
     assert_eq!(requests[0].path, "/.well-known/agent-delegation");
-    assert_eq!(requests[1].path, "/yan");
-    assert_eq!(requests[2].path, "/v1/delegations/del_1");
-    assert_eq!(requests[3].path, "/v1/delegations/del_1/status");
-    assert_eq!(requests[4].path, "/v1/delegations/del_1/events");
+    assert_eq!(requests[1].path, "/v1/delegations/del_1");
+    assert_eq!(requests[2].path, "/v1/delegations/del_1/status");
+    assert_eq!(requests[3].path, "/v1/delegations/del_1/events");
+    assert_eq!(requests[4].method, "POST");
+    assert_eq!(requests[4].path, "/v1/delegations");
     assert_eq!(requests[5].method, "POST");
-    assert_eq!(requests[5].path, "/v1/delegations");
-    assert_eq!(requests[6].method, "POST");
-    assert_eq!(requests[6].path, "/v1/delegations/query");
-    assert!(requests[6].body.contains("active"));
+    assert_eq!(requests[5].path, "/v1/delegations/query");
+    assert!(requests[5].body.contains("active"));
+}
+
+#[test]
+fn delegation_ids_are_encoded_as_one_path_segment() {
+    const PRINCIPAL_ID: &str = "https://api.al.ink/d9c6a99cne5g00a6scn0";
+    let server = MockServer::start();
+    let aid = sample_agent_id();
+    let credential_body = format!(
+        r#"{{"id":"a/b?#% 雪","protocol":"agent-delegation/1.0","principal":{{"id":"{PRINCIPAL_ID}"}},"controller":"{aid}","owner_controller":"{aid}","grant_event_id":"e","accepted_at":1,"subject":"{aid}","scopes":["inbox.screen"],"audiences":["https://dmsg.net"],"status":"active","updated_at":1,"event_id":"e"}}"#
+    );
+    let status_body = r#"{"protocol":"agent-delegation/1.0","grant_event_id":"e","accepted_at":1,"id":"a/b?#% 雪","status":"active","checked_at":2,"event_id":"e"}"#;
+    server.enqueue(200, credential_body);
+    server.enqueue(200, status_body);
+    server.enqueue(200, r#"{"result":[],"acceptances":[]}"#);
+
+    block_on(async {
+        let client = DelegationClient::with_client(&server.base_url, no_proxy_client());
+        let id = "a/b?#% 雪";
+        client.delegation(id).await.unwrap();
+        client.delegation_status(id).await.unwrap();
+        client.delegation_events(id).await.unwrap();
+        assert!(client.delegation(".").await.is_err());
+        assert!(client.delegation("..").await.is_err());
+    });
+
+    let encoded = "a%2Fb%3F%23%25%20%E9%9B%AA";
+    assert_eq!(
+        server
+            .requests()
+            .iter()
+            .map(|request| request.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            format!("/v1/delegations/{encoded}"),
+            format!("/v1/delegations/{encoded}/status"),
+            format!("/v1/delegations/{encoded}/events"),
+        ]
+    );
 }
 
 #[test]

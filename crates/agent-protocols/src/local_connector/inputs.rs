@@ -46,6 +46,7 @@ pub(crate) struct DelegationGrantInput {
     #[serde(default)]
     pub relationship: Option<String>,
     pub scopes: Vec<String>,
+    pub audiences: Vec<String>,
     #[serde(default)]
     pub constraints: BTreeMap<String, Value>,
     #[serde(default)]

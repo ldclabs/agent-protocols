@@ -319,7 +319,7 @@ def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None
 
 def service_origin(url: str) -> str:
     """Derives the request JWT ``aud`` from a request URL: the service origin —
-    scheme, host, and non-default port, with no path (Agent Identity Section 8)."""
+    scheme, host, and non-default port, with no path (Agent Identity Section 7)."""
     parsed = urlparse(url)
     if parsed.scheme not in ("https", "http") or not parsed.hostname:
         raise AgentProtocolError("invalid_url", f"not an HTTP(S) URL: {url}")

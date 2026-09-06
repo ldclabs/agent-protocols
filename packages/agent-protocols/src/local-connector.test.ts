@@ -650,3 +650,62 @@ test("duplicate room ids across hosts require a host input", async () => {
   })) as { sync: SyncState };
   assert.equal(listed.sync.host, "https://b.example.test");
 });
+
+test("delegation connector checks policy, ownership and service before signing or posting", async () => {
+  const active = signer(61), other = signer(62);
+  const host = "https://api.example.test", principalId = `${host}/p`;
+  let policy: unknown = { scopes: ["draft"], audiences: ["https://dmsg.net"] };
+  let previous: unknown;
+  let readStatus = 404;
+  const posts: unknown[] = [];
+  let credentialReads = 0;
+  const credentialReadUrls: string[] = [];
+  let signatures = 0;
+  let requestJwtSignatures = 0;
+  const signEvent = active.signEvent.bind(active);
+  active.signEvent = ((event) => { signatures++; return signEvent(event); }) as typeof active.signEvent;
+  const signRequestJwt = active.signRequestJwt.bind(active);
+  active.signRequestJwt = ((claims) => { requestJwtSignatures++; return signRequestJwt(claims); }) as typeof active.signRequestJwt;
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === principalId) return new Response(JSON.stringify({
+      id: principalId, protocol: "agent-delegation/1.0", updated_at: Date.now(),
+      delegation_query_url: `${host}/v1/delegations/query`,
+      controllers: [{ id: active.agentId(), source: "local", valid_from: 0, ...(policy === undefined ? {} : { delegation: policy }) }],
+    }));
+    if (init?.method === "POST") { posts.push(JSON.parse(init.body as string)); return new Response("{}"); }
+    credentialReads++;
+    credentialReadUrls.push(url);
+    return new Response(JSON.stringify(previous ?? {}), { status: readStatus });
+  }) as typeof fetch;
+  const connector = new LocalConnector(active, { fetchImpl });
+  const input = { delegation_service: `${host}/`, principal_id: principalId, id: "del/opaque", subject: other.agentId(), scopes: ["draft"], audiences: ["https://dmsg.net"] };
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input), /permission denied/);
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATIONS_LIST, { delegation_service: host }), /permission denied/);
+  assert.equal(credentialReads, 0, "unapproved services were never read");
+  assert.equal(posts.length, 0, "unapproved services were never posted to");
+  assert.equal(signatures, 0, "unapproved services received no event signatures");
+  assert.equal(requestJwtSignatures, 0, "unapproved services received no request JWT signatures");
+  connector.addHost({ host, allowed: true, features: [] });
+  await connector.callTool(TOOL_DELEGATION_GRANT, input);
+  assert.equal(credentialReadUrls[0], `${host}/v1/delegations/del%2Fopaque`);
+  assert.equal(posts.length, 1);
+  assert.deepEqual((posts[0] as { event: { payload: unknown } }).event.payload, {
+    id: "del/opaque", principal: { id: principalId }, subject: other.agentId(), scopes: ["draft"], audiences: ["https://dmsg.net"],
+  });
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, { ...input, audiences: ["https://tokenlist.ing"] }));
+  policy = undefined;
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input));
+  policy = { scopes: ["draft"], audiences: ["https://dmsg.net"] };
+  readStatus = 200;
+  previous = { id: "del/opaque", principal: { id: principalId }, protocol: "agent-delegation/1.0", accepted_at: 1, owner_controller: other.agentId() };
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input));
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_REVOKE, input));
+  readStatus = 503;
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input));
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, { ...input, delegation_service: `${host}/untrusted` }));
+  assert.equal(posts.length, 1, "denied writes were never submitted");
+  assert.equal(signatures, 1, "denied writes were never signed");
+  const tool = standardToolDefinitions().find(t => t.name === TOOL_DELEGATION_GRANT)!;
+  assert.ok((tool.input_schema.required as string[]).includes("audiences"));
+});

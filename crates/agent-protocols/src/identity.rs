@@ -623,7 +623,7 @@ pub fn verify_request_jwt(token: &str, context: &RequestAuthContext) -> Result<R
 }
 
 /// Derives the request JWT `aud` from a request URL: the service origin —
-/// scheme, host, and non-default port, with no path (Agent Identity Section 8).
+/// scheme, host, and non-default port, with no path (Agent Identity Section 7).
 pub fn service_origin(url: &str) -> Result<String> {
     let parsed = url::Url::parse(url)
         .map_err(|_| SdkError::InvalidPayload(format!("not a valid URL: {url}")))?;
