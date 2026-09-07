@@ -56,3 +56,14 @@ validate_delegation_use(credential, "https://dmsg.net", now)
 ```
 
 The same module exports `Controller`, `DelegationPolicy`, `DelegationAcceptance`, `validate_controller`, `validate_controller_enumeration`, and `validate_historical_delegation`. Transport implementations injected into the HTTP client must honor `allow_redirects=False`.
+
+## Running tests
+
+From the repository root, use the same dependency extra and runner as CI:
+
+```sh
+python3 -m pip install -e './python/agent-protocols[test]'
+python3 -m pytest python/agent-protocols/tests
+```
+
+The suite includes both `unittest.TestCase` classes and pytest functions. Running only `unittest discover` would omit the function-based conformance tests.

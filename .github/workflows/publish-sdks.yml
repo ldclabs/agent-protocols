@@ -87,8 +87,8 @@ jobs:
       - name: Run Python tests
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -e ./python/agent-protocols
-          python3 -m unittest discover -s python/agent-protocols/tests
+          python3 -m pip install -e './python/agent-protocols[test]'
+          python3 -m pytest python/agent-protocols/tests
 
       - name: Run Rust tests
         run: |
