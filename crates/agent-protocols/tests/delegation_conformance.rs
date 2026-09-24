@@ -290,3 +290,50 @@ fn verify_delegation_credential_replays_accepted_records() {
     hidden.status = DelegationStatus::Active;
     assert!(!verify_delegation_credential(&hidden, &history, &doc, ID, ORIGIN, 500).verified);
 }
+
+#[test]
+fn credential_verification_binds_grant_fields_and_preserves_service_metadata() {
+    let doc = document();
+    let envelope = grant_with(&signer(), 1, |payload| {
+        payload.relationship = Some("assistant".into());
+        payload.not_before = Some(210);
+        payload.constraints =
+            Some(serde_json::from_value(json!({"limit": 1, "project": "alpha"})).unwrap());
+    });
+    let credential = materialize(&envelope, 250, None);
+    let records = vec![record(&envelope, 250)];
+    for (field, value) in [
+        ("protocol", json!("other/1.0")),
+        ("relationship", json!("owner")),
+        ("scopes", json!(["admin"])),
+        ("audiences", json!(["https://other.test"])),
+        ("constraints", json!({"limit": true, "project": "alpha"})),
+        ("not_before", json!(0)),
+        ("expires_at", json!(2000)),
+        ("accepted_at", json!(251)),
+    ] {
+        let mut forged = serde_json::to_value(&credential).unwrap();
+        forged[field] = value;
+        let forged = serde_json::from_value(forged).unwrap();
+        let verdict = verify_delegation_credential(&forged, &records, &doc, ID, ORIGIN, 300);
+        assert!(!verdict.verified && !verdict.usable, "{field}");
+    }
+    for field in ["constraints", "not_before", "expires_at"] {
+        let mut forged = serde_json::to_value(&credential).unwrap();
+        forged.as_object_mut().unwrap().remove(field);
+        let forged = serde_json::from_value(forged).unwrap();
+        assert!(
+            !verify_delegation_credential(&forged, &records, &doc, ID, ORIGIN, 300).verified,
+            "{field}"
+        );
+    }
+    let mut control = credential;
+    control.constraints =
+        Some(serde_json::from_value(json!({"project": "alpha", "limit": 1.0})).unwrap());
+    control.updated_at = 350;
+    control.checked_at = 400;
+    assert!(verify_delegation_credential(&control, &records, &doc, ID, ORIGIN, 400).usable);
+    control.status = DelegationStatus::Suspended;
+    let suspended = verify_delegation_credential(&control, &records, &doc, ID, ORIGIN, 400);
+    assert!(suspended.verified && !suspended.usable);
+}

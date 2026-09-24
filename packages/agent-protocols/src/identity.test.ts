@@ -570,6 +570,36 @@ test("identity vectors: the event object is closed", async () => {
   }
 });
 
+test("strict JSON preserves prototype-named data and rejects unsigned policy injection", async () => {
+  const { parseStrictJson, parseEnvelopeJson } = await import("./identity.js");
+  const { roomCreateEvent, validateRoomCreatePayload, canJoinDirectly } = await import("./discourse.js");
+  const owner = AgentSigner.fromSeed(new Uint8Array(32).fill(73));
+  const outsider = AgentSigner.fromSeed(new Uint8Array(32).fill(74)).agentId();
+  const data = '{"__proto__":{"invites":{}},"constructor":{"prototype":{"role":"moderator"}}}';
+  const parsed = parseStrictJson(data) as Record<string, unknown>;
+  assert.deepEqual(parsed, JSON.parse(data));
+  assert.equal(Object.getPrototypeOf(parsed), Object.prototype);
+  assert.equal(Object.hasOwn(parsed, "__proto__"), true);
+
+  const envelope = owner.signEvent(roomCreateEvent(owner.agentId(), 100, 1, {
+    host: "https://host.test", topic: "Private room", visibility: "private",
+    start_time: 1, end_time: 2000, policy: {}, extra: JSON.parse(data),
+  }));
+  const control = parseEnvelopeJson<typeof envelope.event.payload>(JSON.stringify(envelope));
+  verifyEnvelope(control);
+  validateRoomCreatePayload(control.event.payload);
+  assert.equal(canJoinDirectly("private", control.event.payload.policy, outsider, "moderator"), false);
+
+  // Both literal and escaped member names must remain signed data.
+  for (const key of ["__proto__", "\\u005f\\u005fproto\\u005f\\u005f"]) {
+    const policy = `{"${key}":${JSON.stringify({ invites: { [outsider]: "moderator" } })}}`;
+    const wire = JSON.stringify(envelope).replace('"policy":{}', `"policy":${policy}`);
+    const forged = parseEnvelopeJson<typeof envelope.event.payload>(wire);
+    assert.throws(() => verifyEnvelope(forged), /hash/);
+    assert.equal(canJoinDirectly("private", forged.event.payload.policy, outsider, "moderator"), false);
+  }
+});
+
 test("identity vectors: Max-Seen-Nonce jumps are bounded", () => {
   for (const vector of identityVectors.max_seen_nonce) {
     const manager = new ClientNonceManager(vector.next_nonce);

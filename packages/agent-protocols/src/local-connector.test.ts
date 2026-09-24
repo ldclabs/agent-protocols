@@ -36,6 +36,7 @@ import {
   TOOL_JOIN_REQUEST_REVIEW,
   TOOL_PRINCIPAL_RESOLVE,
   TOOL_ROOM_JOIN,
+  TOOL_ROOM_CREATE,
   TOOL_ROOM_MEMBERS_LIST,
   TOOL_ROOM_SEND_MESSAGE,
   TOOL_ROOM_STATE,
@@ -92,6 +93,8 @@ class MockHost {
   room: RoomResponse;
   joinRequests = new Map<string, RoomJoinRequest>();
   headBoundRejections = 0;
+  failNextWrite = false;
+  banned = new Set<string>();
 
   constructor(readonly roomId: string, readonly creator: AgentSigner, visibility: "public" | "private" = "public", policy = {}) {
     const envelope = creator.signEvent(roomCreateEvent(creator.agentId(), 100, 1, {
@@ -126,6 +129,13 @@ class MockHost {
     const path = url.pathname;
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
     const base = `/v1/rooms/${this.roomId}`;
+    if (init?.method === "POST" && path === "/v1/rooms") {
+      const envelope = JSON.parse(init.body as string) as Envelope<never>;
+      const record = buildServerRecord(this.roomId, 1, null, 100, envelope);
+      this.records = [record];
+      Object.assign(this.room, record, { envelope, head: { seq: 1, hash: record.hash } });
+      return json(this.room);
+    }
     if (init?.method === "POST" && path === `${base}/join-requests`) {
       const envelope = JSON.parse(init.body as string) as Envelope<never>;
       const request: RoomJoinRequest = { id: envelope.hash, request: envelope, status: "pending", expires_at: 10 ** 13 };
@@ -133,7 +143,14 @@ class MockHost {
       return json(request);
     }
     if (init?.method === "POST" && path === base) {
+      if (this.failNextWrite) {
+        this.failNextWrite = false;
+        throw new Error("network unavailable");
+      }
       const envelope = JSON.parse(init.body as string) as Envelope<unknown>;
+      if (envelope.event.type === eventType.ROOM_JOIN && this.banned.has(envelope.event.actor)) {
+        return json({ error: { code: "member_banned", message: "request review to rejoin" } }, 403);
+      }
       if (eventRequiresRoomHead(envelope.event.type, this.room.types)) {
         const head = this.head();
         if (envelope.event.base_seq !== head.seq || envelope.event.base_hash !== head.hash) {
@@ -145,6 +162,7 @@ class MockHost {
         const payload = envelope.event.payload as { request: Envelope<unknown>; decision: string };
         const request = this.joinRequests.get(payload.request.hash)!;
         request.status = payload.decision === "approve" ? "approved" : "rejected";
+        if (request.status === "approved") this.banned.delete(payload.request.event.actor);
       }
       return json(this.append(envelope));
     }
@@ -325,6 +343,68 @@ test("room_state opens and syncs, and the presented head follows what the agent 
   assert.equal(sent.status, "sent");
   assert.equal(sent.record?.envelope.event.base_seq, 3);
   assert.equal(sent.sync.presented_seq, sent.record?.seq);
+});
+
+test("a created room advances the presented head through consecutive own messages", async () => {
+  const creator = signer(5);
+  const host = new MockHost("room1", creator);
+  const connector = connectorFor(creator, host);
+  await connector.callTool(TOOL_ROOM_CREATE, {
+    host: HOST, topic: "Room", visibility: "public", start_time: 1, end_time: 10 ** 13,
+  });
+  for (const content of ["first", "second"]) {
+    const sent = await connector.callTool(TOOL_ROOM_SEND_MESSAGE, { room_id: "room1", content }) as RoomWriteResult;
+    assert.equal(sent.status, "sent");
+    assert.equal(sent.sync.presented_seq, sent.record?.seq);
+  }
+  assert.equal(connector.state.drafts.size, 0);
+});
+
+test("failed and rejected draft commits keep the draft for retry", async () => {
+  const creator = signer(5), other = signer(2);
+  const host = new MockHost("room1", creator);
+  const connector = connectorFor(creator, host);
+  await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1", host: HOST });
+  host.append(message(other, host, "new context", 1));
+  const held = await connector.callTool(TOOL_ROOM_SEND_MESSAGE, { room_id: "room1", content: "draft" }) as RoomWriteResult;
+  const draftId = held.draft!.id;
+  host.failNextWrite = true;
+  await assert.rejects(connector.callTool(TOOL_DRAFT_COMMIT, { draft_id: draftId, action: "send" }), /network unavailable/);
+  assert.ok(connector.state.drafts.has(draftId));
+  host.append(message(other, host, "more context", 2));
+  const rejected = await connector.callTool(TOOL_DRAFT_COMMIT, { draft_id: draftId, action: "send", on_head_mismatch: "reject" }) as RoomWriteResult;
+  assert.equal(rejected.status, "rejected");
+  assert.ok(connector.state.drafts.has(draftId));
+  const sent = await connector.callTool(TOOL_DRAFT_COMMIT, { draft_id: draftId, action: "send" }) as RoomWriteResult;
+  assert.equal(sent.status, "sent");
+  assert.equal(connector.state.drafts.size, 0);
+});
+
+test("banned members request review with both known and newly reported bans", async () => {
+  for (const known of [true, false]) {
+    const creator = signer(5), applicant = signer(6);
+    const host = new MockHost("room1", creator);
+    const connector = connectorFor(applicant, host);
+    await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1", host: HOST });
+    host.banned.add(applicant.agentId());
+    const head = host.head();
+    const ban = host.append(creator.signEvent(discourseEvent(eventType.ROOM_MEMBER_REMOVE,
+      creator.agentId(), 120, 2, host.roomId, head.seq, head.hash,
+      { member: applicant.agentId(), ban: true })));
+    if (known) connector.applyHostRecord(HOST, ban);
+    const joined = await connector.callTool(TOOL_ROOM_JOIN, { room_id: "room1", role: "speaker" }) as { status: string; join_request: RoomJoinRequest };
+    assert.equal(joined.status, "approval_required");
+    assert.equal(joined.join_request.request.event.type, eventType.ROOM_JOIN_REQUEST);
+    assert.equal(host.joinRequests.size, 1);
+    const moderator = connectorFor(creator, host);
+    await moderator.callTool(TOOL_ROOM_STATE, { host: HOST, room_id: "room1" });
+    await moderator.callTool(TOOL_JOIN_REQUEST_REVIEW, {
+      room_id: "room1", request_id: joined.join_request.id, decision: "approve", role: "speaker",
+    });
+    const approved = await connector.callTool(TOOL_ROOM_JOIN, { room_id: "room1", role: "speaker" }) as { status: string };
+    assert.equal(approved.status, "joined");
+    assert.equal(host.banned.has(applicant.agentId()), false);
+  }
 });
 
 test("a head-bound write against an unread head is held, then committed with send or dropped", async () => {

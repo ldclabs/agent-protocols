@@ -1,3 +1,5 @@
+import canonicalize from "canonicalize";
+
 import { protocolError } from "./errors.js";
 import {
   AcceptedRecord,
@@ -529,9 +531,13 @@ export function verifyDelegationCredential(
       replayed = materializeDelegationCredential(record.envelope, { acceptedAt: record.accepted_at, previous: replayed });
     }
     const r = replayed!;
-    if (r.id !== credential.id || r.principal_id !== credential.principal_id || r.subject !== credential.subject ||
-        r.event_id !== credential.event_id || r.grant_event_id !== credential.grant_event_id ||
-        r.owner_controller !== credential.owner_controller || r.controller !== credential.controller ||
+    // Only status and its service timestamps may differ from event replay.
+    const fields = [
+      "id", "protocol", "principal_id", "subject", "relationship", "scopes", "audiences",
+      "constraints", "not_before", "expires_at", "event_id", "grant_event_id",
+      "owner_controller", "controller", "accepted_at",
+    ] as const;
+    if (fields.some((field) => canonicalize(r[field]) !== canonicalize(credential[field])) ||
         (r.status === "revoked") !== (credential.status === "revoked")) {
       fail("credential does not match its accepted records");
     }

@@ -543,7 +543,7 @@ pub(crate) fn present_through(room: &mut LocalRoomState, seq: u64) {
 }
 
 /// Seq of the latest head-advancing record before `seq`, or 0.
-pub(crate) fn head_before(room: &LocalRoomState, seq: u64) -> u64 {
+pub(crate) fn head_before(room: &LocalRoomState, seq: u64, previous_head_seq: u64) -> u64 {
     (1..seq)
         .rev()
         .find(|s| {
@@ -551,8 +551,9 @@ pub(crate) fn head_before(room: &LocalRoomState, seq: u64) -> u64 {
                 .iter()
                 .any(|record| record.seq() == *s && record_advances_room_head(room, record))
         })
-        .unwrap_or(if room.head_seq < seq {
-            room.head_seq
+        // A room snapshot may provide a verified head without its older records.
+        .unwrap_or(if previous_head_seq < seq {
+            previous_head_seq
         } else {
             0
         })

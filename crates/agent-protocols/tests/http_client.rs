@@ -733,3 +733,267 @@ fn builds_sse_events_url_variants() {
         "ftp://api.example.com/v1/rooms/r/events/live"
     );
 }
+
+#[cfg(feature = "local-connector")]
+mod connector_regressions {
+    use super::*;
+    use agent_protocols::discourse::{RoomResponse, ServerRecord};
+    use agent_protocols::local_connector::*;
+    use serde_json::{json, Value};
+
+    fn fixture() -> (MockServer, LocalConnector, AgentSigner, ServerRecord) {
+        let server = MockServer::start();
+        let author = AgentSigner::from_seed([80; 32]);
+        let envelope = author
+            .sign_event(room_create_event(
+                author.agent_id(),
+                100,
+                1,
+                RoomCreatePayload::new(
+                    "https://api.example.test",
+                    "Room",
+                    Visibility::Public,
+                    1,
+                    10_000_000_000_000,
+                ),
+            ))
+            .unwrap();
+        let genesis = build_server_record("room1", 1, None, 100, envelope).unwrap();
+        let room: RoomResponse = serde_json::from_value(json!({
+            "id": "room1", "status": "active", "visibility": "public",
+            "url": format!("{}/v1/rooms/room1", server.base_url),
+            "seq": 1, "pre_hash": null, "hash": genesis.hash, "accepted_at": 100,
+            "head": { "seq": 1, "hash": genesis.hash }, "envelope": genesis.envelope,
+        }))
+        .unwrap();
+        let mut connector = LocalConnector::new(AgentSigner::from_seed([81; 32]))
+            .with_http_client(no_proxy_client());
+        connector.add_host(AgentProtocolsHost {
+            host: server.base_url.clone(),
+            label: None,
+            allowed: true,
+            features: vec![],
+            profile_service: None,
+            last_checked_at: None,
+        });
+        // The same snapshot initialization is used by room_create and direct joins.
+        connector.accept_room_response(&server.base_url, room);
+        let genesis = serde_json::from_value(serde_json::to_value(genesis).unwrap()).unwrap();
+        (server, connector, author, genesis)
+    }
+
+    fn next_record(
+        author: &AgentSigner,
+        kind: &str,
+        payload: Value,
+        head: &ServerRecord,
+        previous: &ServerRecord,
+    ) -> ServerRecord {
+        let seq = previous.seq + 1;
+        let envelope = author
+            .sign_event(discourse_event(
+                kind,
+                author.agent_id(),
+                100 + seq as i64,
+                seq,
+                "room1",
+                head.seq,
+                &head.hash,
+                payload,
+            ))
+            .unwrap();
+        build_server_record(
+            "room1",
+            seq,
+            Some(previous.hash.clone()),
+            100 + seq as i64,
+            envelope,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn snapshot_head_advances_through_consecutive_own_messages() {
+        let (server, mut connector, _, genesis) = fixture();
+        let active = AgentSigner::from_seed([81; 32]);
+        block_on(async {
+            connector
+                .call_tool(TOOL_ROOM_STATE, json!({"room_id": "room1"}))
+                .await
+                .unwrap();
+            let mut head = genesis;
+            for content in ["first", "second"] {
+                let next = next_record(
+                    &active,
+                    event_type::MESSAGE_CREATE,
+                    json!({"content_type": "text/plain", "content": content}),
+                    &head,
+                    &head,
+                );
+                server.enqueue(200, serde_json::to_string(&next).unwrap());
+                let result = connector
+                    .call_tool(
+                        TOOL_ROOM_SEND_MESSAGE,
+                        json!({"room_id": "room1", "content": content}),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(result["status"], "sent");
+                assert_eq!(result["sync"]["presented_seq"], next.seq);
+                head = next;
+            }
+        });
+    }
+
+    #[test]
+    fn failed_and_rejected_draft_commits_preserve_the_draft() {
+        let (server, mut connector, other, genesis) = fixture();
+        block_on(async {
+            connector
+                .call_tool(TOOL_ROOM_STATE, json!({"room_id": "room1"}))
+                .await
+                .unwrap();
+            let message = json!({"content_type": "text/plain", "content": "context"});
+            let second = next_record(
+                &other,
+                event_type::MESSAGE_CREATE,
+                message.clone(),
+                &genesis,
+                &genesis,
+            );
+            connector
+                .apply_host_record(&server.base_url, second.clone())
+                .unwrap();
+            let held = connector
+                .call_tool(
+                    TOOL_ROOM_SEND_MESSAGE,
+                    json!({"room_id": "room1", "content": "draft"}),
+                )
+                .await
+                .unwrap();
+            let id = held["draft"]["id"].as_str().unwrap();
+            server.enqueue(503, r#"{"error":{"code":"unavailable","message":"retry"}}"#);
+            assert!(connector
+                .call_tool(TOOL_DRAFT_COMMIT, json!({"draft_id": id, "action": "send"}))
+                .await
+                .is_err());
+            let drafts = connector
+                .call_tool(TOOL_DRAFTS_LIST, json!({}))
+                .await
+                .unwrap();
+            assert_eq!(drafts["drafts"][0]["id"], id);
+
+            let third = next_record(
+                &other,
+                event_type::MESSAGE_CREATE,
+                message,
+                &second,
+                &second,
+            );
+            connector
+                .apply_host_record(&server.base_url, third.clone())
+                .unwrap();
+            let rejected = connector
+                .call_tool(
+                    TOOL_DRAFT_COMMIT,
+                    json!({"draft_id": id, "action": "send", "on_head_mismatch": "reject"}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(rejected["status"], "rejected");
+            let drafts = connector
+                .call_tool(TOOL_DRAFTS_LIST, json!({}))
+                .await
+                .unwrap();
+            assert_eq!(drafts["drafts"][0]["id"], id);
+
+            let fourth = next_record(
+                &AgentSigner::from_seed([81; 32]),
+                event_type::MESSAGE_CREATE,
+                json!({"content_type": "text/plain", "content": "draft"}),
+                &third,
+                &third,
+            );
+            server.enqueue(200, serde_json::to_string(&fourth).unwrap());
+            let sent = connector
+                .call_tool(TOOL_DRAFT_COMMIT, json!({"draft_id": id, "action": "send"}))
+                .await
+                .unwrap();
+            assert_eq!(sent["status"], "sent");
+            let drafts = connector
+                .call_tool(TOOL_DRAFTS_LIST, json!({}))
+                .await
+                .unwrap();
+            assert!(drafts["drafts"].as_array().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn banned_members_request_review_for_known_and_remote_bans() {
+        for (known, nonce_retry) in [(true, false), (false, false), (false, true)] {
+            let (server, mut connector, moderator, genesis) = fixture();
+            let applicant = AgentSigner::from_seed([81; 32]);
+            if known {
+                let ban = next_record(
+                    &moderator,
+                    event_type::ROOM_MEMBER_REMOVE,
+                    json!({"member": applicant.agent_id(), "ban": true}),
+                    &genesis,
+                    &genesis,
+                );
+                connector.apply_host_record(&server.base_url, ban).unwrap();
+            } else {
+                if nonce_retry {
+                    server.enqueue_with_header(
+                        409,
+                        r#"{"error":{"code":"nonce_not_greater","message":"resync"}}"#,
+                        "Max-Seen-Nonce",
+                        "1",
+                    );
+                }
+                server.enqueue(
+                    403,
+                    r#"{"error":{"code":"member_banned","message":"request review"}}"#,
+                );
+            }
+            let request = applicant
+                .sign_event(room_join_request_event(
+                    applicant.agent_id(),
+                    200,
+                    3,
+                    "room1",
+                    RoomJoinRequestPayload::new(Role::Speaker),
+                ))
+                .unwrap();
+            server.enqueue(
+                200,
+                json!({
+                    "id": request.hash, "request": request, "status": "pending", "expires_at": 1000,
+                })
+                .to_string(),
+            );
+            let result = block_on(connector.call_tool(
+                TOOL_ROOM_JOIN,
+                json!({"room_id": "room1", "role": "speaker"}),
+            ))
+            .unwrap();
+            assert_eq!(result["status"], "approval_required");
+            let requests = server.requests();
+            assert_eq!(
+                requests.len(),
+                if known {
+                    1
+                } else if nonce_retry {
+                    3
+                } else {
+                    2
+                }
+            );
+            let last = requests.last().unwrap();
+            assert_eq!(last.path, "/v1/rooms/room1/join-requests");
+            let envelope: Value = serde_json::from_str(&last.body).unwrap();
+            assert_eq!(envelope["event"]["type"], event_type::ROOM_JOIN_REQUEST);
+            assert!(envelope["event"].get("base_seq").is_none());
+        }
+    }
+}

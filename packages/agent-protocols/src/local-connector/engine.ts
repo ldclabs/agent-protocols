@@ -866,8 +866,11 @@ export class LocalConnector {
       event.on_head_mismatch = input.on_head_mismatch;
       request = { kind: "event", input: event };
     }
-    this.state.drafts.delete(input.draft_id);
-    return this.submitRoomWrite(request);
+    const result = await this.submitRoomWrite(request);
+    if (result.status === "sent" || result.status === "held") {
+      this.state.drafts.delete(input.draft_id);
+    }
+    return result;
   }
 
   /**
@@ -1139,18 +1142,27 @@ export class LocalConnector {
     const direct =
       local !== undefined &&
       visibility !== undefined &&
+      local.members.get(agentId)?.status !== "banned" &&
       canJoinDirectly(visibility, roomPolicy(local.room), agentId, input.role);
     if (direct) {
       const payload: RoomJoinPayload = { role: input.role };
       if (input.perspective !== undefined) payload.perspective = input.perspective;
-      const record = await this.submitSigned(
-        () => this.signRoomEvent(eventType.ROOM_JOIN, key, undefined, undefined, [], payload),
-        (envelope) => this.discourse(host).joinRoom(roomId, envelope),
-      );
-      await this.applyOwnRecord(key, record as ServerRecord);
-      const member = this.localRoom(key).members.get(agentId);
-      if (!member) throw invalidPayload("joined member not materialized");
-      return { status: "joined", record, member, sync: this.syncState(key) };
+      let record: ServerRecord<RoomJoinPayload> | undefined;
+      try {
+        record = await this.submitSigned(
+          () => this.signRoomEvent(eventType.ROOM_JOIN, key, undefined, undefined, [], payload),
+          (envelope) => this.discourse(host).joinRoom(roomId, envelope),
+        );
+      } catch (error) {
+        // A ban may have arrived since the local snapshot; request review below.
+        if (!isHttpError(error, "member_banned")) throw error;
+      }
+      if (record) {
+        await this.applyOwnRecord(key, record as ServerRecord);
+        const member = this.localRoom(key).members.get(agentId);
+        if (!member) throw invalidPayload("joined member not materialized");
+        return { status: "joined", record, member, sync: this.syncState(key) };
+      }
     }
 
     const requestPayload: RoomJoinRequestPayload = { role: input.role };
@@ -1221,6 +1233,7 @@ export class LocalConnector {
         }
       }
       const presentedSeq = this.localRoom(key).presentedSeq;
+      const previousHeadSeq = this.localRoom(key).headSeq;
       try {
         const record = await this.submitSigned(
           () => this.signWrite(request, key, base),
@@ -1230,7 +1243,7 @@ export class LocalConnector {
         const after = this.localRoom(key);
         // The agent's own write extends what it saw only when nothing it has
         // not seen advanced the head in between.
-        if (after.headSeq === record.seq && this.headBefore(after, record.seq) === presentedSeq) {
+        if (after.headSeq === record.seq && this.headBefore(after, record.seq, previousHeadSeq) === presentedSeq) {
           this.presentHead(after, record.seq);
         }
         return {
@@ -1261,12 +1274,13 @@ export class LocalConnector {
   }
 
   /** Seq of the latest head-advancing record before `seq`, or 0. */
-  private headBefore(room: LocalRoomState, seq: number): number {
+  private headBefore(room: LocalRoomState, seq: number, previousHeadSeq: number): number {
     for (let s = seq - 1; s > 0; s--) {
       const record = room.records.find((candidate) => candidate.seq === s);
       if (record && recordAdvancesRoomHead(room, record)) return s;
     }
-    return room.headSeq < seq ? room.headSeq : 0;
+    // A room snapshot may provide a verified head without its older records.
+    return previousHeadSeq < seq ? previousHeadSeq : 0;
   }
 
   /** Signs and submits once, re-signing a single time after a bounded Max-Seen-Nonce resync. */

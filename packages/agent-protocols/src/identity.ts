@@ -663,7 +663,7 @@ class StrictJsonParser {
     this.skipWhitespace();
     if (this.text[this.index] === "}") {
       this.index += 1;
-      return Object.assign({}, result);
+      return { ...result };
     }
     for (;;) {
       this.skipWhitespace();
@@ -682,7 +682,8 @@ class StrictJsonParser {
       if (next === "}") break;
       if (next !== ",") this.fail("expected ',' or '}'");
     }
-    return Object.assign({}, result);
+    // Define own data properties, including __proto__, without invoking setters.
+    return { ...result };
   }
 
   private parseArray(depth: number): unknown[] {

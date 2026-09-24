@@ -183,3 +183,26 @@ def test_verify_delegation_credential_replays_accepted_records():
     assert (verdict["verified"], verdict["usable"], verdict["reasons"]) == (True, False, ["status is revoked"])
     # A service that hides the revocation does not match its own history.
     assert not d.verify_delegation_credential({**revoked, "status": "active"}, history, doc, ID, ORIGIN, 500)["verified"]
+
+
+def test_credential_verification_binds_grant_fields_and_preserves_service_metadata():
+    doc = document()
+    envelope = grant(relationship="assistant", not_before=210, constraints={"limit": 1, "project": "alpha"})
+    credential = d.materialize_delegation_credential(envelope, accepted_at=250)
+    records = [{"envelope": envelope, "accepted_at": 250}]
+    changes = {
+        "protocol": "other/1.0", "relationship": "owner", "scopes": ["admin"],
+        "audiences": ["https://other.test"], "constraints": {"limit": True, "project": "alpha"},
+        "not_before": 0, "expires_at": 2000, "accepted_at": 251,
+    }
+    for field, value in changes.items():
+        verdict = d.verify_delegation_credential({**credential, field: value}, records, doc, ID, ORIGIN, 300)
+        assert (verdict["verified"], verdict["usable"]) == (False, False), field
+    for field in ("constraints", "not_before", "expires_at"):
+        forged = deepcopy(credential)
+        del forged[field]
+        assert not d.verify_delegation_credential(forged, records, doc, ID, ORIGIN, 300)["verified"], field
+    control = {**credential, "constraints": {"project": "alpha", "limit": 1.0}, "updated_at": 350, "checked_at": 400}
+    assert d.verify_delegation_credential(control, records, doc, ID, ORIGIN, 400)["usable"]
+    suspended = d.verify_delegation_credential({**control, "status": "suspended"}, records, doc, ID, ORIGIN, 400)
+    assert (suspended["verified"], suspended["usable"]) == (True, False)

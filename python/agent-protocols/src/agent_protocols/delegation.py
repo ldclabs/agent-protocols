@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 import re
 import ipaddress
 
+import rfc8785
+
 from .errors import AgentProtocolError
 from .identity import (
     AgentId,
@@ -440,12 +442,20 @@ def verify_delegation_credential(
                 record["envelope"], accepted_at=record["accepted_at"], previous=replayed
             )
         assert replayed is not None
-        fields = ("id", "principal_id", "subject", "event_id", "grant_event_id", "owner_controller", "controller")
-        if any(replayed.get(field) != credential.get(field) for field in fields) or (
+        # Only status and its service timestamps may differ from event replay.
+        fields = (
+            "id", "protocol", "principal_id", "subject", "relationship", "scopes", "audiences",
+            "constraints", "not_before", "expires_at", "event_id", "grant_event_id",
+            "owner_controller", "controller", "accepted_at",
+        )
+        expected = {field: replayed[field] for field in fields if field in replayed}
+        actual = {field: credential[field] for field in fields if field in credential}
+        # Canonical JSON preserves JSON types (Python otherwise equates True and 1).
+        if rfc8785.dumps(expected) != rfc8785.dumps(actual) or (
             (replayed["status"] == "revoked") != (credential.get("status") == "revoked")
         ):
             _fail("credential does not match its accepted records")
-    except (AgentProtocolError, KeyError, TypeError) as error:
+    except (AgentProtocolError, KeyError, TypeError, rfc8785.CanonicalizationError) as error:
         reasons.append(str(error))
     verified = not reasons
     if credential.get("status") != "active":

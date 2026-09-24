@@ -834,9 +834,11 @@ fn replay_matches(
         )?);
     }
     let r = replayed.expect("at least one record");
-    if r.id != credential.id
-        || r.principal_id != credential.principal_id
-        || r.subject != credential.subject
+    // Only status and its service timestamps may differ from event replay.
+    if serde_jcs::to_vec(&grant_from_credential(&r))?
+        != serde_jcs::to_vec(&grant_from_credential(credential))?
+        || r.protocol != credential.protocol
+        || r.accepted_at != credential.accepted_at
         || r.event_id != credential.event_id
         || r.grant_event_id != credential.grant_event_id
         || r.owner_controller != credential.owner_controller

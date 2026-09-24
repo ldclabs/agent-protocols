@@ -83,8 +83,7 @@ macro_rules! submit_signed {
             Ok(value) => Ok((value, $envelope)),
             Err(error) if $self.resync_nonce(&error) => {
                 let $envelope = $sign?;
-                let value = $submit.await?;
-                Ok((value, $envelope))
+                $submit.await.map(|value| (value, $envelope))
             }
             Err(error) => Err(error),
         }
@@ -794,8 +793,11 @@ impl LocalConnector {
                 HeldDraftRequest::Event(event)
             }
         };
-        self.state.drafts.remove(&input.draft_id);
-        self.submit_room_write(request).await
+        let result = self.submit_room_write(request).await?;
+        if matches!(result["status"].as_str(), Some("sent" | "held")) {
+            self.state.drafts.remove(&input.draft_id);
+        }
+        Ok(result)
     }
 
     /// Resolves a principal per Agent Delegation Section 3 and reports
@@ -1140,21 +1142,25 @@ impl LocalConnector {
             }
         }
         let direct = self.state.rooms.get(&key).is_some_and(|local| {
-            room_visibility(&local.room).is_some_and(|visibility| {
-                can_join_directly(
-                    visibility,
-                    room_policy(&local.room).as_ref(),
-                    &agent_id,
-                    input.role,
-                )
-            })
+            !local
+                .members
+                .get(&agent_id)
+                .is_some_and(|member| member.status == RoomMemberStatus::Banned)
+                && room_visibility(&local.room).is_some_and(|visibility| {
+                    can_join_directly(
+                        visibility,
+                        room_policy(&local.room).as_ref(),
+                        &agent_id,
+                        input.role,
+                    )
+                })
         });
         if direct {
             let payload = RoomJoinPayload {
                 role: input.role,
-                perspective: input.perspective,
+                perspective: input.perspective.clone(),
             };
-            let (record, _) = submit_signed!(
+            let submitted = submit_signed!(
                 self,
                 self.sign_room_event(
                     event_type::ROOM_JOIN,
@@ -1165,22 +1171,27 @@ impl LocalConnector {
                     payload.clone()
                 ),
                 |envelope| client.submit_event(&room_id, &envelope)
-            )?;
-            self.apply_own_record(&key, record.clone().into()).await?;
-            let member = self
-                .local_room(&key)?
-                .members
-                .get(&agent_id)
-                .cloned()
-                .ok_or_else(|| {
-                    SdkError::InvalidPayload("joined member not materialized".to_owned())
-                })?;
-            return Ok(json!({
-                "status": "joined",
-                "record": record,
-                "member": member,
-                "sync": self.sync_state(&key)?
-            }));
+            );
+            match submitted {
+                Ok((record, _)) => {
+                    self.apply_own_record(&key, record.clone().into()).await?;
+                    let member = self
+                        .local_room(&key)?
+                        .members
+                        .get(&agent_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            SdkError::InvalidPayload("joined member not materialized".to_owned())
+                        })?;
+                    return Ok(json!({
+                        "status": "joined", "record": record, "member": member,
+                        "sync": self.sync_state(&key)?
+                    }));
+                }
+                // A ban may have arrived since the local snapshot; request review below.
+                Err(error) if http_code(&error) == Some("member_banned") => {}
+                Err(error) => return Err(error),
+            }
         }
 
         let payload = RoomJoinRequestPayload {
@@ -1279,6 +1290,7 @@ impl LocalConnector {
             }
             attempts += 1;
             let presented_seq = self.local_room(&key)?.presented_seq;
+            let previous_head_seq = self.local_room(&key)?.head_seq;
             let submitted =
                 submit_signed!(self, self.sign_write(&request, &key, &base), |envelope| {
                     client.submit_event(&room_id, &envelope)
@@ -1291,7 +1303,9 @@ impl LocalConnector {
                     let after = self.local_room_mut(&key)?;
                     // The agent's own write extends what it saw only when
                     // nothing it has not seen advanced the head in between.
-                    if after.head_seq == seq && Some(head_before(after, seq)) == presented_seq {
+                    if after.head_seq == seq
+                        && Some(head_before(after, seq, previous_head_seq)) == presented_seq
+                    {
                         present_head(after, seq);
                     }
                     return Ok(json!({

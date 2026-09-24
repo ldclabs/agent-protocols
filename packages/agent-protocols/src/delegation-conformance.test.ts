@@ -129,3 +129,28 @@ test("verifyDelegationCredential replays accepted records and checks use", () =>
   // A service that hides the revocation does not match its own history.
   assert.equal(d.verifyDelegationCredential({ ...revoked, status: "active" }, history, doc, id, origin, 500).verified, false);
 });
+
+test("credential verification binds every grant field while allowing current service metadata", () => {
+  const doc = document();
+  const envelope = grant(signer, 1, {
+    relationship: "assistant", not_before: 210,
+    constraints: { limit: 1, project: "alpha" },
+  });
+  const credential = d.materializeDelegationCredential(envelope, { acceptedAt: 250 });
+  const records = [{ envelope, accepted_at: 250 }];
+  const changes: Partial<d.DelegationCredential>[] = [
+    { protocol: "other/1.0" as never }, { relationship: "owner" },
+    { scopes: ["admin"] }, { audiences: ["https://other.test"] },
+    { constraints: { limit: true, project: "alpha" } }, { constraints: undefined },
+    { not_before: undefined }, { not_before: 0 },
+    { expires_at: undefined }, { expires_at: 2000 }, { accepted_at: 251 },
+  ];
+  for (const change of changes) {
+    const verdict = d.verifyDelegationCredential({ ...credential, ...change }, records, doc, id, origin, 300);
+    assert.deepEqual([verdict.verified, verdict.usable], [false, false], JSON.stringify(change));
+  }
+  const control = { ...credential, constraints: { project: "alpha", limit: 1 }, updated_at: 350, checked_at: 400 };
+  assert.equal(d.verifyDelegationCredential(control, records, doc, id, origin, 400).usable, true);
+  const suspended = d.verifyDelegationCredential({ ...control, status: "suspended" }, records, doc, id, origin, 400);
+  assert.deepEqual([suspended.verified, suspended.usable], [true, false]);
+});
