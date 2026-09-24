@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import math
 import re
@@ -19,7 +20,10 @@ from .errors import AgentProtocolError
 
 AGENT_ID_PREFIX = "did:agent:"
 DEFAULT_LIVE_WRITE_WINDOW_MS = 300_000
-DEFAULT_NONCE_TTL_MS = 300_000
+# Nonce cache validity (Agent Identity Section 6.2): at least twice the
+# live-write window, because an envelope signed up to one window ahead of the
+# receiver's clock stays inside the window for two windows after acceptance.
+DEFAULT_NONCE_TTL_MS = 2 * DEFAULT_LIVE_WRITE_WINDOW_MS
 DEFAULT_REQUEST_JWT_TTL_SECS = 300
 MAX_NONCE_HEADER = "Max-Seen-Nonce"
 MAX_SAFE_NONCE = 0x1FFFFFFFFFFFFF
@@ -522,6 +526,30 @@ def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None
     if claims["exp"] - claims["iat"] > max_ttl_secs:
         raise AgentProtocolError("invalid_jwt_claim", "JWT ttl exceeds maximum")
     return claims
+
+
+def validate_origin(value: Any) -> None:
+    """Checks that ``value`` is a serialized HTTPS origin (Agent Identity
+    Section 4.4): WHATWG URL parsing and origin serialization must reproduce it
+    exactly. Python has no WHATWG parser, so this re-serializes the host the
+    way WHATWG does for the ASCII, IPv4, and IPv6 forms that can appear."""
+    if not isinstance(value, str) or any(c.isspace() for c in value) or "\\" in value or "%" in value:
+        raise AgentProtocolError("invalid_url", f"origin must be a serialized HTTPS origin: {value!r}")
+    try:
+        parsed = urlparse(value)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("not an https URL")
+        host = parsed.hostname.encode("idna").decode("ascii")
+        if ":" in host:
+            host = "[" + ipaddress.IPv6Address(host).compressed + "]"
+        elif re.fullmatch(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)", host.rstrip(".").split(".")[-1]):
+            host = str(ipaddress.IPv4Address(host))
+        port = parsed.port
+        canonical = "https://" + host + (f":{port}" if port is not None and port != 443 else "")
+    except (ValueError, UnicodeError, AttributeError) as exc:
+        raise AgentProtocolError("invalid_url", f"origin must be a serialized HTTPS origin: {value!r}") from exc
+    if value != canonical:
+        raise AgentProtocolError("invalid_url", f"origin must be a serialized HTTPS origin: {value!r}")
 
 
 def service_origin(url: str) -> str:

@@ -46,7 +46,7 @@ export function recordAdvancesRoomHead(
   return eventTypeAdvancesRoomHead(room, recordType(record));
 }
 
-/** Every record class except `signal` advances the room head. */
+/** `genesis`, `contract`, and `control` records advance the room head. */
 export function eventTypeAdvancesRoomHead(
   room: LocalRoomState,
   type: string,
@@ -54,12 +54,21 @@ export function eventTypeAdvancesRoomHead(
   return eventAdvancesRoomHead(type, room.room.types ?? []);
 }
 
-/** Head-bound writes — `message.create` and `message`/`control` kinds — must match the head. */
+/** Message and control writes — `message.create` and `message`/`control` kinds — must be based at or after the head. */
 export function eventTypeRequiresRoomHead(
   room: LocalRoomState,
   type: string,
 ): boolean {
   return eventRequiresRoomHead(type, room.room.types ?? []);
+}
+
+/**
+ * Whether a message or control write based on `base` still passes the ADP
+ * Section 5.1 head check against the verified local head: the base is the
+ * head itself or a later record.
+ */
+export function baseIsCurrent(room: LocalRoomState, base: readonly [number, string]): boolean {
+  return base[0] > room.headSeq || (base[0] === room.headSeq && base[1] === room.headHash);
 }
 
 export function materializeCreator(room: LocalRoomState): void {
@@ -170,11 +179,12 @@ export function validateRecordBasePrecondition(
       "record base_seq must reference an earlier accepted record",
     );
   }
-  if (eventTypeRequiresRoomHead(room, event.type)) {
-    if (room.headSeq !== baseSeq || room.headHash !== baseHash) {
-      throw invalidPayload(
-        "record base_seq/base_hash must match current room head",
-      );
+  if (eventTypeRequiresRoomHead(room, event.type) && baseSeq < room.headSeq) {
+    throw invalidPayload("record base_seq must be at or after the room head");
+  }
+  if (baseSeq === room.headSeq) {
+    if (room.headHash !== baseHash) {
+      throw invalidPayload("record base_hash does not match the anchored record");
     }
     return;
   }
@@ -396,7 +406,7 @@ export function applyRecordProjection(
       break;
     }
     case "steer.create": {
-      if (steerTargetsAgent(event.payload, activeAgent)) {
+      if (steerTargetsAgent(item.mentions ?? [], activeAgent)) {
         inbox.push(inboxFromItem("room.steer", "high", item, "steer", true));
       }
       break;
@@ -424,11 +434,9 @@ function activeTurnFromItem(item: TimelineItem): ActiveTurn | undefined {
   };
 }
 
-function steerTargetsAgent(payload: unknown, activeAgent: AgentId): boolean {
-  if (!isRecord(payload)) return true;
-  const target = payload.target;
-  if (typeof target !== "string") return true;
-  return target === activeAgent;
+/** A steer addresses every member when its `mentions` are empty, and otherwise only the mentioned agents. */
+function steerTargetsAgent(mentions: readonly AgentId[], activeAgent: AgentId): boolean {
+  return mentions.length === 0 || mentions.includes(activeAgent);
 }
 
 function inboxFromItem(

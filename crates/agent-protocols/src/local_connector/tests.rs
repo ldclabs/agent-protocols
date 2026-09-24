@@ -84,6 +84,25 @@ fn signal_type(name: &str) -> TypeDef {
     .unwrap()
 }
 
+fn control_type(name: &str) -> TypeDef {
+    serde_json::from_value(json!({
+        "type": name, "kind": "control", "title": "Control", "schema": {"type": "object"}
+    }))
+    .unwrap()
+}
+
+/// Adds a room-defined type to the locally known room.
+fn define_type(connector: &mut LocalConnector, def: TypeDef) {
+    connector
+        .state
+        .rooms
+        .get_mut(&key())
+        .unwrap()
+        .room
+        .types
+        .push(def);
+}
+
 /// Signs a room event and wraps it as the record at `seq` after `pre_hash`.
 #[allow(clippy::too_many_arguments)]
 fn record<P: Serialize>(
@@ -165,7 +184,7 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[test]
 fn standard_tool_definitions_list_the_25_tools() {
     let tools = standard_tool_definitions();
-    assert_eq!(tools.len(), 25);
+    assert_eq!(tools.len(), 23);
     let names = tools
         .iter()
         .map(|tool| tool.name.as_str())
@@ -360,21 +379,30 @@ fn applies_room_records_into_members_timeline_and_inbox() {
 }
 
 #[test]
-fn head_bound_writes_hold_on_a_stale_base_before_any_network_call() {
-    let speaker = signer(2);
-    let mut connector = connector_with_room(1, &signer(5));
-    let message = record(
-        &speaker,
-        event_type::MESSAGE_CREATE,
+fn message_writes_hold_before_any_network_call_when_coordination_moved() {
+    let moderator = signer(5);
+    let mut connector = connector_with_room(1, &moderator);
+    define_type(&mut connector, control_type("plan.update"));
+    // A control record advances the head past the draft's base.
+    let plan = record(
+        &moderator,
+        "plan.update",
         1,
         1,
         HEAD,
         2,
         HEAD,
-        MessageCreatePayload::text("new context"),
+        json!({"step": "new context"}),
     );
-    let head_hash = message.hash.clone();
-    connector.apply_record(message).unwrap();
+    let head_hash = plan.hash.clone();
+    connector.apply_record(plan).unwrap();
+    {
+        let room = connector.local_room(&key()).unwrap();
+        assert!(!base_is_current(room, &(1, HEAD.to_owned())));
+        assert!(base_is_current(room, &(2, head_hash.clone())));
+        assert!(!base_is_current(room, &(2, "forked".to_owned())));
+        assert!(base_is_current(room, &(3, "later".to_owned())));
+    }
 
     let result = block_on(connector.submit_room_write(HeldDraftRequest::Message(
         RoomSendMessageInput {
@@ -488,8 +516,9 @@ fn freshness_classes_decide_which_records_move_the_head() {
     assert_eq!((sync.head_seq, sync.synced_seq, sync.remote_seq), (1, 2, 2));
     assert_eq!(sync.head_hash, HEAD);
 
-    // A head-bound record must name the current head, not the signal.
-    let stale = record(
+    // A message may be based on any record at or after the head, such as the
+    // signal, and never advances the head itself.
+    let message = record(
         &speaker,
         event_type::MESSAGE_CREATE,
         2,
@@ -499,8 +528,9 @@ fn freshness_classes_decide_which_records_move_the_head() {
         &signal_hash,
         MessageCreatePayload::text("x"),
     );
-    let error = connector.apply_record(stale).unwrap_err();
-    assert!(error.to_string().contains("must match current room head"));
+    let message_hash = message.hash.clone();
+    connector.apply_record(message).unwrap();
+    assert_eq!(connector.sync_state(&key()).unwrap().head_seq, 1);
 
     // A contract write only anchors, but it advances the head.
     let update = record(
@@ -509,8 +539,8 @@ fn freshness_classes_decide_which_records_move_the_head() {
         2,
         2,
         &signal_hash,
-        3,
-        &signal_hash,
+        4,
+        &message_hash,
         RoomUpdatePayload {
             topic: Some("Sharper topic".to_owned()),
             guidance: Some(String::new()),
@@ -522,12 +552,13 @@ fn freshness_classes_decide_which_records_move_the_head() {
     );
     connector.apply_record(update).unwrap();
     let room = connector.local_room(&key()).unwrap();
-    assert_eq!(room.head_seq, 3);
+    assert_eq!(room.head_seq, 4);
     assert_eq!(room.room.topic.as_deref(), Some("Sharper topic"));
     assert_eq!(room.room.guidance, None);
     assert_eq!(room.room.end_time, Some(5000));
     assert_eq!(room.room.policy, Some(RoomPolicy::default()));
-    assert_eq!(room.timeline[1].kind, RecordClass::Contract);
+    assert_eq!(room.timeline[1].kind, RecordClass::Message);
+    assert_eq!(room.timeline[2].kind, RecordClass::Contract);
     assert!(!event_type_requires_room_head(
         room,
         event_type::ROOM_UPDATE
@@ -537,7 +568,23 @@ fn freshness_classes_decide_which_records_move_the_head() {
         event_type::MESSAGE_CREATE
     ));
     assert!(!event_type_requires_room_head(room, "reaction.create"));
-    assert_eq!(connector.pending_inbox_count(Some("room1")), 1);
+    // The new message and the contract change.
+    assert_eq!(connector.pending_inbox_count(Some("room1")), 2);
+    let tip = room.synced_hash.clone().unwrap();
+
+    // A message based before the head is rejected.
+    let stale = record(
+        &speaker,
+        event_type::MESSAGE_CREATE,
+        3,
+        2,
+        &signal_hash,
+        5,
+        &tip,
+        MessageCreatePayload::text("stale"),
+    );
+    let error = connector.apply_record(stale).unwrap_err();
+    assert!(error.to_string().contains("at or after the room head"));
 
     // An anchor must match the record it names.
     let bad_anchor = record(
@@ -546,8 +593,8 @@ fn freshness_classes_decide_which_records_move_the_head() {
         3,
         2,
         "not-the-signal",
-        4,
-        room.synced_hash.as_deref().unwrap(),
+        5,
+        &tip,
         json!({}),
     );
     assert!(connector.apply_record(bad_anchor).is_err());
@@ -690,7 +737,8 @@ fn redacted_records_keep_the_chain_and_type_but_project_nothing() {
     let redacted = redact_server_record(&message).unwrap();
     connector.apply_record(redacted).unwrap();
     let room = connector.local_room(&key()).unwrap();
-    assert_eq!(room.head_seq, 2);
+    // Messages never advance the head, redacted or not.
+    assert_eq!(room.head_seq, 1);
     let item = &room.timeline[0];
     assert!(item.redacted);
     assert_eq!(item.summary, "[redacted]");
@@ -705,8 +753,9 @@ fn redacted_records_keep_the_chain_and_type_but_project_nothing() {
 
 #[test]
 fn unfiltered_gap_free_reads_advance_the_presented_head() {
-    let speaker = signer(2);
-    let mut connector = connector_with_room(1, &signer(5));
+    let speaker = signer(5);
+    let mut connector = connector_with_room(1, &speaker);
+    define_type(&mut connector, control_type("plan.update"));
     // The first state read of a known room presents its head without a sync.
     let state = block_on(connector.room_state(inputs::RoomStateInput {
         room_id: "room1".to_owned(),
@@ -719,31 +768,31 @@ fn unfiltered_gap_free_reads_advance_the_presented_head() {
     assert_eq!(state["sync"]["subscribed"], true);
     let first = record(
         &speaker,
-        event_type::MESSAGE_CREATE,
+        "plan.update",
         1,
         1,
         HEAD,
         2,
         HEAD,
-        MessageCreatePayload::text("one"),
+        json!({"step": "one"}),
     );
     let first_hash = first.hash.clone();
     connector.apply_record(first).unwrap();
     let second = record(
         &speaker,
-        event_type::MESSAGE_CREATE,
+        "plan.update",
         2,
         2,
         &first_hash,
         3,
         &first_hash,
-        MessageCreatePayload::text("two"),
+        json!({"step": "two"}),
     );
     let second_hash = second.hash.clone();
     connector.apply_record(second).unwrap();
     // A filtered read presents nothing.
     let filtered = block_on(connector.room_timeline(RoomTimelineInput {
-        types: Some(vec![event_type::MESSAGE_CREATE.to_owned()]),
+        types: Some(vec!["plan.update".to_owned()]),
         ..timeline_input()
     }))
     .unwrap();

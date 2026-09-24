@@ -6,7 +6,12 @@ import { protocolError } from "./errors.js";
 
 export const AGENT_ID_PREFIX = "did:agent:";
 export const DEFAULT_LIVE_WRITE_WINDOW_MS = 300_000;
-export const DEFAULT_NONCE_TTL_MS = 300_000;
+/**
+ * Nonce cache validity (Agent Identity Section 6.2): at least twice the
+ * live-write window, because an envelope signed up to one window ahead of the
+ * receiver's clock stays inside the window for two windows after acceptance.
+ */
+export const DEFAULT_NONCE_TTL_MS = 2 * DEFAULT_LIVE_WRITE_WINDOW_MS;
 export const DEFAULT_REQUEST_JWT_TTL_SECS = 300;
 export const MAX_NONCE_HEADER = "Max-Seen-Nonce";
 export const MAX_SAFE_NONCE = Number.MAX_SAFE_INTEGER;
@@ -810,6 +815,24 @@ export function createRequestBinding(audience: string): RequestBinding {
   return {
     audience,
   };
+}
+
+/**
+ * Checks that `value` is a serialized HTTPS origin (Agent Identity Section
+ * 4.4): WHATWG URL parsing and origin serialization must reproduce it exactly.
+ */
+export function validateOrigin(value: unknown): asserts value is string {
+  let parsed: URL | undefined;
+  if (typeof value === "string") {
+    try {
+      parsed = new URL(value);
+    } catch {
+      parsed = undefined;
+    }
+  }
+  if (!parsed || parsed.protocol !== "https:" || parsed.origin !== value) {
+    throw protocolError("invalid_url", `origin must be a serialized HTTPS origin: ${String(value)}`);
+  }
 }
 
 /**

@@ -164,7 +164,7 @@ def test_a_restricted_successor_manages_its_predecessors_credentials():
         d.validate_delegation_acceptance(revocation, unlinked, ID, 700, credential)
 
 
-def test_verify_delegation_credential_replays_accepted_records():
+def test_verify_delegation_credential_checks_the_latest_grant():
     doc, envelope = document(), grant()
     credential = d.materialize_delegation_credential(envelope, accepted_at=250)
     records = [{"envelope": envelope, "accepted_at": 250}]
@@ -182,7 +182,15 @@ def test_verify_delegation_credential_replays_accepted_records():
     verdict = d.verify_delegation_credential(revoked, history, doc, ID, ORIGIN, 500)
     assert (verdict["verified"], verdict["usable"], verdict["reasons"]) == (True, False, ["status is revoked"])
     # A service that hides the revocation does not match its own history.
-    assert not d.verify_delegation_credential({**revoked, "status": "active"}, history, doc, ID, ORIGIN, 500)["verified"]
+    hidden = {**revoked, "status": "active"}
+    assert not d.verify_delegation_credential(hidden, history, doc, ID, ORIGIN, 500)["verified"]
+    # Relying parties need only the latest grant record; auditors replay all.
+    assert d.verify_delegation_credential(revoked, records, doc, ID, ORIGIN, 500)["verified"]
+    d.audit_delegation_history(revoked, history, doc, ID)
+    with pytest.raises(AgentProtocolError):
+        d.audit_delegation_history(hidden, history, doc, ID)
+    with pytest.raises(AgentProtocolError):
+        d.audit_delegation_history(revoked, records, doc, ID)
 
 
 def test_credential_verification_binds_grant_fields_and_preserves_service_metadata():
@@ -202,7 +210,31 @@ def test_credential_verification_binds_grant_fields_and_preserves_service_metada
         forged = deepcopy(credential)
         del forged[field]
         assert not d.verify_delegation_credential(forged, records, doc, ID, ORIGIN, 300)["verified"], field
-    control = {**credential, "constraints": {"project": "alpha", "limit": 1.0}, "updated_at": 350, "checked_at": 400}
+    control = {**credential, "constraints": {"project": "alpha", "limit": 1.0}, "checked_at": 400}
     assert d.verify_delegation_credential(control, records, doc, ID, ORIGIN, 400)["usable"]
     suspended = d.verify_delegation_credential({**control, "status": "suspended"}, records, doc, ID, ORIGIN, 400)
     assert (suspended["verified"], suspended["usable"]) == (True, False)
+
+
+def test_audience_vectors():
+    for audience in VECTORS["audiences"]["valid"]:
+        d.validate_audience(audience)
+    for audience in VECTORS["audiences"]["invalid"]:
+        with pytest.raises(AgentProtocolError):
+            d.validate_audience(audience)
+
+
+@pytest.mark.parametrize("case", VECTORS["acceptance"]["cases"], ids=lambda c: c["name"])
+def test_acceptance_vectors(case):
+    document = VECTORS["acceptance"]["document"]
+    try:
+        if case["mode"] == "live":
+            d.validate_delegation_acceptance(case["envelope"], document, document["id"], case["accepted_at"], case["previous"])
+        else:
+            d.validate_historical_delegation(
+                {"envelope": case["envelope"], "accepted_at": case["accepted_at"]}, document, document["id"], case["previous"]
+            )
+        outcome = "ok"
+    except AgentProtocolError as error:
+        outcome = error.code
+    assert outcome == case["expected"]

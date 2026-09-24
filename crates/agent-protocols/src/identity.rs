@@ -14,7 +14,10 @@ use crate::error::{Result, SdkError};
 
 pub const AGENT_ID_PREFIX: &str = "did:agent:";
 pub const DEFAULT_LIVE_WRITE_WINDOW_MS: i64 = 300_000;
-pub const DEFAULT_NONCE_TTL_MS: i64 = 300_000;
+/// Nonce cache validity (Agent Identity Section 6.2): at least twice the
+/// live-write window, because an envelope signed up to one window ahead of the
+/// receiver's clock stays inside the window for two windows after acceptance.
+pub const DEFAULT_NONCE_TTL_MS: i64 = 2 * DEFAULT_LIVE_WRITE_WINDOW_MS;
 pub const DEFAULT_REQUEST_JWT_TTL_SECS: i64 = 300;
 pub const MAX_NONCE_HEADER: &str = "Max-Seen-Nonce";
 pub const MAX_SAFE_NONCE: u64 = 0x1FFFFFFFFFFFFF;
@@ -1006,6 +1009,23 @@ pub fn verify_request_jwt(token: &str, context: &RequestAuthContext) -> Result<R
     }
 
     Ok(claims)
+}
+
+/// Checks that `value` is a serialized HTTPS origin (Agent Identity Section
+/// 4.4): WHATWG URL parsing and origin serialization must reproduce it exactly.
+pub fn validate_origin(value: &str) -> Result<()> {
+    let parsed = url::Url::parse(value)
+        .map_err(|_| SdkError::InvalidPayload(format!("not a valid origin: {value}")))?;
+    if parsed.scheme() == "https"
+        && parsed.host_str().is_some()
+        && parsed.origin().ascii_serialization() == value
+    {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidPayload(format!(
+            "origin must be a serialized HTTPS origin: {value}"
+        )))
+    }
 }
 
 /// Derives the request JWT `aud` from a request URL: the service origin —

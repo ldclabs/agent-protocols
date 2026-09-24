@@ -107,7 +107,7 @@ test("a restricted successor manages its predecessor's credentials within its ow
   const unlinked = structuredClone(doc); delete unlinked.controllers[1].supersedes;
   assert.throws(() => d.validateDelegationAcceptance(revoke, unlinked, id, 700, credential), /own/);
 });
-test("verifyDelegationCredential replays accepted records and checks use", () => {
+test("verifyDelegationCredential checks the latest grant and use", () => {
   const doc = document();
   const envelope = grant();
   const credential = d.materializeDelegationCredential(envelope, { acceptedAt: 250 });
@@ -127,7 +127,13 @@ test("verifyDelegationCredential replays accepted records and checks use", () =>
   const verdict = d.verifyDelegationCredential(revoked, history, doc, id, origin, 500);
   assert.deepEqual([verdict.verified, verdict.usable, verdict.reasons], [true, false, ["status is revoked"]]);
   // A service that hides the revocation does not match its own history.
-  assert.equal(d.verifyDelegationCredential({ ...revoked, status: "active" }, history, doc, id, origin, 500).verified, false);
+  const hidden = { ...revoked, status: "active" as const };
+  assert.equal(d.verifyDelegationCredential(hidden, history, doc, id, origin, 500).verified, false);
+  // Relying parties need only the latest grant record; auditors replay all.
+  assert.equal(d.verifyDelegationCredential(revoked, records, doc, id, origin, 500).verified, true);
+  d.auditDelegationHistory(revoked, history, doc, id);
+  assert.throws(() => d.auditDelegationHistory(hidden, history, doc, id));
+  assert.throws(() => d.auditDelegationHistory(revoked, records, doc, id));
 });
 
 test("credential verification binds every grant field while allowing current service metadata", () => {
@@ -149,8 +155,28 @@ test("credential verification binds every grant field while allowing current ser
     const verdict = d.verifyDelegationCredential({ ...credential, ...change }, records, doc, id, origin, 300);
     assert.deepEqual([verdict.verified, verdict.usable], [false, false], JSON.stringify(change));
   }
-  const control = { ...credential, constraints: { project: "alpha", limit: 1 }, updated_at: 350, checked_at: 400 };
+  const control = { ...credential, constraints: { project: "alpha", limit: 1 }, checked_at: 400 };
   assert.equal(d.verifyDelegationCredential(control, records, doc, id, origin, 400).usable, true);
   const suspended = d.verifyDelegationCredential({ ...control, status: "suspended" }, records, doc, id, origin, 400);
   assert.deepEqual([suspended.verified, suspended.usable], [true, false]);
+});
+
+test("audience vectors", () => {
+  for (const audience of vectors.audiences.valid) d.validateAudience(audience);
+  for (const audience of vectors.audiences.invalid) assert.throws(() => d.validateAudience(audience), audience);
+});
+
+for (const fixture of vectors.acceptance.cases) test(`acceptance: ${fixture.name}`, () => {
+  const document = vectors.acceptance.document as d.PrincipalDocument;
+  let outcome = "ok";
+  try {
+    if (fixture.mode === "live") {
+      d.validateDelegationAcceptance(fixture.envelope, document, document.id, fixture.accepted_at, fixture.previous ?? undefined);
+    } else {
+      d.validateHistoricalDelegation({ envelope: fixture.envelope, accepted_at: fixture.accepted_at }, document, document.id, fixture.previous ?? undefined);
+    }
+  } catch (error) {
+    outcome = (error as { code?: string }).code ?? "other";
+  }
+  assert.equal(outcome, fixture.expected);
 });

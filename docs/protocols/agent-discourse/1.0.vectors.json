@@ -1,6 +1,6 @@
 {
   "protocol": "agent-discourse/1.0",
-  "description": "Normative Agent Discourse 1.0 test vectors. Implementations MUST reproduce each record hash from its fields, MUST verify the chain with and without the redacted record, MUST report head_seq after each record, and MUST classify patterns and freshness exactly as listed.",
+  "description": "Normative Agent Discourse 1.0 test vectors. Implementations MUST reproduce each record hash from its fields, MUST verify the chain with and without the redacted record, MUST report head_seq after each record, MUST classify freshness, head checks, and head advancement exactly as listed, MUST produce every base_checks outcome, MUST accept and reject the listed type names and patterns, and MUST derive the listed effective open roles and reject the listed policies.",
   "seeds": {
     "creator": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
     "member": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
@@ -274,8 +274,8 @@
   "head_seq_after": [
     1,
     1,
-    3,
-    3,
+    1,
+    1,
     5
   ],
   "freshness": {
@@ -304,10 +304,109 @@
       "claim.update": "control",
       "steer.create": "signal"
     },
-    "head_bound": [
+    "head_checked": [
       "message.create",
       "turn.update",
       "claim.update"
+    ],
+    "head_advancing": [
+      "room.create",
+      "room.update",
+      "room.close",
+      "room.cancel",
+      "type.define",
+      "turn.update",
+      "claim.update"
+    ],
+    "base_checks": [
+      {
+        "name": "message based on the head",
+        "type": "message.create",
+        "head_seq": 5,
+        "base_seq": 5,
+        "anchored": true,
+        "expected": "ok"
+      },
+      {
+        "name": "message based on a later message",
+        "type": "message.create",
+        "head_seq": 3,
+        "base_seq": 7,
+        "anchored": true,
+        "expected": "ok"
+      },
+      {
+        "name": "message based before the head",
+        "type": "message.create",
+        "head_seq": 5,
+        "base_seq": 4,
+        "anchored": true,
+        "expected": "room_head_mismatch"
+      },
+      {
+        "name": "control based on the head",
+        "type": "turn.update",
+        "head_seq": 5,
+        "base_seq": 5,
+        "anchored": true,
+        "expected": "ok"
+      },
+      {
+        "name": "control based on a later message",
+        "type": "claim.update",
+        "head_seq": 3,
+        "base_seq": 4,
+        "anchored": true,
+        "expected": "ok"
+      },
+      {
+        "name": "control based before the head",
+        "type": "claim.update",
+        "head_seq": 5,
+        "base_seq": 3,
+        "anchored": true,
+        "expected": "room_head_mismatch"
+      },
+      {
+        "name": "contract based before the head",
+        "type": "room.update",
+        "head_seq": 5,
+        "base_seq": 1,
+        "anchored": true,
+        "expected": "ok"
+      },
+      {
+        "name": "signal based before the head",
+        "type": "reaction.create",
+        "head_seq": 5,
+        "base_seq": 2,
+        "anchored": true,
+        "expected": "ok"
+      },
+      {
+        "name": "membership based before the head",
+        "type": "room.join",
+        "head_seq": 5,
+        "base_seq": 1,
+        "anchored": true,
+        "expected": "ok"
+      },
+      {
+        "name": "message with an unanchored base",
+        "type": "message.create",
+        "head_seq": 5,
+        "base_seq": 6,
+        "anchored": false,
+        "expected": "base_record_mismatch"
+      },
+      {
+        "name": "signal with an unanchored base",
+        "type": "reaction.create",
+        "head_seq": 5,
+        "base_seq": 2,
+        "anchored": false,
+        "expected": "base_record_mismatch"
+      }
     ]
   },
   "patterns": {
@@ -345,6 +444,111 @@
       "(a",
       "a)",
       "\\"
+    ]
+  },
+  "type_names": {
+    "valid": [
+      "review.finding",
+      "x.example.custom_event",
+      "poll2.vote-cast",
+      "graph.node.update"
+    ],
+    "invalid": [
+      "message.edit",
+      "message.create",
+      "room.custom",
+      "type.alias",
+      "Review.finding",
+      "single",
+      "a..b",
+      ".a.b",
+      "a.b.",
+      "-a.b"
+    ]
+  },
+  "open_roles": {
+    "effective": [
+      {
+        "name": "public default",
+        "visibility": "public",
+        "expected": [
+          "observer"
+        ]
+      },
+      {
+        "name": "public without observers",
+        "visibility": "public",
+        "policy": {
+          "observer_allowed": false
+        },
+        "expected": []
+      },
+      {
+        "name": "public with open speaking",
+        "visibility": "public",
+        "policy": {
+          "open_roles": [
+            "speaker",
+            "observer"
+          ]
+        },
+        "expected": [
+          "speaker",
+          "observer"
+        ]
+      },
+      {
+        "name": "restricted default",
+        "visibility": "restricted",
+        "expected": []
+      },
+      {
+        "name": "restricted join to read",
+        "visibility": "restricted",
+        "policy": {
+          "open_roles": [
+            "observer"
+          ]
+        },
+        "expected": [
+          "observer"
+        ]
+      },
+      {
+        "name": "private default",
+        "visibility": "private",
+        "expected": []
+      }
+    ],
+    "invalid": [
+      {
+        "name": "private room with an open role",
+        "visibility": "private",
+        "policy": {
+          "open_roles": [
+            "observer"
+          ]
+        }
+      },
+      {
+        "name": "open moderator role",
+        "visibility": "public",
+        "policy": {
+          "open_roles": [
+            "moderator"
+          ]
+        }
+      },
+      {
+        "name": "open observer role while observers are disallowed",
+        "visibility": "restricted",
+        "policy": {
+          "observer_allowed": false,
+          "open_roles": [
+            "observer"
+          ]
+        }
+      }
     ]
   }
 }

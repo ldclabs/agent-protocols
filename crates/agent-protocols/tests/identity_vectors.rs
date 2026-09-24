@@ -178,3 +178,67 @@ fn clock_derived_nonces_stay_monotonic() {
     assert_eq!(manager.next_nonce().unwrap(), 1_003);
     assert_eq!(manager.next_nonce_at(5_000).unwrap(), 5_000);
 }
+
+#[test]
+fn origins_are_serialized_https_origins() {
+    let vectors = vectors();
+    for origin in vectors["origins"]["valid"].as_array().unwrap() {
+        validate_origin(text(origin)).unwrap();
+    }
+    for origin in vectors["origins"]["invalid"].as_array().unwrap() {
+        assert!(validate_origin(text(origin)).is_err(), "{origin}");
+    }
+}
+
+#[test]
+fn request_jwts_verify_exactly_as_listed() {
+    let vectors = vectors();
+    let jwts = &vectors["request_jwts"];
+    let context = RequestAuthContext {
+        audience: text(&jwts["audience"]).to_owned(),
+        now_secs: jwts["now_secs"].as_i64().unwrap(),
+        max_ttl_secs: jwts["max_ttl_secs"].as_i64().unwrap(),
+    };
+    for case in jwts["valid"].as_array().unwrap() {
+        let claims = verify_request_jwt(text(&case["token"]), &context).unwrap();
+        assert_eq!(serde_json::to_value(claims).unwrap(), case["claims"]);
+    }
+    for case in jwts["invalid"].as_array().unwrap() {
+        assert!(
+            verify_request_jwt(text(&case["token"]), &context).is_err(),
+            "{}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
+fn submissions_resolve_resubmission_windows_and_nonce_replays() {
+    let vectors = vectors();
+    let submissions = &vectors["submissions"];
+    let envelopes: std::collections::BTreeMap<String, Envelope<Value>> =
+        serde_json::from_value(submissions["envelopes"].clone()).unwrap();
+    let mut store = MemoryNonceStore::new();
+    for step in submissions["steps"].as_array().unwrap() {
+        let envelope = &envelopes[text(&step["envelope"])];
+        let accepted: Vec<&str> = step["accepted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| envelopes[text(name)].hash.as_str())
+            .collect();
+        let options = LiveWriteOptions {
+            now_ms: step["now_ms"].as_i64().unwrap(),
+            window_ms: submissions["window_ms"].as_i64().unwrap(),
+            nonce_ttl_ms: DEFAULT_NONCE_TTL_MS,
+        };
+        let outcome = match verify_submission(envelope, &options, &mut store, |hash| {
+            accepted.contains(&hash)
+        }) {
+            Ok(SubmissionResult::Accepted { .. }) => "accepted".to_owned(),
+            Ok(SubmissionResult::Resubmission) => "resubmission".to_owned(),
+            Err(error) => error.code().unwrap_or("other").to_owned(),
+        };
+        assert_eq!(outcome, text(&step["expected"]), "{}", step["name"]);
+    }
+}

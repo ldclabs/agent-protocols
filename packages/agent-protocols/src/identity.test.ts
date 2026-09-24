@@ -638,3 +638,38 @@ test("verifySubmission answers exact resubmissions before replay checks", async 
   const forged = { ...envelope, signature: identityVectors.signatures[0].signature };
   assert.throws(() => verifySubmission(forged, store, { nowMs: 1_000, isAccepted: () => true }), /signature/);
 });
+
+test("identity vectors: origins are serialized HTTPS origins", async () => {
+  const { validateOrigin } = await import("./identity.js");
+  for (const origin of identityVectors.origins.valid) validateOrigin(origin);
+  for (const origin of identityVectors.origins.invalid) assert.throws(() => validateOrigin(origin), origin);
+});
+
+test("identity vectors: request JWTs verify exactly as listed", async () => {
+  const { verifyRequestJwt } = await import("./identity.js");
+  const jwts = identityVectors.request_jwts;
+  const context = { audience: jwts.audience, nowSecs: jwts.now_secs, maxTtlSecs: jwts.max_ttl_secs };
+  for (const vector of jwts.valid) assert.deepEqual(verifyRequestJwt(vector.token, context), vector.claims);
+  for (const vector of jwts.invalid) assert.throws(() => verifyRequestJwt(vector.token, context), vector.name);
+});
+
+test("identity vectors: submissions resolve resubmission, windows, and nonce replays", async () => {
+  const { MemoryNonceStore, verifySubmission } = await import("./identity.js");
+  const submissions = identityVectors.submissions;
+  const store = new MemoryNonceStore();
+  for (const step of submissions.steps) {
+    const envelope = submissions.envelopes[step.envelope];
+    const accepted = new Set((step.accepted as string[]).map((name) => submissions.envelopes[name].hash));
+    let outcome: string;
+    try {
+      outcome = verifySubmission(envelope, store, {
+        nowMs: step.now_ms,
+        windowMs: submissions.window_ms,
+        isAccepted: (hash) => accepted.has(hash),
+      }).kind;
+    } catch (error) {
+      outcome = (error as AgentProtocolError).code;
+    }
+    assert.equal(outcome, step.expected, step.name);
+  }
+});

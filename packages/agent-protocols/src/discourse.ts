@@ -22,6 +22,7 @@ import {
   createEvent,
   validateAgentId,
   validateEventFields,
+  validateOrigin,
   verifyEnvelope,
   withRoomHead,
   withRoomId,
@@ -51,8 +52,8 @@ export const BUILTIN_EVENT_TYPES: readonly string[] = Object.values(eventType);
 
 /**
  * Built-in membership events. They are `signal`-class: they anchor to an
- * accepted record but never contend for or advance the room head, so busy
- * rooms cannot starve joins, reviews, or other membership writes.
+ * accepted record but are never checked against or advance the room head, so
+ * busy rooms cannot starve joins, reviews, or other membership writes.
  */
 export const MEMBERSHIP_EVENT_TYPES: readonly string[] = [
   eventType.ROOM_JOIN,
@@ -64,8 +65,8 @@ export const MEMBERSHIP_EVENT_TYPES: readonly string[] = [
 
 /**
  * Contract writes (Section 5.1): anchored like signals, so discussion traffic
- * cannot starve them, but head-advancing, so replies composed against the old
- * contract are rejected and re-read.
+ * cannot starve them, but head-advancing, so messages and control writes
+ * composed against the old contract are rejected and re-read.
  */
 export const CONTRACT_EVENT_TYPES: readonly string[] = [
   eventType.ROOM_UPDATE,
@@ -75,9 +76,11 @@ export const CONTRACT_EVENT_TYPES: readonly string[] = [
 ];
 
 /**
- * Class of an accepted record: its freshness class for built-in types
- * (Section 5.1) and its registry `kind` for custom types. `message` and
- * `control` records are head-bound.
+ * Freshness class of an accepted record (Section 5.1): `genesis` and
+ * `contract` for the room lifecycle built-ins, `signal` for membership
+ * built-ins, `message` for `message.create`, and the registry `kind` for
+ * custom types. `message` and `control` writes must be based at or after the
+ * room head; `genesis`, `contract`, and `control` records advance it.
  */
 export type RecordClass = "genesis" | "contract" | "message" | "signal" | "control";
 
@@ -131,20 +134,22 @@ export function recordClass(
 
 /**
  * Whether an accepted record of this type advances the room head (Section
- * 5.1): every class except `signal`. Unknown custom types default to
- * head-advancing.
+ * 5.1): `genesis`, `contract`, and `control` records. Unknown custom types
+ * default to head-advancing.
  */
 export function eventAdvancesRoomHead(
   type: string,
   registry?: TypeRegistry | readonly TypeDef[],
 ): boolean {
-  return recordClass(type, registry) !== "signal";
+  const cls = recordClass(type, registry);
+  return cls !== "message" && cls !== "signal";
 }
 
 /**
- * Whether a write of this type must match the current room head (Section
- * 5.1): `message.create` and custom `message`/`control` kinds. Contract and
- * signal writes only anchor. Unknown custom types default to head-bound.
+ * Whether a write of this type is checked against the room head (Section
+ * 5.1): `message.create` and custom `message`/`control` kinds must be based at
+ * or after the current head. Contract and signal writes only anchor. Unknown
+ * custom types default to head-checked.
  */
 export function eventRequiresRoomHead(
   type: string,
@@ -155,11 +160,34 @@ export function eventRequiresRoomHead(
   return cls === "message" || cls === "control";
 }
 
+/**
+ * Section 5.1 base check for a room write based on `baseSeq` / `baseHash`.
+ * `anchorHash` is the hash of the accepted record at `baseSeq` in the same
+ * room (`undefined` when there is none) and `headSeq` is the current room
+ * head. Every base must name an accepted record (`base_record_mismatch`);
+ * `message` and `control` writes must also be based at or after the head
+ * (`room_head_mismatch`).
+ */
+export function validateRoomBase(
+  type: string,
+  registry: TypeRegistry | readonly TypeDef[] | undefined,
+  baseSeq: number,
+  baseHash: string,
+  anchorHash: string | undefined,
+  headSeq: number,
+): void {
+  if (anchorHash !== baseHash) {
+    throw protocolError("base_record_mismatch", `base ${baseSeq} does not name an accepted record of this room`);
+  }
+  if (eventRequiresRoomHead(type, registry) && baseSeq < headSeq) {
+    throw protocolError("room_head_mismatch", `base ${baseSeq} is before the room head ${headSeq}`);
+  }
+}
+
 /** ADP-specific error codes (Section 19); shared codes come from Agent Identity. */
 export const DISCOURSE_ERROR_CODES: readonly string[] = [
   "room_not_found",
   "room_not_active",
-  "room_ended",
   "host_mismatch",
   "approval_required",
   "join_request_not_found",
@@ -189,7 +217,7 @@ export const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export const CONTENT_DIGEST_PATTERN = /^(sha256|sha3-256):[A-Za-z0-9_-]{43}$/;
 
 /** Custom event types must not use these prefixes. */
-export const RESERVED_TYPE_PREFIXES = ["room.", "type."] as const;
+export const RESERVED_TYPE_PREFIXES = ["room.", "type.", "message."] as const;
 
 /** Registered type packs defined by the specification in `1.0.packs.json`. */
 export const packId = {
@@ -234,7 +262,7 @@ export interface RoomCreatePayload {
 export interface RoomPolicy {
   /** Agent IDs pre-approved for direct `room.join` with exactly this role. */
   invites?: Record<AgentId, Role>;
-  /** Roles anyone may take by direct `room.join` in a public room. */
+  /** Roles anyone may take by direct `room.join`; see {@link effectiveOpenRoles}. */
   open_roles?: Role[];
   max_speakers?: number;
   observer_allowed?: boolean;
@@ -268,7 +296,7 @@ export interface RoomMemberRemovePayload {
   extra?: Record<string, unknown>;
 }
 
-/** A room-scoped declaration of a custom event type. */
+/** A room-scoped declaration of a custom event type. The field set is closed. */
 export interface TypeDef {
   type: string;
   kind: TypeKind;
@@ -278,7 +306,6 @@ export interface TypeDef {
   schema: Record<string, unknown>;
   roles?: Role[];
   instructions?: string;
-  version?: string;
   status?: TypeStatus;
   rate_hint?: number;
   max_payload_hint?: number;
@@ -488,10 +515,14 @@ export interface ServerRecordHashPayload {
   accepted_at: number;
 }
 
+/**
+ * The `profile` discovery member (Agent Profile Section 8): the Agent Profile
+ * service a host resolves profiles from, and whether local policy requires a
+ * verified profile before accepting an agent's writes.
+ */
 export interface ProfileResolverMetadata {
-  mode: string;
-  service?: string;
-  protocol?: string;
+  service: string;
+  required?: boolean;
 }
 
 export interface DiscourseProtocolDiscovery extends DiscoveryDocument {
@@ -508,8 +539,18 @@ export interface ArchiveManifest {
   last_seq: number;
   /** Hash of the record at `last_seq`: the archive's commitment to every record. */
   last_hash: string;
+  /** Format names mapped to URLs; `jsonl` is the required record log. */
   formats?: Record<string, string>;
+  /** Every external pack the room imported, with a URL serving its exact bytes. */
+  packs?: ArchivedPack[];
   extra?: Record<string, unknown>;
+}
+
+/** An external pack document retained in an archive (Section 18). */
+export interface ArchivedPack {
+  pack: string;
+  digest: string;
+  url: string;
 }
 
 /** Permission inputs for one actor in one room. */
@@ -744,7 +785,17 @@ export function isTypeDef(declaration: TypeDeclaration): declaration is TypeDef 
   );
 }
 
+const TYPE_DEF_FIELDS = [
+  "type", "kind", "title", "description", "schema", "roles", "instructions",
+  "status", "rate_hint", "max_payload_hint", "extra",
+];
+
 export function validateTypeDef(def: TypeDef): void {
+  for (const key of Object.keys(def)) {
+    if (!TYPE_DEF_FIELDS.includes(key)) {
+      throw protocolError("invalid_event", `unknown type definition field: ${key}`);
+    }
+  }
   validateCustomEventTypeName(def.type);
   if (!includes(TYPE_KINDS, def.kind)) {
     throw protocolError("invalid_event", `invalid type kind: ${def.kind}`);
@@ -1074,16 +1125,30 @@ export function validateRoomPolicy(policy: RoomPolicy | undefined): void {
   }
 }
 
-/** The roles anyone may take by direct `room.join` in a public room. */
-export function effectiveOpenRoles(policy: RoomPolicy | undefined): Role[] {
+/**
+ * Section 8.3 rule tying the policy to the room's visibility: a private room
+ * admits agents only by invitation or review, so its `open_roles` must be empty.
+ */
+export function validateRoomVisibilityPolicy(visibility: Visibility, policy: RoomPolicy | undefined): void {
+  if (visibility === "private" && (policy?.open_roles?.length ?? 0) > 0) {
+    throw protocolError("invalid_event", "a private room cannot have open roles");
+  }
+}
+
+/**
+ * The roles any agent may take by direct `room.join` (Section 8.3): the
+ * explicit `open_roles`, or by default `observer` in a public room when
+ * observers are allowed, and none otherwise.
+ */
+export function effectiveOpenRoles(visibility: Visibility, policy: RoomPolicy | undefined): Role[] {
   if (policy?.open_roles !== undefined) return [...policy.open_roles];
-  return policy?.observer_allowed === false ? ["speaker"] : ["speaker", "observer"];
+  return visibility === "public" && policy?.observer_allowed !== false ? ["observer"] : [];
 }
 
 /**
  * Section 9.2 direct-join eligibility: the actor is invited with exactly
- * `role`, or the room is public and `role` is open. Bans and quotas are
- * separate host checks.
+ * `role`, or `role` is one of the room's effective open roles. Bans and
+ * quotas are separate host checks.
  */
 export function canJoinDirectly(
   visibility: Visibility,
@@ -1092,11 +1157,13 @@ export function canJoinDirectly(
   role: Role,
 ): boolean {
   if (policy?.invites?.[actor] === role) return true;
-  return visibility === "public" && effectiveOpenRoles(policy).includes(role);
+  return effectiveOpenRoles(visibility, policy).includes(role);
 }
 
 export function validateRoomCreatePayload(payload: RoomCreatePayload): void {
-  if (typeof payload.host !== "string" || !/^https:\/\/[^/?#@\s]+$/.test(payload.host)) {
+  try {
+    validateOrigin(payload.host);
+  } catch {
     throw protocolError("invalid_event", "room.create host must be an HTTPS origin");
   }
   if (payload.topic.trim() === "") {
@@ -1106,6 +1173,7 @@ export function validateRoomCreatePayload(payload: RoomCreatePayload): void {
     throw protocolError("invalid_event", "start_time must be before end_time");
   }
   validateRoomPolicy(payload.policy);
+  validateRoomVisibilityPolicy(payload.visibility, payload.policy);
   for (const declaration of payload.types ?? []) {
     validateTypeDeclaration(declaration);
   }

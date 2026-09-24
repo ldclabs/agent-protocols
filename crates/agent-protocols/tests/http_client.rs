@@ -477,7 +477,7 @@ fn discourse_client_round_trips_every_endpoint() {
     assert_eq!(requests[2].path, "/v1/rooms/room1");
     assert_eq!(
         requests[3].path,
-        "/v1/rooms/public?status=active&tag=a%20b&limit=5&cursor=c%20d"
+        "/v1/rooms?status=active&tag=a%20b&limit=5&cursor=c%20d"
     );
     assert_eq!(requests[4].path, "/v1/me/rooms");
     assert_eq!(requests[4].authorization.as_deref(), Some("Bearer jwt-me"));
@@ -742,6 +742,17 @@ mod connector_regressions {
     use serde_json::{json, Value};
 
     fn fixture() -> (MockServer, LocalConnector, AgentSigner, ServerRecord) {
+        fixture_with_types(json!([]))
+    }
+
+    /// A room whose registry defines one `control` type, `plan.update`.
+    fn fixture_with_control_type() -> (MockServer, LocalConnector, AgentSigner, ServerRecord) {
+        fixture_with_types(json!([
+            {"type": "plan.update", "kind": "control", "title": "Plan", "schema": {"type": "object"}}
+        ]))
+    }
+
+    fn fixture_with_types(types: Value) -> (MockServer, LocalConnector, AgentSigner, ServerRecord) {
         let server = MockServer::start();
         let author = AgentSigner::from_seed([80; 32]);
         let envelope = author
@@ -764,6 +775,7 @@ mod connector_regressions {
             "url": format!("{}/v1/rooms/room1", server.base_url),
             "seq": 1, "pre_hash": null, "hash": genesis.hash, "accepted_at": 100,
             "head": { "seq": 1, "hash": genesis.hash }, "envelope": genesis.envelope,
+            "types": types,
         }))
         .unwrap();
         let mut connector = LocalConnector::new(AgentSigner::from_seed([81; 32]))
@@ -813,7 +825,7 @@ mod connector_regressions {
     }
 
     #[test]
-    fn snapshot_head_advances_through_consecutive_own_messages() {
+    fn consecutive_own_messages_share_the_coordination_head() {
         let (server, mut connector, _, genesis) = fixture();
         let active = AgentSigner::from_seed([81; 32]);
         block_on(async {
@@ -821,20 +833,53 @@ mod connector_regressions {
                 .call_tool(TOOL_ROOM_STATE, json!({"room_id": "room1"}))
                 .await
                 .unwrap();
-            let mut head = genesis;
+            let mut previous = genesis.clone();
             for content in ["first", "second"] {
                 let next = next_record(
                     &active,
                     event_type::MESSAGE_CREATE,
                     json!({"content_type": "text/plain", "content": content}),
-                    &head,
-                    &head,
+                    &genesis,
+                    &previous,
                 );
                 server.enqueue(200, serde_json::to_string(&next).unwrap());
                 let result = connector
                     .call_tool(
                         TOOL_ROOM_SEND_MESSAGE,
                         json!({"room_id": "room1", "content": content}),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(result["status"], "sent");
+                // Messages never advance the head, so both are based on it.
+                assert_eq!(result["sync"]["head_seq"], 1);
+                assert_eq!(result["sync"]["presented_seq"], 1);
+                assert_eq!(result["sync"]["synced_seq"], next.seq);
+                let submitted: Value =
+                    serde_json::from_str(&server.requests().last().unwrap().body).unwrap();
+                assert_eq!(submitted["event"]["base_seq"], 1);
+                previous = next;
+            }
+        });
+    }
+
+    #[test]
+    fn own_control_writes_advance_the_presented_head() {
+        let (server, mut connector, _, genesis) = fixture_with_control_type();
+        let active = AgentSigner::from_seed([81; 32]);
+        block_on(async {
+            connector
+                .call_tool(TOOL_ROOM_STATE, json!({"room_id": "room1"}))
+                .await
+                .unwrap();
+            let mut head = genesis;
+            for step in ["first", "second"] {
+                let next = next_record(&active, "plan.update", json!({"step": step}), &head, &head);
+                server.enqueue(200, serde_json::to_string(&next).unwrap());
+                let result = connector
+                    .call_tool(
+                        TOOL_ROOM_SUBMIT_EVENT,
+                        json!({"room_id": "room1", "type": "plan.update", "payload": {"step": step}}),
                     )
                     .await
                     .unwrap();
@@ -847,20 +892,15 @@ mod connector_regressions {
 
     #[test]
     fn failed_and_rejected_draft_commits_preserve_the_draft() {
-        let (server, mut connector, other, genesis) = fixture();
+        let (server, mut connector, other, genesis) = fixture_with_control_type();
         block_on(async {
             connector
                 .call_tool(TOOL_ROOM_STATE, json!({"room_id": "room1"}))
                 .await
                 .unwrap();
-            let message = json!({"content_type": "text/plain", "content": "context"});
-            let second = next_record(
-                &other,
-                event_type::MESSAGE_CREATE,
-                message.clone(),
-                &genesis,
-                &genesis,
-            );
+            // Control records move the coordination head past the draft's base.
+            let plan = json!({"step": "context"});
+            let second = next_record(&other, "plan.update", plan.clone(), &genesis, &genesis);
             connector
                 .apply_host_record(&server.base_url, second.clone())
                 .unwrap();
@@ -883,13 +923,7 @@ mod connector_regressions {
                 .unwrap();
             assert_eq!(drafts["drafts"][0]["id"], id);
 
-            let third = next_record(
-                &other,
-                event_type::MESSAGE_CREATE,
-                message,
-                &second,
-                &second,
-            );
+            let third = next_record(&other, "plan.update", plan, &second, &second);
             connector
                 .apply_host_record(&server.base_url, third.clone())
                 .unwrap();
@@ -962,7 +996,7 @@ mod connector_regressions {
                     200,
                     3,
                     "room1",
-                    RoomJoinRequestPayload::new(Role::Speaker),
+                    RoomJoinRequestPayload::new(Role::Observer),
                 ))
                 .unwrap();
             server.enqueue(
@@ -972,9 +1006,11 @@ mod connector_regressions {
                 })
                 .to_string(),
             );
+            // Observer is the default open role, so the connector tries a
+            // direct join first unless it already knows about the ban.
             let result = block_on(connector.call_tool(
                 TOOL_ROOM_JOIN,
-                json!({"room_id": "room1", "role": "speaker"}),
+                json!({"room_id": "room1", "role": "observer"}),
             ))
             .unwrap();
             assert_eq!(result["status"], "approval_required");

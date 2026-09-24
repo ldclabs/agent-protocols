@@ -64,11 +64,39 @@ pub(crate) struct DelegationRevokeInput {
     pub reason: Option<String>,
 }
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RoomsListMembership {
+    Member,
+    Creator,
+    Moderator,
+    Pending,
+    All,
+}
+
+/// Source of `agent_protocols_rooms_list`: locally known rooms, or a host's
+/// public room discovery.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RoomsListScope {
+    #[default]
+    Known,
+    Public,
+}
+
 #[derive(Deserialize)]
-pub(crate) struct RoomsSearchInput {
-    pub host: String,
+pub(crate) struct RoomsListInput {
+    #[serde(default)]
+    pub scope: RoomsListScope,
+    /// Filters known rooms; required for `public`, where it names the host.
+    #[serde(default)]
+    pub host: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    /// `known` only.
+    #[serde(default)]
+    pub membership: Option<RoomsListMembership>,
+    /// `public` only, like the remaining discovery filters.
     #[serde(default)]
     pub tag: Option<String>,
     #[serde(default)]
@@ -87,26 +115,32 @@ pub(crate) struct RoomsSearchInput {
     pub cursor: Option<String>,
 }
 
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RoomsListMembership {
-    Member,
-    Creator,
-    Moderator,
-    Pending,
-    All,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct RoomsListInput {
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub membership: Option<RoomsListMembership>,
-    #[serde(default)]
-    pub limit: Option<usize>,
-    #[serde(default)]
-    pub cursor: Option<String>,
+impl RoomsListInput {
+    /// Rejects a filter that belongs to the other scope.
+    pub(crate) fn validate_scope(&self) -> Result<(), String> {
+        match self.scope {
+            RoomsListScope::Known => {
+                let public_only = self.tag.is_some()
+                    || self.keyword.is_some()
+                    || self.creator.is_some()
+                    || self.starts_after.is_some()
+                    || self.ends_before.is_some()
+                    || self.language.is_some();
+                if public_only {
+                    return Err("tag, keyword, creator, starts_after, ends_before, and language require scope public".to_owned());
+                }
+            }
+            RoomsListScope::Public => {
+                if self.membership.is_some() {
+                    return Err("membership requires scope known".to_owned());
+                }
+                if self.host.is_none() {
+                    return Err("scope public requires host".to_owned());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Opens the room on first use (then `host` is required) or when `refresh` is set.
@@ -323,15 +357,6 @@ pub(crate) struct RoomJoinInput {
     pub reason: Option<String>,
     #[serde(default)]
     pub extra: Option<BTreeMap<String, Value>>,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct RoomLeaveInput {
-    pub room_id: String,
-    #[serde(default)]
-    pub host: Option<String>,
-    #[serde(default)]
-    pub reason: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Debug)]

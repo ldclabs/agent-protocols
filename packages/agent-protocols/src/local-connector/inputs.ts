@@ -11,6 +11,7 @@ import {
 import { DelegationStatus } from "../delegation.js";
 import { AgentId } from "../identity.js";
 
+import { invalidPayload } from "./internal.js";
 import {
   DraftAction,
   HeadMismatchPolicy,
@@ -52,9 +53,17 @@ export interface RoomSubmitEventInput {
   on_head_mismatch?: HeadMismatchPolicy;
 }
 
-export interface RoomsSearchInput {
-  host: string;
+/** Source of `agent_protocols_rooms_list`: locally known rooms, or a host's public room discovery. */
+export type RoomsListScope = "known" | "public";
+
+export interface RoomsListInput {
+  scope?: RoomsListScope;
+  /** Filters known rooms; required for `public`, where it names the host. */
+  host?: string;
   status?: string;
+  /** `known` only. */
+  membership?: RoomsListMembership;
+  /** `public` only, like the remaining discovery filters. */
   tag?: string;
   keyword?: string;
   creator?: string;
@@ -65,11 +74,19 @@ export interface RoomsSearchInput {
   cursor?: string;
 }
 
-export interface RoomsListInput {
-  status?: string;
-  membership?: RoomsListMembership;
-  limit?: number;
-  cursor?: string;
+/** Rejects a filter that belongs to the other scope. */
+export function validateRoomsListScope(input: RoomsListInput): void {
+  const scope = input.scope ?? "known";
+  if (scope !== "known" && scope !== "public") throw invalidPayload(`invalid rooms list scope: ${String(scope)}`);
+  if (scope === "known") {
+    const publicOnly = [input.tag, input.keyword, input.creator, input.starts_after, input.ends_before, input.language];
+    if (publicOnly.some((value) => value !== undefined)) {
+      throw invalidPayload("tag, keyword, creator, starts_after, ends_before, and language require scope public");
+    }
+  } else {
+    if (input.membership !== undefined) throw invalidPayload("membership requires scope known");
+    if (input.host === undefined) throw invalidPayload("scope public requires host");
+  }
 }
 
 /** Opens the room on first use (then `host` is required) or when `refresh` is set. */
@@ -194,12 +211,6 @@ export interface RoomJoinInput {
   perspective?: string;
   reason?: string;
   extra?: Record<string, unknown>;
-}
-
-export interface RoomLeaveInput {
-  room_id: string;
-  host?: string;
-  reason?: string;
 }
 
 export interface JoinRequestsListInput {

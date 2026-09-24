@@ -100,7 +100,27 @@ def test_vectors_classes_and_patterns():
     registry = d.TypeRegistry.from_declarations(freshness["registry"], PACKS)
     for kind, expected in freshness["classes"].items():
         assert d.record_class(kind, registry) == expected, kind
-        assert d.event_requires_room_head(kind, registry) == (kind in freshness["head_bound"]), kind
+        assert d.event_requires_room_head(kind, registry) == (kind in freshness["head_checked"]), kind
+        assert d.event_advances_room_head(kind, registry) == (kind in freshness["head_advancing"]), kind
+    for check in freshness["base_checks"]:
+        try:
+            d.validate_room_base(check["type"], registry, check["base_seq"], "base-hash",
+                                 "base-hash" if check["anchored"] else None, check["head_seq"])
+            outcome = "ok"
+        except AgentProtocolError as error:
+            outcome = error.code
+        assert outcome == check["expected"], check["name"]
+    for name in VECTORS["type_names"]["valid"]:
+        d.validate_custom_event_type_name(name)
+    for name in VECTORS["type_names"]["invalid"]:
+        with pytest.raises(AgentProtocolError):
+            d.validate_custom_event_type_name(name)
+    for case in VECTORS["open_roles"]["effective"]:
+        assert d.effective_open_roles(case["visibility"], case.get("policy")) == case["expected"], case["name"]
+    for case in VECTORS["open_roles"]["invalid"]:
+        with pytest.raises(AgentProtocolError):
+            d.validate_room_policy(case["policy"])
+            d.validate_room_visibility_policy(case["visibility"], case["policy"])
     for pattern in VECTORS["patterns"]["valid"]:
         d.validate_portable_pattern(pattern)
     for pattern in VECTORS["patterns"]["invalid"]:
@@ -208,11 +228,19 @@ def test_direct_join_follows_invites_and_open_roles():
     d.validate_room_policy(policy)
     assert d.can_join_directly("private", policy, invited, "moderator")
     assert not d.can_join_directly("private", policy, invited, "speaker")
-    assert not d.can_join_directly("private", policy, stranger, "observer")
+    # Open roles apply to any visibility; a private room cannot list them.
+    assert d.can_join_directly("restricted", policy, stranger, "observer")
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_visibility_policy("private", policy)
+    d.validate_room_visibility_policy("restricted", policy)
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_create_payload(room_payload(visibility="private", policy=policy))
     assert d.can_join_directly("public", policy, stranger, "observer")
     assert not d.can_join_directly("public", policy, stranger, "speaker")
-    assert d.effective_open_roles(None) == ["speaker", "observer"]
-    assert d.effective_open_roles({"observer_allowed": False}) == ["speaker"]
+    assert not d.can_join_directly("private", None, stranger, "observer")
+    assert d.effective_open_roles("public", None) == ["observer"]
+    assert d.effective_open_roles("restricted", None) == []
+    assert d.effective_open_roles("public", {"observer_allowed": False}) == []
     for bad in (
         {"open_roles": ["moderator"]},
         {"observer_allowed": False, "open_roles": ["observer"]},

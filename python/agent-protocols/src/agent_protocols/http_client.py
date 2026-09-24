@@ -108,7 +108,7 @@ class DiscourseClient:
     ) -> dict[str, Any]:
         return self._get(
             _query(
-                "/v1/rooms/public",
+                "/v1/rooms",
                 {
                     "status": status,
                     "tag": tag,

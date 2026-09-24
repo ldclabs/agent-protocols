@@ -17,7 +17,8 @@ use sha3::{Digest, Sha3_256};
 
 use crate::error::{Result, SdkError};
 use crate::identity::{
-    validate_event_fields, verify_envelope, AgentId, Envelope, Event, ListResponse, MAX_SAFE_NONCE,
+    validate_event_fields, validate_origin, verify_envelope, AgentId, Envelope, Event,
+    ListResponse, MAX_SAFE_NONCE,
 };
 
 pub const PROTOCOL: &str = "agent-discourse/1.0";
@@ -54,8 +55,8 @@ pub const BUILTIN_EVENT_TYPES: [&str; 12] = [
 ];
 
 /// Built-in membership events. They are `signal`-class: they anchor to an
-/// accepted record but never contend for or advance the room head, so busy
-/// rooms cannot starve joins, reviews, or other membership writes.
+/// accepted record but are never checked against or advance the room head, so
+/// busy rooms cannot starve joins, reviews, or other membership writes.
 pub const MEMBERSHIP_EVENT_TYPES: [&str; 5] = [
     event_type::ROOM_JOIN,
     event_type::ROOM_JOIN_REVIEW,
@@ -65,8 +66,8 @@ pub const MEMBERSHIP_EVENT_TYPES: [&str; 5] = [
 ];
 
 /// Contract writes (Section 5.1): anchored like signals, so discussion traffic
-/// cannot starve them, but head-advancing, so replies composed against the old
-/// contract are rejected and re-read.
+/// cannot starve them, but head-advancing, so messages and control writes
+/// composed against the old contract are rejected and re-read.
 pub const CONTRACT_EVENT_TYPES: [&str; 4] = [
     event_type::ROOM_UPDATE,
     event_type::ROOM_CLOSE,
@@ -75,10 +76,9 @@ pub const CONTRACT_EVENT_TYPES: [&str; 4] = [
 ];
 
 /// ADP-specific error codes (Section 19); shared codes come from Agent Identity.
-pub const DISCOURSE_ERROR_CODES: [&str; 20] = [
+pub const DISCOURSE_ERROR_CODES: [&str; 19] = [
     "room_not_found",
     "room_not_active",
-    "room_ended",
     "host_mismatch",
     "approval_required",
     "join_request_not_found",
@@ -102,7 +102,7 @@ pub const DISCOURSE_ERROR_CODES: [&str; 20] = [
 pub const MAX_MENTIONS: usize = 32;
 
 /// Custom event types must not use these prefixes.
-pub const RESERVED_TYPE_PREFIXES: [&str; 2] = ["room.", "type."];
+pub const RESERVED_TYPE_PREFIXES: [&str; 3] = ["room.", "type.", "message."];
 
 /// Registered type packs defined by the specification in `1.0.packs.json`.
 pub mod pack_id {
@@ -157,9 +157,11 @@ pub enum TypeStatus {
     Disabled,
 }
 
-/// Class of an accepted record: its freshness class for built-in types
-/// (Section 5.1) and its registry `kind` for custom types. `message` and
-/// `control` records are head-bound.
+/// Freshness class of an accepted record (Section 5.1): `genesis` and
+/// `contract` for the room lifecycle built-ins, `signal` for membership
+/// built-ins, `message` for `message.create`, and the registry `kind` for
+/// custom types. `message` and `control` writes must be based at or after the
+/// room head; `genesis`, `contract`, and `control` records advance it.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordClass {
@@ -213,8 +215,8 @@ pub fn record_class(event_type: &str, types: &[TypeDef]) -> Option<RecordClass> 
 }
 
 /// Whether an accepted record of this type advances the room head (Section
-/// 5.1): every class except `signal`. Unknown custom types default to
-/// head-advancing.
+/// 5.1): `genesis`, `contract`, and `control` records. Unknown custom types
+/// default to head-advancing.
 pub fn event_advances_room_head(event_type: &str, registry: &TypeRegistry) -> bool {
     event_type_advances_head(
         event_type,
@@ -224,18 +226,51 @@ pub fn event_advances_room_head(event_type: &str, registry: &TypeRegistry) -> bo
 
 /// [`event_advances_room_head`] over a materialized type list.
 pub fn event_type_advances_head(event_type: &str, types: &[TypeDef]) -> bool {
-    record_class(event_type, types) != Some(RecordClass::Signal)
+    !matches!(
+        record_class(event_type, types),
+        Some(RecordClass::Message | RecordClass::Signal)
+    )
 }
 
-/// Whether a write of this type must match the current room head (Section
-/// 5.1): `message.create` and custom `message`/`control` kinds. Contract and
-/// signal writes only anchor. Unknown custom types default to head-bound.
+/// Whether a write of this type is checked against the room head (Section
+/// 5.1): `message.create` and custom `message`/`control` kinds must be based
+/// at or after the current head. Contract and signal writes only anchor.
+/// Unknown custom types default to head-checked.
 pub fn event_requires_room_head(event_type: &str, types: &[TypeDef]) -> bool {
     match record_class(event_type, types) {
         Some(RecordClass::Message | RecordClass::Control) => true,
         Some(_) => false,
         None => !is_builtin_event_type(event_type),
     }
+}
+
+/// Section 5.1 base check for a room write based on `base_seq` / `base_hash`.
+/// `anchor_hash` is the hash of the accepted record at `base_seq` in the same
+/// room (`None` when there is none) and `head_seq` is the current room head.
+/// Every base must name an accepted record (`base_record_mismatch`);
+/// `message` and `control` writes must also be based at or after the head
+/// (`room_head_mismatch`).
+pub fn validate_room_base(
+    event_type: &str,
+    types: &[TypeDef],
+    base_seq: u64,
+    base_hash: &str,
+    anchor_hash: Option<&str>,
+    head_seq: u64,
+) -> Result<()> {
+    if anchor_hash != Some(base_hash) {
+        return Err(SdkError::protocol(
+            "base_record_mismatch",
+            format!("base {base_seq} does not name an accepted record of this room"),
+        ));
+    }
+    if event_requires_room_head(event_type, types) && base_seq < head_seq {
+        return Err(SdkError::protocol(
+            "room_head_mismatch",
+            format!("base {base_seq} is before the room head {head_seq}"),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -309,7 +344,7 @@ pub struct RoomPolicy {
     /// Agent IDs pre-approved for direct `room.join` with exactly this role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invites: Option<BTreeMap<AgentId, Role>>,
-    /// Roles anyone may take by direct `room.join` in a public room.
+    /// Roles anyone may take by direct `room.join`; see [`effective_open_roles`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_roles: Option<Vec<Role>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -396,8 +431,9 @@ impl RoomMemberRemovePayload {
     }
 }
 
-/// A room-scoped declaration of a custom event type.
+/// A room-scoped declaration of a custom event type. The field set is closed.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TypeDef {
     #[serde(rename = "type")]
     pub name: String,
@@ -412,15 +448,15 @@ pub struct TypeDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<TypeStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_hint: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_payload_hint: Option<u64>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    /// `None` when absent; an explicit `{}` is kept so a signed declaration
+    /// re-serializes to the bytes that were signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 impl TypeDef {
@@ -455,8 +491,10 @@ pub struct PackImport {
     pub digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub types: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub overrides: BTreeMap<String, TypeOverride>,
+    /// `None` when absent; an explicit `{}` is kept so a signed declaration
+    /// re-serializes to the bytes that were signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<BTreeMap<String, TypeOverride>>,
 }
 
 /// One entry of `room.create.payload.types` or a `type.define` payload.
@@ -840,13 +878,15 @@ impl MessageCreatePayload {
     }
 }
 
+/// The `profile` discovery member (Agent Profile Section 8): the Agent
+/// Profile service a host resolves profiles from, and whether local policy
+/// requires a verified profile before accepting an agent's writes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileResolverMetadata {
-    pub mode: String,
+    pub service: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
+    pub required: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -874,10 +914,23 @@ pub struct ArchiveManifest {
     pub last_seq: u64,
     /// Hash of the record at `last_seq`: the archive's commitment to every record.
     pub last_hash: String,
+    /// Format names mapped to URLs; `jsonl` is the required record log.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub formats: BTreeMap<String, String>,
+    /// Every external pack the room imported, with a URL serving its exact bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packs: Vec<ArchivedPack>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// An external pack document retained in an archive (Section 18).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArchivedPack {
+    pub pack: String,
+    pub digest: String,
+    pub url: String,
 }
 
 pub fn room_create_event(
@@ -1450,21 +1503,39 @@ pub fn validate_room_policy(policy: Option<&RoomPolicy>) -> Result<()> {
     Ok(())
 }
 
-/// The roles anyone may take by direct `room.join` in a public room.
-pub fn effective_open_roles(policy: Option<&RoomPolicy>) -> Vec<Role> {
+/// Section 8.3 rule tying the policy to the room's visibility: a private
+/// room admits agents only by invitation or review, so its `open_roles`
+/// must be empty.
+pub fn validate_room_visibility_policy(
+    visibility: Visibility,
+    policy: Option<&RoomPolicy>,
+) -> Result<()> {
+    let open = policy
+        .and_then(|p| p.open_roles.as_ref())
+        .is_some_and(|roles| !roles.is_empty());
+    if visibility == Visibility::Private && open {
+        return Err(invalid_event("a private room cannot have open roles"));
+    }
+    Ok(())
+}
+
+/// The roles any agent may take by direct `room.join` (Section 8.3): the
+/// explicit `open_roles`, or by default `observer` in a public room when
+/// observers are allowed, and none otherwise.
+pub fn effective_open_roles(visibility: Visibility, policy: Option<&RoomPolicy>) -> Vec<Role> {
     if let Some(open_roles) = policy.and_then(|p| p.open_roles.clone()) {
         return open_roles;
     }
-    if policy.and_then(|p| p.observer_allowed) == Some(false) {
-        vec![Role::Speaker]
+    if visibility == Visibility::Public && policy.and_then(|p| p.observer_allowed) != Some(false) {
+        vec![Role::Observer]
     } else {
-        vec![Role::Speaker, Role::Observer]
+        Vec::new()
     }
 }
 
 /// Section 9.2 direct-join eligibility: the actor is invited with exactly
-/// `role`, or the room is public and `role` is open. Bans and quotas are
-/// separate host checks.
+/// `role`, or `role` is one of the room's effective open roles. Bans and
+/// quotas are separate host checks.
 pub fn can_join_directly(
     visibility: Visibility,
     policy: Option<&RoomPolicy>,
@@ -1478,15 +1549,11 @@ pub fn can_join_directly(
     {
         return true;
     }
-    visibility == Visibility::Public && effective_open_roles(policy).contains(&role)
+    effective_open_roles(visibility, policy).contains(&role)
 }
 
 pub fn validate_room_create_payload(payload: &RoomCreatePayload) -> Result<()> {
-    let host_ok = payload
-        .host
-        .strip_prefix("https://")
-        .is_some_and(|rest| !rest.is_empty() && !rest.contains(['/', '?', '#', '@', ' ']));
-    if !host_ok {
+    if validate_origin(&payload.host).is_err() {
         return Err(invalid_event("room.create host must be an HTTPS origin"));
     }
     if payload.topic.trim().is_empty() {
@@ -1496,6 +1563,7 @@ pub fn validate_room_create_payload(payload: &RoomCreatePayload) -> Result<()> {
         return Err(invalid_event("start_time must be before end_time"));
     }
     validate_room_policy(payload.policy.as_ref())?;
+    validate_room_visibility_policy(payload.visibility, payload.policy.as_ref())?;
     for declaration in payload.types.iter().flatten() {
         validate_type_declaration(declaration)?;
     }
@@ -1682,7 +1750,7 @@ impl TypeRegistry {
                 }
             }
         }
-        for name in import.overrides.keys() {
+        for name in import.overrides.iter().flat_map(BTreeMap::keys) {
             let imported = import
                 .types
                 .as_ref()
@@ -1703,7 +1771,11 @@ impl TypeRegistry {
                 }
             }
             let mut def = def.clone();
-            if let Some(over) = import.overrides.get(&def.name) {
+            if let Some(over) = import
+                .overrides
+                .as_ref()
+                .and_then(|overrides| overrides.get(&def.name))
+            {
                 if let Some(roles) = &over.roles {
                     def.roles = Some(roles.clone());
                 }
@@ -2287,6 +2359,7 @@ mod tests {
             last_seq: vectors["last_seq"].as_u64().unwrap(),
             last_hash: vectors["last_hash"].as_str().unwrap().into(),
             formats: BTreeMap::new(),
+            packs: Vec::new(),
             extra: BTreeMap::new(),
         };
         let signed: Vec<ArchiveRecord> =
@@ -2326,20 +2399,74 @@ mod tests {
             serde_json::from_value(vectors["freshness"]["registry"].clone()).unwrap();
         let registry = TypeRegistry::from_declarations(&declarations, &packs()).unwrap();
         let types: Vec<TypeDef> = registry.definitions().cloned().collect();
-        let head_bound: Vec<&str> = vectors["freshness"]["head_bound"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
+        let list = |name: &str| -> Vec<String> {
+            serde_json::from_value(vectors["freshness"][name].clone()).unwrap()
+        };
+        let (head_checked, head_advancing) = (list("head_checked"), list("head_advancing"));
         for (kind, class) in vectors["freshness"]["classes"].as_object().unwrap() {
             let expected: RecordClass = serde_json::from_value(class.clone()).unwrap();
             assert_eq!(record_class(kind, &types), Some(expected), "{kind}");
             assert_eq!(
                 event_requires_room_head(kind, &types),
-                head_bound.contains(&kind.as_str()),
+                head_checked.contains(kind),
                 "{kind}"
             );
+            assert_eq!(
+                event_type_advances_head(kind, &types),
+                head_advancing.contains(kind),
+                "{kind}"
+            );
+        }
+        for case in vectors["freshness"]["base_checks"].as_array().unwrap() {
+            let base_hash = "base-hash";
+            let anchor = case["anchored"].as_bool().unwrap().then_some(base_hash);
+            let result = validate_room_base(
+                case["type"].as_str().unwrap(),
+                &types,
+                case["base_seq"].as_u64().unwrap(),
+                base_hash,
+                anchor,
+                case["head_seq"].as_u64().unwrap(),
+            );
+            let outcome = match &result {
+                Ok(()) => "ok",
+                Err(error) => error.code().unwrap_or("other"),
+            };
+            assert_eq!(
+                outcome,
+                case["expected"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        for name in vectors["type_names"]["valid"].as_array().unwrap() {
+            validate_custom_event_type_name(name.as_str().unwrap()).unwrap();
+        }
+        for name in vectors["type_names"]["invalid"].as_array().unwrap() {
+            let name = name.as_str().unwrap();
+            assert!(validate_custom_event_type_name(name).is_err(), "{name}");
+        }
+        for case in vectors["open_roles"]["effective"].as_array().unwrap() {
+            let visibility: Visibility =
+                serde_json::from_value(case["visibility"].clone()).unwrap();
+            let policy: Option<RoomPolicy> = case
+                .get("policy")
+                .map(|p| serde_json::from_value(p.clone()).unwrap());
+            let expected: Vec<Role> = serde_json::from_value(case["expected"].clone()).unwrap();
+            assert_eq!(
+                effective_open_roles(visibility, policy.as_ref()),
+                expected,
+                "{}",
+                case["name"]
+            );
+        }
+        for case in vectors["open_roles"]["invalid"].as_array().unwrap() {
+            let visibility: Visibility =
+                serde_json::from_value(case["visibility"].clone()).unwrap();
+            let policy: RoomPolicy = serde_json::from_value(case["policy"].clone()).unwrap();
+            let result = validate_room_policy(Some(&policy))
+                .and_then(|()| validate_room_visibility_policy(visibility, Some(&policy)));
+            assert!(result.is_err(), "{}", case["name"]);
         }
         for pattern in vectors["patterns"]["valid"].as_array().unwrap() {
             validate_portable_pattern(pattern.as_str().unwrap()).unwrap();
@@ -2552,12 +2679,15 @@ mod tests {
             &invited,
             Role::Speaker
         ));
-        assert!(!can_join_directly(
-            Visibility::Private,
+        // Open roles apply to any visibility; a private room cannot list them.
+        assert!(can_join_directly(
+            Visibility::Restricted,
             Some(&policy),
             &stranger,
             Role::Observer
         ));
+        assert!(validate_room_visibility_policy(Visibility::Private, Some(&policy)).is_err());
+        validate_room_visibility_policy(Visibility::Restricted, Some(&policy)).unwrap();
         assert!(can_join_directly(
             Visibility::Public,
             Some(&policy),
@@ -2571,17 +2701,21 @@ mod tests {
             Role::Speaker
         ));
         assert_eq!(
-            effective_open_roles(None),
-            vec![Role::Speaker, Role::Observer]
+            effective_open_roles(Visibility::Public, None),
+            vec![Role::Observer]
         );
+        assert!(effective_open_roles(Visibility::Restricted, None).is_empty());
+        assert!(!can_join_directly(
+            Visibility::Private,
+            None,
+            &stranger,
+            Role::Observer
+        ));
         let no_observers = RoomPolicy {
             observer_allowed: Some(false),
             ..RoomPolicy::default()
         };
-        assert_eq!(
-            effective_open_roles(Some(&no_observers)),
-            vec![Role::Speaker]
-        );
+        assert!(effective_open_roles(Visibility::Public, Some(&no_observers)).is_empty());
         let bad = RoomPolicy {
             open_roles: Some(vec![Role::Moderator]),
             ..RoomPolicy::default()
@@ -2652,13 +2786,13 @@ mod tests {
             use_pack: Some(pack_id::DELIBERATION.into()),
             ..PackImport::default()
         };
-        deliberation.overrides.insert(
+        deliberation.overrides = Some(BTreeMap::from([(
             "poll.vote".into(),
             TypeOverride {
                 roles: Some(vec![Role::Moderator, Role::Speaker, Role::Observer]),
                 ..TypeOverride::default()
             },
-        );
+        )]));
         let registry = TypeRegistry::from_declarations(
             &[
                 import(pack_id::REACTIONS),

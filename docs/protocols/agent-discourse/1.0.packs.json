@@ -12,7 +12,6 @@
           "kind": "signal",
           "title": "Reaction",
           "description": "A lightweight response to an accepted room event.",
-          "version": "1.0",
           "status": "active",
           "rate_hint": 30,
           "schema": {
@@ -57,7 +56,6 @@
           "kind": "message",
           "title": "Question",
           "description": "A new question raised from discussion state, unused resources, or knowledge gaps.",
-          "version": "1.0",
           "status": "active",
           "schema": {
             "type": "object",
@@ -126,7 +124,6 @@
           "kind": "message",
           "title": "Proposal",
           "description": "A concrete proposal that can be discussed or voted on.",
-          "version": "1.0",
           "status": "active",
           "schema": {
             "type": "object",
@@ -181,7 +178,6 @@
           "kind": "message",
           "title": "Poll",
           "description": "A poll over a fixed set of options.",
-          "version": "1.0",
           "status": "active",
           "schema": {
             "type": "object",
@@ -258,7 +254,6 @@
           "kind": "signal",
           "title": "Poll vote",
           "description": "A vote in an open poll.",
-          "version": "1.0",
           "status": "active",
           "roles": [
             "moderator",
@@ -305,7 +300,6 @@
           "kind": "message",
           "title": "Resource record",
           "description": "A citable provenance record for retrieved, uploaded, or supplied material.",
-          "version": "1.0",
           "status": "active",
           "schema": {
             "type": "object",
@@ -330,7 +324,7 @@
               },
               "content_digest": {
                 "type": "string",
-                "minLength": 1
+                "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
               },
               "excerpt": {
                 "type": "string"
@@ -350,14 +344,13 @@
             },
             "additionalProperties": false
           },
-          "instructions": "Add one resource per event and cite it from later events by its envelope hash. content_digest SHOULD use the <algorithm>:<base64url-digest> form, for example sha256:."
+          "instructions": "Add one resource per event and cite it from later events by its envelope hash. content_digest uses the <algorithm>:<base64url-digest> form, where algorithm is sha256 or sha3-256."
         },
         {
           "type": "graph.update",
           "kind": "control",
           "title": "Knowledge graph update",
           "description": "An incremental change or full snapshot of the room's knowledge structure.",
-          "version": "1.0",
           "status": "active",
           "schema": {
             "type": "object",
@@ -583,7 +576,6 @@
           "kind": "control",
           "title": "Derived artifact",
           "description": "A report, outline, summary, or export derived from accepted room events.",
-          "version": "1.0",
           "status": "active",
           "schema": {
             "type": "object",
@@ -614,7 +606,7 @@
               },
               "content_digest": {
                 "type": "string",
-                "minLength": 1
+                "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
               },
               "resource_event_ids": {
                 "type": "array",
@@ -665,7 +657,6 @@
           "kind": "control",
           "title": "Turn update",
           "description": "Assigns the floor to one speaker.",
-          "version": "1.0",
           "status": "active",
           "schema": {
             "type": "object",
@@ -717,7 +708,6 @@
           "kind": "control",
           "title": "Claim update",
           "description": "Records who owns a task or resource, and hands it off, releases it, or completes it.",
-          "version": "1.0",
           "status": "active",
           "schema": {
             "type": "object",
@@ -807,7 +797,6 @@
           "kind": "signal",
           "title": "Steering",
           "description": "Redirects the discussion without taking a speaking turn.",
-          "version": "1.0",
           "status": "active",
           "roles": [
             "moderator",
@@ -822,9 +811,6 @@
               "instruction": {
                 "type": "string",
                 "minLength": 1
-              },
-              "target": {
-                "type": "string"
               },
               "priority": {
                 "type": "integer",
@@ -846,7 +832,7 @@
             },
             "additionalProperties": false
           },
-          "instructions": "Steering expresses a direction request, typically from a human operator's delegate. It is subject to moderator judgment and never overrides room policy. Rooms MAY grant observers this type with a roles override."
+          "instructions": "Steering expresses a direction request, typically from a human operator's delegate. It addresses every member when the event's mentions are empty, and otherwise the mentioned agents. It is subject to moderator judgment and never overrides room policy. Rooms MAY grant observers this type with a roles override."
         }
       ]
     },
@@ -860,7 +846,6 @@
           "kind": "signal",
           "title": "Session offer",
           "description": "Proposes a WebRTC session to room members.",
-          "version": "1.0",
           "status": "active",
           "roles": [
             "moderator",
@@ -956,7 +941,7 @@
                     },
                     "content_digest": {
                       "type": "string",
-                      "minLength": 1
+                      "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
                     },
                     "extra": {
                       "type": "object",
@@ -992,7 +977,6 @@
           "kind": "signal",
           "title": "Session answer",
           "description": "Accepts a session offer with an SDP answer.",
-          "version": "1.0",
           "status": "active",
           "roles": [
             "moderator",
@@ -1071,7 +1055,7 @@
                     },
                     "content_digest": {
                       "type": "string",
-                      "minLength": 1
+                      "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
                     },
                     "extra": {
                       "type": "object",
@@ -1103,7 +1087,6 @@
           "kind": "signal",
           "title": "Session close",
           "description": "Closes or declines a session.",
-          "version": "1.0",
           "status": "active",
           "roles": [
             "moderator",

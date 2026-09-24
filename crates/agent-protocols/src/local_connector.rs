@@ -53,9 +53,9 @@ use crate::delegation::{
 use crate::discourse::{
     can_join_directly, discourse_event, event_type, room_create_event, room_join_request_event,
     validate_discourse_envelope, validate_room_path, verify_archive_record, AgentStatusInput,
-    ArchiveRecord, JoinDecision, JoinRequestStatus, MessageCreatePayload, ReasonPayload,
-    RoomCreatePayload, RoomJoinPayload, RoomJoinRequestPayload, RoomJoinReviewPayload,
-    RoomMemberRemovePayload, RoomResponse,
+    ArchiveRecord, JoinDecision, JoinRequestStatus, MessageCreatePayload, RoomCreatePayload,
+    RoomJoinPayload, RoomJoinRequestPayload, RoomJoinReviewPayload, RoomMemberRemovePayload,
+    RoomResponse,
 };
 use crate::error::{Result, SdkError};
 use crate::http_client::{
@@ -264,8 +264,7 @@ impl LocalConnector {
             TOOL_DELEGATIONS_LIST => self.delegations_list(parse_input(input)?).await,
             TOOL_DELEGATION_GRANT => self.delegation_grant(parse_input(input)?).await,
             TOOL_DELEGATION_REVOKE => self.delegation_revoke(parse_input(input)?).await,
-            TOOL_ROOMS_SEARCH => self.rooms_search(parse_input(input)?).await,
-            TOOL_ROOMS_LIST => self.rooms_list(parse_input(input)?),
+            TOOL_ROOMS_LIST => self.rooms_list(parse_input(input)?).await,
             TOOL_ROOM_STATE => self.room_state(parse_input(input)?).await,
             TOOL_ROOM_MEMBERS_LIST => self.room_members_list(parse_input(input)?),
             TOOL_AGENT_STATUS_LIST => self.agent_status_list(parse_input(input)?).await,
@@ -278,7 +277,6 @@ impl LocalConnector {
             TOOL_PROFILE_UPDATE => self.profile_update(parse_input(input)?).await,
             TOOL_ROOM_CREATE => self.room_create(parse_input(input)?).await,
             TOOL_ROOM_JOIN => self.room_join(parse_input(input)?).await,
-            TOOL_ROOM_LEAVE => self.room_leave(parse_input(input)?).await,
             TOOL_ROOM_SEND_MESSAGE => {
                 self.submit_room_write(HeldDraftRequest::Message(parse_input(input)?))
                     .await
@@ -306,8 +304,16 @@ impl LocalConnector {
         }))
     }
 
-    async fn rooms_search(&mut self, input: RoomsSearchInput) -> Result<Value> {
-        let host = normalize_host(&input.host);
+    async fn rooms_list(&mut self, input: RoomsListInput) -> Result<Value> {
+        input.validate_scope().map_err(SdkError::InvalidPayload)?;
+        match input.scope {
+            RoomsListScope::Known => self.known_rooms(input),
+            RoomsListScope::Public => self.public_rooms(input).await,
+        }
+    }
+
+    async fn public_rooms(&mut self, input: RoomsListInput) -> Result<Value> {
+        let host = normalize_host(input.host.as_deref().unwrap_or_default());
         self.require_allowed_host(&host)?;
         let response = self
             .discourse(&host)
@@ -334,12 +340,14 @@ impl LocalConnector {
         Ok(with_cursor(json!({ "rooms": rooms }), response.next_cursor))
     }
 
-    fn rooms_list(&self, input: RoomsListInput) -> Result<Value> {
+    fn known_rooms(&self, input: RoomsListInput) -> Result<Value> {
         let agent_id = self.agent_id();
+        let host = input.host.as_deref().map(normalize_host);
         let rooms = self
             .state
             .rooms
             .iter()
+            .filter(|(key, _)| host.as_ref().is_none_or(|host| &key.0 == host))
             .filter(|(_, room)| {
                 input
                     .status
@@ -1215,34 +1223,11 @@ impl LocalConnector {
         }))
     }
 
-    async fn room_leave(&mut self, input: RoomLeaveInput) -> Result<Value> {
-        let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
-        let host = self.allowed_room_host(&key)?;
-        let payload = ReasonPayload {
-            reason: input.reason,
-            ..ReasonPayload::default()
-        };
-        let client = self.discourse(&host);
-        let (record, _) = submit_signed!(
-            self,
-            self.sign_room_event(
-                event_type::ROOM_LEAVE,
-                &key,
-                None,
-                None,
-                Vec::new(),
-                payload.clone()
-            ),
-            |envelope| client.submit_event(&input.room_id, &envelope)
-        )?;
-        self.apply_own_record(&key, record.clone().into()).await?;
-        Ok(json!({ "record": record, "sync": self.sync_state(&key)? }))
-    }
-
     /// One room write under the Section 5.1 freshness rules. Contract and
     /// signal writes only anchor, so they are signed against the base and
-    /// never held. Head-bound writes apply `on_head_mismatch` when the local
-    /// head or the host's `room_head_mismatch` shows the room moved.
+    /// never held. Message and control writes apply `on_head_mismatch` when
+    /// the local head moved past their base or the host returns
+    /// `room_head_mismatch`.
     async fn submit_room_write(&mut self, request: HeldDraftRequest) -> Result<Value> {
         let (room_id, host_input, base_seq, base_hash, policy, write_type) = match &request {
             HeldDraftRequest::Message(input) => (
@@ -1276,7 +1261,7 @@ impl LocalConnector {
         loop {
             if head_bound {
                 let room = self.local_room(&key)?;
-                if base.0 != room.head_seq || room.head_hash.as_deref() != Some(base.1.as_str()) {
+                if !base_is_current(room, &base) {
                     if policy == HeadMismatchPolicy::SendAnyway
                         && attempts < SEND_ANYWAY_MAX_ATTEMPTS
                     {
@@ -1322,10 +1307,7 @@ impl LocalConnector {
                     self.sync_room(&key).await?;
                     // A host that reports a mismatch the verified history does
                     // not show cannot be resolved by retrying.
-                    let synced = self.local_room(&key)?;
-                    if base.0 == synced.head_seq
-                        && synced.head_hash.as_deref() == Some(base.1.as_str())
-                    {
+                    if base_is_current(self.local_room(&key)?, &base) {
                         return Err(error);
                     }
                 }

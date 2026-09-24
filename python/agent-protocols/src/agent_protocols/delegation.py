@@ -4,18 +4,19 @@ from typing import Any, TypedDict, Literal
 from copy import deepcopy
 from urllib.parse import urlparse
 import re
-import ipaddress
 
 import rfc8785
 
 from .errors import AgentProtocolError
 from .identity import (
+    AGENT_ID_PREFIX,
     AgentId,
     Envelope,
     Event,
     create_event,
     validate_agent_id,
     validate_event_fields,
+    validate_origin,
     verify_envelope,
 )
 
@@ -75,7 +76,7 @@ class DelegationVerdict(TypedDict):
     """Result of :func:`verify_delegation_credential`."""
 
     credential: DelegationCredential
-    # Signature, history, controller, and replay checks all passed.
+    # Latest-grant signature, controller, ceiling, and consistency checks passed.
     verified: bool
     # Verified, and usable for the audience now.
     usable: bool
@@ -109,7 +110,7 @@ def validate_controller(controller: Controller, retired: bool = False) -> None:
         _fail("controller must be an object")
     validate_agent_id(controller.get("id"))
     if controller.get("source") != "local":
-        _origin(controller.get("source"))
+        validate_origin(controller.get("source"))
     _timestamp(controller.get("valid_from"), "valid_from")
     if "name" in controller:
         _validate_non_empty(controller["name"], "name")
@@ -119,8 +120,8 @@ def validate_controller(controller: Controller, retired: bool = False) -> None:
             _fail("invalid delegation policy")
         _strings(policy["scopes"], "scopes")
         _strings(policy["audiences"], "audiences")
-        for origin in policy["audiences"]:
-            _origin(origin)
+        for audience in policy["audiences"]:
+            validate_audience(audience)
     if "supersedes" in controller:
         _strings(controller["supersedes"], "supersedes")
         for agent_id in controller["supersedes"]:
@@ -225,8 +226,8 @@ def validate_delegation_grant_payload(
     validate_agent_id(payload.get("subject"))
     _strings(payload.get("scopes"), "scopes")
     _strings(payload.get("audiences"), "audiences")
-    for origin in payload["audiences"]:
-        _origin(origin)
+    for audience in payload["audiences"]:
+        validate_audience(audience)
     if created_at is not None:
         _timestamp(created_at, "created_at")
     for field in ("not_before", "expires_at"):
@@ -318,7 +319,6 @@ def materialize_delegation_credential(
     accepted_at: int,
     previous: DelegationCredential | None = None,
     status: str = "active",
-    updated_at: int | None = None,
     checked_at: int | None = None,
 ) -> DelegationCredential:
     """Materialize an already accepted event, with trusted previous state and actual
@@ -329,12 +329,10 @@ def materialize_delegation_credential(
     _previous(event, previous)
     if previous and accepted_at < previous["accepted_at"]:
         _fail("acceptance order reversed")
-    updated_at = accepted_at if updated_at is None else updated_at
-    _timestamp(updated_at, "updated_at")
-    if updated_at < accepted_at:
-        _fail("updated_at precedes acceptance")
-    checked_at = updated_at if checked_at is None else checked_at
+    checked_at = accepted_at if checked_at is None else checked_at
     _timestamp(checked_at, "checked_at")
+    if checked_at < accepted_at:
+        _fail("checked_at precedes acceptance")
     if event["type"] == DELEGATION_REVOKE:
         credential = deepcopy(previous)
         credential.update(
@@ -342,7 +340,6 @@ def materialize_delegation_credential(
             status="revoked",
             event_id=envelope["hash"],
             accepted_at=accepted_at,
-            updated_at=updated_at,
             checked_at=checked_at,
         )
         return credential
@@ -357,7 +354,6 @@ def materialize_delegation_credential(
         "controller": event["actor"],
         "owner_controller": previous["owner_controller"] if previous else event["actor"],
         "status": status,
-        "updated_at": updated_at,
         "event_id": envelope["hash"],
         "grant_event_id": envelope["hash"],
         "accepted_at": accepted_at,
@@ -407,7 +403,7 @@ def validate_controller_enumeration(document: PrincipalDocument, actor: AgentId,
 def validate_delegation_use(credential: DelegationCredential, audience: str, now: int) -> None:
     """Audience/status/time check after cryptographic and historical verification.
     Caller still authenticates subject and enforces scopes and constraints."""
-    _origin(audience)
+    validate_audience(audience)
     _timestamp(now, "now")
     validate_delegation_grant_payload(credential)
     if (credential.get("protocol") != DELEGATION_PROTOCOL or credential.get("status") != "active"
@@ -426,35 +422,33 @@ def verify_delegation_credential(
     now: int,
 ) -> DelegationVerdict:
     """Verifies a credential under Agent Delegation Section 8 with the online
-    service-trusting evidence policy: replays its accepted records against the
-    authoritative principal document — signatures, controller intervals,
-    ceilings, and ownership lineage — confirms the replay matches the
-    credential, and then checks use for `audience` at `now`. Relying parties
-    still enforce scopes and constraints and authenticate the subject."""
+    service-trusting evidence policy: checks the accepted record of its latest
+    grant — signature, Controller binding, ceiling, and authority interval —
+    confirms that the grant matches the credential, and then checks use for
+    `audience` at `now`. Ownership and `supersedes` lineage govern management,
+    which the service enforced at acceptance; auditors replay them with
+    :func:`audit_delegation_history`. Relying parties still enforce scopes and
+    constraints and authenticate the subject."""
     reasons: list[str] = []
     try:
-        if not records:
-            _fail("no accepted records")
-        replayed: DelegationCredential | None = None
-        for record in records:
-            validate_historical_delegation(record, document, resolved_url, replayed)
-            replayed = materialize_delegation_credential(
-                record["envelope"], accepted_at=record["accepted_at"], previous=replayed
-            )
-        assert replayed is not None
-        # Only status and its service timestamps may differ from event replay.
-        fields = (
-            "id", "protocol", "principal_id", "subject", "relationship", "scopes", "audiences",
-            "constraints", "not_before", "expires_at", "event_id", "grant_event_id",
-            "owner_controller", "controller", "accepted_at",
-        )
-        expected = {field: replayed[field] for field in fields if field in replayed}
-        actual = {field: credential[field] for field in fields if field in credential}
+        record = next((r for r in records if r["envelope"]["hash"] == credential.get("grant_event_id")), None)
+        if record is None:
+            _fail("latest grant record is missing")
+        validate_historical_delegation(record, document, resolved_url)
+        event = record["envelope"]["event"]
+        if event["type"] != DELEGATION_GRANT:
+            _fail("grant_event_id does not name a grant")
+        grant = {field: event["payload"][field] for field in _GRANT_FIELDS if field in event["payload"]}
+        claimed = {field: credential[field] for field in _GRANT_FIELDS if field in credential}
         # Canonical JSON preserves JSON types (Python otherwise equates True and 1).
-        if rfc8785.dumps(expected) != rfc8785.dumps(actual) or (
-            (replayed["status"] == "revoked") != (credential.get("status") == "revoked")
-        ):
-            _fail("credential does not match its accepted records")
+        if credential.get("protocol") != DELEGATION_PROTOCOL or rfc8785.dumps(grant) != rfc8785.dumps(claimed):
+            _fail("credential does not match its latest grant")
+        if credential.get("event_id") == credential.get("grant_event_id"):
+            if (credential.get("accepted_at") != record["accepted_at"] or credential.get("controller") != event["actor"]
+                    or credential.get("status") == "revoked"):
+                _fail("credential does not match its latest grant")
+        elif credential.get("status") != "revoked":
+            _fail("a credential last changed by a revocation must be revoked")
     except (AgentProtocolError, KeyError, TypeError, rfc8785.CanonicalizationError) as error:
         reasons.append(str(error))
     verified = not reasons
@@ -533,6 +527,51 @@ def _authority(event: Event, document: PrincipalDocument, accepted_at: int,
             raise AgentProtocolError("delegation_ceiling_exceeded", "grant exceeds controller delegation policy")
 
 
+# Grant fields a credential carries from its latest grant.
+_GRANT_FIELDS = (
+    "id", "principal_id", "subject", "relationship", "scopes", "audiences",
+    "constraints", "not_before", "expires_at",
+)
+
+
+def audit_delegation_history(
+    credential: DelegationCredential,
+    records: list[DelegationRecord],
+    document: PrincipalDocument,
+    resolved_url: str,
+) -> None:
+    """Auditor check (Section 8): replays every accepted record of a credential
+    against the authoritative principal document — signatures, controller
+    intervals, ceilings, and ownership lineage — and confirms that the replay
+    matches the credential. Relying parties use :func:`verify_delegation_credential`."""
+    if not records:
+        _fail("no accepted records")
+    replayed: DelegationCredential | None = None
+    for record in records:
+        validate_historical_delegation(record, document, resolved_url, replayed)
+        replayed = materialize_delegation_credential(
+            record["envelope"], accepted_at=record["accepted_at"], previous=replayed
+        )
+    assert replayed is not None
+    # Only status and the service's check time may differ from event replay.
+    fields = (*_GRANT_FIELDS, "protocol", "event_id", "grant_event_id", "owner_controller", "controller", "accepted_at")
+    expected = {field: replayed[field] for field in fields if field in replayed}
+    actual = {field: credential[field] for field in fields if field in credential}
+    if rfc8785.dumps(expected) != rfc8785.dumps(actual) or (
+        (replayed["status"] == "revoked") != (credential.get("status") == "revoked")
+    ):
+        _fail("credential does not match its accepted records")
+
+
+def validate_audience(value: Any) -> None:
+    """A relying-party audience (Section 5): an origin for a relying
+    application, or an Agent ID for a relying agent."""
+    if isinstance(value, str) and value.startswith(AGENT_ID_PREFIX):
+        validate_agent_id(value)
+    else:
+        validate_origin(value)
+
+
 def _fail(message: str) -> None:
     raise AgentProtocolError("invalid_delegation", message)
 
@@ -551,28 +590,6 @@ def _strings(value: Any, field: str, empty: bool = False) -> None:
             _fail(f"{field} cannot contain wildcard")
     if len(set(value)) != len(value):
         _fail(f"{field} contains duplicates")
-
-
-def _origin(value: Any) -> None:
-    _validate_https_url(value, "origin")
-    parsed = urlparse(value)
-    if any(c.isspace() for c in value) or "\\" in value or "%" in value:
-        _fail("invalid HTTPS origin")
-    try:
-        host = parsed.hostname
-        # Python does not serialize IDNs/IP literals like WHATWG; require the
-        # wire origin to use canonical ASCII host spelling.
-        host = host.encode("idna").decode("ascii")
-        if ":" in host:
-            host = "[" + ipaddress.IPv6Address(host).compressed + "]"
-        elif re.fullmatch(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)", host.rstrip(".").split(".")[-1]):
-            host = str(ipaddress.IPv4Address(host))
-        port = parsed.port
-        canonical = "https://" + host + (f":{port}" if port is not None and port != 443 else "")
-    except (ValueError, UnicodeError, AttributeError):
-        _fail("invalid HTTPS origin")
-    if value != canonical:
-        _fail("origin must be a serialized HTTPS origin")
 
 
 def _validate_https_url(value: Any, field: str) -> None:

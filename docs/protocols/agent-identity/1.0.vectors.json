@@ -1,6 +1,6 @@
 {
   "protocol": "agent-identity/1.0",
-  "description": "Normative Agent Identity 1.0 test vectors (Appendix A). Implementations MUST reproduce every event's jcs, hash, and signature from its seed and event; MUST verify exactly the signatures marked valid; MUST reject every invalid Agent ID and JSON text; and MUST apply the Max-Seen-Nonce bound.",
+  "description": "Normative Agent Identity 1.0 test vectors (Appendix A). Implementations MUST reproduce every event's jcs, hash, and signature from its seed and event; MUST verify exactly the signatures marked valid; MUST reject every invalid Agent ID, JSON text, origin, and request JWT; MUST verify every valid origin and request JWT; MUST produce every submission outcome in order; and MUST apply the Max-Seen-Nonce bound.",
   "keys": [
     {
       "name": "seed of 32 bytes 0x07",
@@ -257,5 +257,194 @@
       "header": "9007199254740990",
       "accepted": false
     }
-  ]
+  ],
+  "origins": {
+    "valid": [
+      "https://api.example.com",
+      "https://api.example.com:8443",
+      "https://dmsg.net:0",
+      "https://127.0.0.1",
+      "https://[::1]",
+      "https://xn--nxasmq6b.example"
+    ],
+    "invalid": [
+      "https://API.example.com",
+      "https://api.example.com:443",
+      "https://api.example.com:08443",
+      "https://api.example.com/",
+      "https://api.example.com/v1",
+      "https://api.example.com?x",
+      "https://api.example.com#x",
+      "https://user@api.example.com",
+      "https://127.1",
+      "http://api.example.com",
+      "api.example.com",
+      "https://"
+    ]
+  },
+  "request_jwts": {
+    "audience": "https://api.example.com",
+    "now_secs": 1779753700,
+    "max_ttl_secs": 300,
+    "valid": [
+      {
+        "name": "fresh token for the service origin",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1MzkwMH0.IyFOwFhTcamQrVEYP9mo74TP0G8ARtahUCYMQbxXIhcRT5oigB_jybh0qiDjLt1554pyx9QECcJl4-pw9KikCw",
+        "claims": {
+          "iss": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "sub": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "aud": "https://api.example.com",
+          "iat": 1779753600,
+          "exp": 1779753900
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "algorithm other than EdDSA",
+        "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1MzkwMH0.mvbIaHv9eNhzHwpsbLFXiaPzjpaxOS2u-G-b2dnj4jS-6I0RNPebcKfsg84EAf2cuJK7KH_9t7y9VGS5KSM0Dg"
+      },
+      {
+        "name": "kid differs from iss",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDpFNWoyTEcwYVJYeFJ1bXBMWHoyOUwybjhxVElXSVkzSW1YNUJhOUY5azhvIn0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1MzkwMH0.vxLEfv3y2EyQx0gOG2pJRVNhE8ECSRmhNRMxkXdgU359PRktng3ALhsr6Ihzalq-bqbi3p7dCTMqNg0lbga1Bg"
+      },
+      {
+        "name": "sub differs from iss",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDpFNWoyTEcwYVJYeFJ1bXBMWHoyOUwybjhxVElXSVkzSW1YNUJhOUY5azhvIiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1MzkwMH0.Zn3klLC1YEd2loVMGiAvwYY7YNieK1mjLQgaVTnk5cF5zhIZtQK6HKFOO6xxKsj1rhaagIgQfDhJJwt6QcTQCw"
+      },
+      {
+        "name": "audience with a path",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEiLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1MzkwMH0.JloO_dvWz7Uf3dIxJLE6pKru40ZA_rNfJW86vaDg133TMD1m3sNsYedVTGQQhCqneRpIYB4cLvs2L2s9h49wDQ"
+      },
+      {
+        "name": "audience of another origin",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9vdGhlci5leGFtcGxlLmNvbSIsImlhdCI6MTc3OTc1MzYwMCwiZXhwIjoxNzc5NzUzOTAwfQ.sIH4SUt333_BHH2zcub5mEDiC5sOrpRGxK79D8mKHfWBTHpeK2HBZOTHZeGcBvs7FLquWIkZyxTMehIGiSNbDA"
+      },
+      {
+        "name": "expired",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTMwMDAsImV4cCI6MTc3OTc1MzMwMH0.RuVHudCMGCYbKJ92S7VVrjrDZ2Rn6ZeqGiCiaJ8_nre4-7N9t_E56mXx3IxqIbWKi-CTg4lzpgAVZ-1xEMZwBg"
+      },
+      {
+        "name": "exp not after iat",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2NTAsImV4cCI6MTc3OTc1MzY1MH0.au7X33K1EOhhutwa8DcPSDkWvT4-s_pB8HZwNAGHU8S-i8Un001Mdu6JYQ0yAFZ8gfcfLwSk_G9aJy-OaEHUAg"
+      },
+      {
+        "name": "lifetime above the maximum",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1NDYwMH0.hHXQb45eaOWetTfHXMye4io74OSjC9xHrdLUpFL-QhhFPiWH1hRswsTZtrnZ2RWJE7HdDQeBz4pLqGojgHBPAQ"
+      },
+      {
+        "name": "signed by a key other than kid",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1MzkwMH0.FhnrrsqLZf7c7s6HzcA3f0Ey-wwu5_a6Omt5pbTTzctq8jOUKuNb3FgmC_Mqc65IsRIP-IFNbNecmiamdJTQDQ"
+      },
+      {
+        "name": "tampered signature",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1MzkwMH0.ByFOwFhTcamQrVEYP9mo74TP0G8ARtahUCYMQbxXIhcRT5oigB_jybh0qiDjLt1554pyx9QECcJl4-pw9KikCw"
+      },
+      {
+        "name": "two compact parts",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3In0.eyJpc3MiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsInN1YiI6ImRpZDphZ2VudDo2a3BzWS1LY1VncS05VkI3RXk3Ri1aVkhkcTYtdm51U1FoN3FhUlJHMGl3IiwiYXVkIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20iLCJpYXQiOjE3Nzk3NTM2MDAsImV4cCI6MTc3OTc1MzkwMH0"
+      }
+    ]
+  },
+  "submissions": {
+    "window_ms": 300000,
+    "description": "Run the steps in order against one nonce store with the implementation's nonce cache validity. accepted lists the envelopes still in durable accepted history at that step.",
+    "envelopes": {
+      "E1": {
+        "hash": "95x2gsYiirwPPBCfNW6wDBpQlgfkh-N1JBXeQgUU-Oc",
+        "event": {
+          "protocol": "agent-profile/1.0",
+          "type": "profile.update",
+          "actor": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "created_at": 1779753600000,
+          "nonce": 1779753600000,
+          "payload": {
+            "id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+            "name": "Submission one"
+          }
+        },
+        "signature": "5QwSLs3i92oGtEbgfqH6RMBqeJ21WHOV3dlWSdsyMx1U_IfMExLpRD-MCAWykQpYKfauWKIbPn_ARlGSsKOxBQ"
+      },
+      "E2": {
+        "hash": "qswIqeOlqXPDI_Rqb3ftbLLuEqoMNvGna4X0Af38ERE",
+        "event": {
+          "protocol": "agent-profile/1.0",
+          "type": "profile.update",
+          "actor": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "created_at": 1779753601000,
+          "nonce": 1779753600000,
+          "payload": {
+            "id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+            "name": "Reused nonce"
+          }
+        },
+        "signature": "d_HpMc8bO90Wzs13Q_5bCyNDPgiyuDHSKjt8oOvYR8uzHvj6BIUbQlILabrl43PLuVihulLk4cYrhdPM-TdmBA"
+      },
+      "E3": {
+        "hash": "g0oRx_1i1dNzXMzyn2ynFNIKlSHEC7fl8g293yQCTWY",
+        "event": {
+          "protocol": "agent-profile/1.0",
+          "type": "profile.update",
+          "actor": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "created_at": 1779753900000,
+          "nonce": 1779753900000,
+          "payload": {
+            "id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+            "name": "Signed ahead of the clock"
+          }
+        },
+        "signature": "eINwysnXOUP91zkltXh1a7l1vhSnbF-sn_0s9TFr42t23Zb0zYtnpUOX0odjkePjz6X95OcHTfTyR73C_LfzCA"
+      }
+    },
+    "steps": [
+      {
+        "name": "accept a fresh envelope",
+        "envelope": "E1",
+        "now_ms": 1779753600000,
+        "accepted": [],
+        "expected": "accepted"
+      },
+      {
+        "name": "exact resubmission after the window is an idempotent lookup",
+        "envelope": "E1",
+        "now_ms": 1779753900001,
+        "accepted": [
+          "E1"
+        ],
+        "expected": "resubmission"
+      },
+      {
+        "name": "the same envelope after history pruning is a stale write",
+        "envelope": "E1",
+        "now_ms": 1779753900001,
+        "accepted": [],
+        "expected": "timestamp_out_of_window"
+      },
+      {
+        "name": "a different envelope reusing the nonce",
+        "envelope": "E2",
+        "now_ms": 1779753602000,
+        "accepted": [
+          "E1"
+        ],
+        "expected": "nonce_not_greater"
+      },
+      {
+        "name": "an envelope signed ahead of the receiver's clock",
+        "envelope": "E3",
+        "now_ms": 1779753601000,
+        "accepted": [
+          "E1"
+        ],
+        "expected": "accepted"
+      },
+      {
+        "name": "its replay after pruning while still inside the window",
+        "envelope": "E3",
+        "now_ms": 1779754051000,
+        "accepted": [],
+        "expected": "nonce_not_greater"
+      }
+    ]
+  }
 }

@@ -42,7 +42,7 @@ test("materializes valid profile updates", () => {
   assert.equal(profile.event_id, envelope.hash);
 });
 
-test("does not materialize the removed username field", () => {
+test("rejects the removed username field: the payload is closed", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(15));
   const payload: ProfileUpdatePayload = {
     id: signer.agentId(),
@@ -53,10 +53,7 @@ test("does not materialize the removed username field", () => {
     profileUpdateEvent(signer.agentId(), 1_779_753_600_002, 1, payload),
   );
 
-  const profile = materializeProfile(envelope);
-
-  assert.equal(profile.id, signer.agentId());
-  assert.ok(!("username" in profile));
+  assert.throws(() => materializeProfile(envelope), /undefined profile field: username/);
 });
 
 test("latestProfileUpdate picks the accepted update with the greatest nonce", () => {
@@ -170,4 +167,37 @@ test("profile updates must exceed the latest accepted nonce and carry no extra e
   }
   const extra = signer.signEvent({ ...profileUpdateEvent(signer.agentId(), 1_000, 8, { id: signer.agentId(), name: "A" }), room_id: "r" });
   assert.throws(() => validateProfileUpdate(extra), /unknown event field: room_id/);
+});
+
+const profileVectors = JSON.parse(
+  (await import("node:fs")).readFileSync(
+    new URL("../../../docs/protocols/agent-profile/1.0.vectors.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+test("profile vectors: payloads are accepted and rejected as listed", async () => {
+  const { validateProfilePayload } = await import("./profile.js");
+  for (const vector of profileVectors.payloads.valid) validateProfilePayload(vector.payload, vector.actor);
+  for (const vector of profileVectors.payloads.invalid) {
+    assert.throws(() => validateProfilePayload(vector.payload, vector.actor), vector.name);
+  }
+});
+
+test("profile vectors: history materializes the greatest nonce", async () => {
+  const { latestProfileUpdate, validateProfileUpdate } = await import("./profile.js");
+  const envelopes = profileVectors.history.envelopes;
+  for (const envelope of envelopes) validateProfileUpdate(envelope);
+  const document = materializeProfile(latestProfileUpdate(envelopes)!) as unknown as Record<string, unknown>;
+  for (const [field, expected] of Object.entries(profileVectors.history.latest)) {
+    assert.deepEqual(document[field], expected, field);
+  }
+});
+
+test("profile vectors: explicit empty arrays and objects verify and materialize as signed", async () => {
+  const { validateProfileUpdate } = await import("./profile.js");
+  const { envelope, document } = profileVectors.explicit_empty;
+  validateProfileUpdate(envelope);
+  const materialized = materializeProfile(envelope) as unknown as Record<string, unknown>;
+  for (const [field, expected] of Object.entries(document)) assert.deepEqual(materialized[field], expected, field);
 });

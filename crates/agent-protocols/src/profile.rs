@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::delegation::PrincipalDescriptor;
+use crate::delegation::{validate_delegation_id, PrincipalDescriptor};
 use crate::error::{Result, SdkError};
 use crate::identity::{
     validate_event_fields, verify_envelope, AgentId, Envelope, Event, ListResponse,
@@ -11,13 +11,19 @@ use crate::identity::{
 pub const PROTOCOL: &str = "agent-profile/1.0";
 pub const PROFILE_UPDATE: &str = "profile.update";
 
+// Optional collections are `Option`s throughout this module: a signed
+// payload may carry an explicit `[]` or `{}`, and re-serializing it must
+// reproduce the signed bytes, so an empty value stays distinct from an
+// absent one.
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceEndpoint {
     #[serde(rename = "type")]
     pub kind: String,
     pub url: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub protocols: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocols: Option<Vec<String>>,
 }
 
 /// Defined link relationships. `rel` is an open vocabulary: clients accept
@@ -31,6 +37,7 @@ pub mod link_rel {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileLink {
     pub name: String,
     pub url: String,
@@ -41,17 +48,21 @@ pub struct ProfileLink {
 /// party whose claim is checked, so clients resolve the principal document at
 /// `principal.id` and query the service it names.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileDelegationHint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub principal: PrincipalDescriptor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationship: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scopes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
 }
 
+/// The closed `profile.update` payload (Section 4.1): undefined fields are
+/// rejected at deserialization, and application data belongs in `extra`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileUpdatePayload {
     pub id: AgentId,
     pub name: String,
@@ -61,16 +72,16 @@ pub struct ProfileUpdatePayload {
     pub avatar_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub service_endpoints: Vec<ServiceEndpoint>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub links: Vec<ProfileLink>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub delegations: Vec<ProfileDelegationHint>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_endpoints: Option<Vec<ServiceEndpoint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<Vec<ProfileLink>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegations: Option<Vec<ProfileDelegationHint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 impl ProfileUpdatePayload {
@@ -81,15 +92,17 @@ impl ProfileUpdatePayload {
             description: None,
             avatar_url: None,
             provider: None,
-            capabilities: Vec::new(),
-            service_endpoints: Vec::new(),
-            links: Vec::new(),
-            delegations: Vec::new(),
-            extra: BTreeMap::new(),
+            capabilities: None,
+            service_endpoints: None,
+            links: None,
+            delegations: None,
+            extra: None,
         }
     }
 }
 
+/// The materialized profile document: the latest payload's fields exactly as
+/// signed, plus the service-derived `updated_at` and `event_id`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AgentProfile {
     pub id: AgentId,
@@ -100,16 +113,16 @@ pub struct AgentProfile {
     pub avatar_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub service_endpoints: Vec<ServiceEndpoint>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub links: Vec<ProfileLink>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub delegations: Vec<ProfileDelegationHint>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_endpoints: Option<Vec<ServiceEndpoint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<Vec<ProfileLink>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegations: Option<Vec<ProfileDelegationHint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
     pub updated_at: i64,
     pub event_id: String,
 }
@@ -171,6 +184,81 @@ pub fn validate_profile_update(envelope: &Envelope<ProfileUpdatePayload>) -> Res
             "profile update actor must match payload.id".to_owned(),
         ));
     }
+    validate_profile_payload(&envelope.event.payload)
+}
+
+/// Section 4.1 field rules for a `profile.update` payload. The field set
+/// itself is closed by [`ProfileUpdatePayload`] deserialization.
+pub fn validate_profile_payload(payload: &ProfileUpdatePayload) -> Result<()> {
+    payload.id.public_key_bytes()?;
+    if payload.name.is_empty() {
+        return Err(invalid_payload("name must not be empty"));
+    }
+    if let Some(url) = &payload.avatar_url {
+        require_url(url, &["https"], "avatar_url")?;
+    }
+    unique_strings(payload.capabilities.as_deref(), "capabilities")?;
+    let mut endpoints = BTreeSet::new();
+    for endpoint in payload.service_endpoints.iter().flatten() {
+        if endpoint.kind.is_empty() {
+            return Err(invalid_payload("service endpoint type must not be empty"));
+        }
+        require_url(&endpoint.url, &["https"], "service endpoint url")?;
+        unique_strings(endpoint.protocols.as_deref(), "service endpoint protocols")?;
+        if !endpoints.insert((endpoint.kind.as_str(), endpoint.url.as_str())) {
+            return Err(invalid_payload(
+                "service endpoints must be unique by type and url",
+            ));
+        }
+    }
+    let mut links = BTreeSet::new();
+    for link in payload.links.iter().flatten() {
+        if link.name.is_empty() || link.rel.is_empty() {
+            return Err(invalid_payload("link name and rel must not be empty"));
+        }
+        require_url(&link.url, &["http", "https"], "link url")?;
+        if !links.insert((link.url.as_str(), link.rel.as_str())) {
+            return Err(invalid_payload("links must be unique by url and rel"));
+        }
+    }
+    for hint in payload.delegations.iter().flatten() {
+        if let Some(id) = &hint.id {
+            validate_delegation_id(id)?;
+        }
+        require_url(&hint.principal.id, &["https"], "delegation principal id")?;
+        unique_strings(hint.scopes.as_deref(), "delegation hint scopes")?;
+    }
+    Ok(())
+}
+
+fn invalid_payload(message: &str) -> SdkError {
+    SdkError::protocol("invalid_event", message)
+}
+
+fn require_url(value: &str, schemes: &[&str], field: &str) -> Result<()> {
+    match url::Url::parse(value) {
+        Ok(url) if schemes.contains(&url.scheme()) && url.host_str().is_some() => Ok(()),
+        _ => Err(SdkError::protocol(
+            "invalid_event",
+            format!("{field} must be an {} URL", schemes.join(" or ")),
+        )),
+    }
+}
+
+fn unique_strings(values: Option<&[String]>, field: &str) -> Result<()> {
+    let values = values.unwrap_or_default();
+    if values.iter().any(String::is_empty) {
+        return Err(SdkError::protocol(
+            "invalid_event",
+            format!("{field} entries must not be empty"),
+        ));
+    }
+    if values.iter().collect::<BTreeSet<_>>().len() != values.len() {
+        return Err(SdkError::protocol(
+            "invalid_event",
+            format!("{field} entries must be unique"),
+        ));
+    }
     Ok(())
 }
 
@@ -228,25 +316,25 @@ mod tests {
     fn materializes_valid_profile_update() {
         let signer = AgentSigner::from_seed([11; 32]);
         let mut payload = ProfileUpdatePayload::new(signer.agent_id(), "ResearchAgent-v3");
-        payload.capabilities.push("research".to_owned());
-        payload
-            .extra
-            .insert("domain".to_owned(), Value::String("research".to_owned()));
-        payload.links.push(ProfileLink {
+        payload.capabilities = Some(vec!["research".to_owned()]);
+        payload.extra = Some(BTreeMap::from([(
+            "domain".to_owned(),
+            Value::String("research".to_owned()),
+        )]));
+        payload.links = Some(vec![ProfileLink {
             name: "Homepage".to_owned(),
             url: "https://example.com".to_owned(),
             rel: link_rel::HOMEPAGE.to_owned(),
-        });
-        payload.delegations.push(ProfileDelegationHint {
+        }]);
+        let mut principal = PrincipalDescriptor::new("https://api.al.ink/d9c6a99cne5g00a6scn0");
+        principal.kind = Some("person".to_owned());
+        principal.name = Some("Yan".to_owned());
+        payload.delegations = Some(vec![ProfileDelegationHint {
             id: Some("del_1".to_owned()),
-            principal: PrincipalDescriptor {
-                id: "https://api.al.ink/d9c6a99cne5g00a6scn0".to_owned(),
-                kind: Some("person".to_owned()),
-                name: Some("Yan".to_owned()),
-            },
+            principal,
             relationship: Some("primary_delegate".to_owned()),
-            scopes: vec!["inbox.screen".to_owned()],
-        });
+            scopes: Some(vec!["inbox.screen".to_owned()]),
+        }]);
         let expected_extra = payload.extra.clone();
         let event = profile_update_event(signer.agent_id(), 1_779_753_600_000, 1, payload);
         let envelope = signer.sign_event(event).unwrap();
@@ -255,9 +343,10 @@ mod tests {
 
         assert_eq!(profile.id, signer.agent_id());
         assert_eq!(profile.name, "ResearchAgent-v3");
-        assert_eq!(profile.links.len(), 1);
-        assert_eq!(profile.links[0].rel, link_rel::HOMEPAGE);
-        assert_eq!(profile.delegations.len(), 1);
+        let links = profile.links.as_deref().unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].rel, link_rel::HOMEPAGE);
+        assert_eq!(profile.delegations.as_deref().map(<[_]>::len), Some(1));
         assert_eq!(profile.extra, expected_extra);
         assert_eq!(profile.updated_at, 1_779_753_600_000);
         assert_eq!(profile.event_id, envelope.hash);

@@ -385,7 +385,7 @@ test("DiscourseClient supports public rooms, my rooms, and agent status endpoint
 
   assert.equal(
     calls[0].url,
-    "https://api.example.com/v1/rooms/public?status=active&tag=code%20review&starts_after=10&ends_before=20&limit=5&cursor=next%20page",
+    "https://api.example.com/v1/rooms?status=active&tag=code%20review&starts_after=10&ends_before=20&limit=5&cursor=next%20page",
   );
   assert.equal(calls[1].url, "https://api.example.com/v1/me/rooms");
   assert.equal(

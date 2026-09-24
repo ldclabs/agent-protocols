@@ -18,6 +18,7 @@ import {
   canSubmitEvent,
   canWriteInState,
   effectiveOpenRoles,
+  validateRoomVisibilityPolicy,
   eventRequiresRoomHead,
   eventType,
   packId,
@@ -168,11 +169,17 @@ test("direct join follows invites and open roles", () => {
   const policy = { invites: { [invited]: "moderator" as const }, open_roles: ["observer" as const] };
   assert.equal(canJoinDirectly("private", policy, invited, "moderator"), true);
   assert.equal(canJoinDirectly("private", policy, invited, "speaker"), false);
-  assert.equal(canJoinDirectly("private", policy, stranger, "observer"), false);
+  // Open roles apply to any visibility; a private room cannot list them.
+  assert.equal(canJoinDirectly("restricted", policy, stranger, "observer"), true);
+  assert.throws(() => validateRoomVisibilityPolicy("private", policy), /private room/);
+  assert.doesNotThrow(() => validateRoomVisibilityPolicy("restricted", policy));
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ visibility: "private", policy })), /private room/);
   assert.equal(canJoinDirectly("public", policy, stranger, "observer"), true);
   assert.equal(canJoinDirectly("public", policy, stranger, "speaker"), false);
-  assert.deepEqual(effectiveOpenRoles(undefined), ["speaker", "observer"]);
-  assert.deepEqual(effectiveOpenRoles({ observer_allowed: false }), ["speaker"]);
+  assert.equal(canJoinDirectly("private", undefined, stranger, "observer"), false);
+  assert.deepEqual(effectiveOpenRoles("public", undefined), ["observer"]);
+  assert.deepEqual(effectiveOpenRoles("restricted", undefined), []);
+  assert.deepEqual(effectiveOpenRoles("public", { observer_allowed: false }), []);
   assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { open_roles: ["moderator"] } })), /open_roles/);
   assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { observer_allowed: false, open_roles: ["observer"] } })), /observers/);
   assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { invites: { [invited]: "owner" as never } } })), /invited role/);
@@ -186,6 +193,7 @@ test("validates custom event type names", () => {
   assert.throws(() => validateCustomEventTypeName("room.custom"));
   assert.throws(() => validateCustomEventTypeName("type.new"));
   assert.throws(() => validateCustomEventTypeName("message.create"));
+  assert.throws(() => validateCustomEventTypeName("message.edit"), /reserved/);
   assert.throws(() => validateCustomEventTypeName("Bad.Name"));
 });
 
@@ -718,10 +726,32 @@ test("discourse vectors: record hashes, chains, redaction, and head progression"
 });
 
 test("discourse vectors: freshness classes and portable patterns", () => {
-  const registry = TypeRegistry.fromDeclarations(discourseVectors.freshness.registry, packs);
-  for (const [type, cls] of Object.entries(discourseVectors.freshness.classes)) {
+  const freshness = discourseVectors.freshness;
+  const registry = TypeRegistry.fromDeclarations(freshness.registry, packs);
+  for (const [type, cls] of Object.entries(freshness.classes)) {
     assert.equal(discourse.recordClass(type, registry), cls, type);
-    assert.equal(eventRequiresRoomHead(type, registry), discourseVectors.freshness.head_bound.includes(type), type);
+    assert.equal(eventRequiresRoomHead(type, registry), freshness.head_checked.includes(type), type);
+    assert.equal(discourse.eventAdvancesRoomHead(type, registry), freshness.head_advancing.includes(type), type);
+  }
+  for (const check of freshness.base_checks) {
+    let outcome = "ok";
+    try {
+      discourse.validateRoomBase(check.type, registry, check.base_seq, "base-hash", check.anchored ? "base-hash" : undefined, check.head_seq);
+    } catch (error) {
+      outcome = (error as { code?: string }).code ?? "other";
+    }
+    assert.equal(outcome, check.expected, check.name);
+  }
+  for (const name of discourseVectors.type_names.valid) validateCustomEventTypeName(name);
+  for (const name of discourseVectors.type_names.invalid) assert.throws(() => validateCustomEventTypeName(name), name);
+  for (const test of discourseVectors.open_roles.effective) {
+    assert.deepEqual(effectiveOpenRoles(test.visibility, test.policy), test.expected, test.name);
+  }
+  for (const test of discourseVectors.open_roles.invalid) {
+    assert.throws(() => {
+      discourse.validateRoomPolicy(test.policy);
+      validateRoomVisibilityPolicy(test.visibility, test.policy);
+    }, test.name);
   }
   for (const pattern of discourseVectors.patterns.valid) validatePortablePattern(pattern);
   for (const pattern of discourseVectors.patterns.invalid) {

@@ -13,7 +13,6 @@ import {
   AgentStatusInput,
   ArchiveRecord,
   MessageCreatePayload,
-  ReasonPayload,
   RoomCreatePayload,
   RoomJoinPayload,
   RoomJoinRequest,
@@ -90,10 +89,8 @@ import {
   TOOL_PRINCIPAL_RESOLVE,
   TOOL_PROFILE_UPDATE,
   TOOL_ROOMS_LIST,
-  TOOL_ROOMS_SEARCH,
   TOOL_ROOM_CREATE,
   TOOL_ROOM_JOIN,
-  TOOL_ROOM_LEAVE,
   TOOL_ROOM_MEMBERS_LIST,
   TOOL_ROOM_SEND_MESSAGE,
   TOOL_ROOM_STATE,
@@ -123,17 +120,17 @@ import {
   ProfileUpdateInput,
   RoomCreateInput,
   RoomJoinInput,
-  RoomLeaveInput,
   RoomMembersListInput,
   RoomSendMessageInput,
   RoomStateInput,
   RoomSubmitEventInput,
   RoomTimelineInput,
   RoomsListInput,
-  RoomsSearchInput,
+  validateRoomsListScope,
 } from "./inputs.js";
 import {
   applyRecordProjection,
+  baseIsCurrent,
   eventTypeRequiresRoomHead,
   inboxEntryReady,
   isDuplicateRecord,
@@ -462,8 +459,6 @@ export class LocalConnector {
         return this.delegationGrant(input as DelegationGrantInput);
       case TOOL_DELEGATION_REVOKE:
         return this.delegationRevoke(input as DelegationRevokeInput);
-      case TOOL_ROOMS_SEARCH:
-        return this.roomsSearch(input as RoomsSearchInput);
       case TOOL_ROOMS_LIST:
         return this.roomsList(input as RoomsListInput);
       case TOOL_ROOM_STATE:
@@ -490,8 +485,6 @@ export class LocalConnector {
         return this.roomCreate(input as RoomCreateInput);
       case TOOL_ROOM_JOIN:
         return this.roomJoin(input as RoomJoinInput);
-      case TOOL_ROOM_LEAVE:
-        return this.roomLeave(input as RoomLeaveInput);
       case TOOL_ROOM_SEND_MESSAGE:
         return this.roomSendMessage(input as RoomSendMessageInput);
       case TOOL_ROOM_SUBMIT_EVENT:
@@ -515,8 +508,13 @@ export class LocalConnector {
     };
   }
 
-  private async roomsSearch(input: RoomsSearchInput): Promise<unknown> {
-    const host = normalizeHost(input.host);
+  private async roomsList(input: RoomsListInput): Promise<unknown> {
+    validateRoomsListScope(input);
+    return (input.scope ?? "known") === "public" ? this.publicRooms(input) : this.knownRooms(input);
+  }
+
+  private async publicRooms(input: RoomsListInput): Promise<unknown> {
+    const host = normalizeHost(input.host!);
     this.requireAllowedHost(host);
     const response = await this.discourse(host).publicRooms({
       status: input.status,
@@ -536,9 +534,11 @@ export class LocalConnector {
       : { rooms };
   }
 
-  private roomsList(input: RoomsListInput): unknown {
+  private knownRooms(input: RoomsListInput): unknown {
     const agentId = this.agentId();
+    const host = input.host === undefined ? undefined : normalizeHost(input.host);
     const rooms = [...this.state.rooms.entries()]
+      .filter(([, room]) => host === undefined || room.host === host)
       .sort(
         ([, a], [, b]) =>
           compareStrings(a.host, b.host) ||
@@ -1177,19 +1177,6 @@ export class LocalConnector {
     return { status: "approval_required", join_request: request, sync: this.maybeSync(key) };
   }
 
-  private async roomLeave(input: RoomLeaveInput): Promise<unknown> {
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const host = this.allowedRoomHost(key);
-    const payload: ReasonPayload = {};
-    if (input.reason !== undefined) payload.reason = input.reason;
-    const record = await this.submitSigned(
-      () => this.signRoomEvent(eventType.ROOM_LEAVE, key, undefined, undefined, [], payload),
-      (envelope) => this.discourse(host).leaveRoom(input.room_id, envelope),
-    );
-    await this.applyOwnRecord(key, record as ServerRecord);
-    return { record, sync: this.syncState(key) };
-  }
-
   private async roomSendMessage(
     input: RoomSendMessageInput,
   ): Promise<RoomWriteResult> {
@@ -1205,8 +1192,8 @@ export class LocalConnector {
   /**
    * One room write under the Section 5.1 freshness rules. Contract and signal
    * writes only anchor, so they are signed against the base and never held.
-   * Head-bound writes apply `on_head_mismatch` when the local head or the
-   * host's `room_head_mismatch` shows the room moved.
+   * Message and control writes apply `on_head_mismatch` when the local head
+   * moved past their base or the host returns `room_head_mismatch`.
    */
   private async submitRoomWrite(request: HeldDraftRequest): Promise<RoomWriteResult> {
     const input = request.input;
@@ -1222,7 +1209,7 @@ export class LocalConnector {
     for (let attempts = 0; ; attempts++) {
       if (headBound) {
         const room = this.localRoom(key);
-        if (base[0] !== room.headSeq || base[1] !== room.headHash) {
+        if (!baseIsCurrent(room, base)) {
           if (policy === "send_anyway" && attempts < SEND_ANYWAY_MAX_ATTEMPTS) {
             base = [room.headSeq, room.headHash!];
           } else {
@@ -1257,8 +1244,7 @@ export class LocalConnector {
         await this.syncRoom(key);
         // A host that reports a mismatch the verified history does not show
         // cannot be resolved by retrying.
-        const synced = this.localRoom(key);
-        if (base[0] === synced.headSeq && base[1] === synced.headHash) throw error;
+        if (baseIsCurrent(this.localRoom(key), base)) throw error;
       }
     }
   }

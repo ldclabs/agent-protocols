@@ -170,7 +170,7 @@ class DiscourseClientTests(unittest.TestCase):
         urls = [call[1] for call in session.calls]
         self.assertEqual(
             urls[0],
-            "https://api.example.com/v1/rooms/public?status=active&tag=code%20review&starts_after=10&ends_before=20&limit=5&cursor=next%20page",
+            "https://api.example.com/v1/rooms?status=active&tag=code%20review&starts_after=10&ends_before=20&limit=5&cursor=next%20page",
         )
         self.assertEqual(urls[1], "https://api.example.com/v1/me/rooms")
         self.assertEqual(session.calls[1][2], {"Authorization": "Bearer jwt-me"})

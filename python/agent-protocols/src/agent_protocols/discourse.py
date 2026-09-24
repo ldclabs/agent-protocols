@@ -27,6 +27,7 @@ from .identity import (
     create_event,
     validate_agent_id,
     validate_event_fields,
+    validate_origin,
     verify_envelope,
     with_room_head,
     with_room_id,
@@ -64,8 +65,8 @@ BUILTIN_EVENT_TYPES = {
 }
 
 # Built-in membership events. They are `signal`-class: they anchor to an
-# accepted record but never contend for or advance the room head, so busy
-# rooms cannot starve joins, reviews, or other membership writes.
+# accepted record but are never checked against or advance the room head, so
+# busy rooms cannot starve joins, reviews, or other membership writes.
 MEMBERSHIP_EVENT_TYPES = (
     ROOM_JOIN,
     ROOM_JOIN_REVIEW,
@@ -75,15 +76,14 @@ MEMBERSHIP_EVENT_TYPES = (
 )
 
 # Contract writes (Section 5.1): anchored like signals, so discussion traffic
-# cannot starve them, but head-advancing, so replies composed against the old
-# contract are rejected and re-read.
+# cannot starve them, but head-advancing, so messages and control writes
+# composed against the old contract are rejected and re-read.
 CONTRACT_EVENT_TYPES = (ROOM_UPDATE, ROOM_CLOSE, ROOM_CANCEL, TYPE_DEFINE)
 
 # ADP-specific error codes (Section 19); shared codes come from Agent Identity.
 DISCOURSE_ERROR_CODES = (
     "room_not_found",
     "room_not_active",
-    "room_ended",
     "host_mismatch",
     "approval_required",
     "join_request_not_found",
@@ -113,7 +113,7 @@ ROOM_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 CONTENT_DIGEST_PATTERN = re.compile(r"(sha256|sha3-256):[A-Za-z0-9_-]{43}")
 
 # Custom event types must not use these prefixes.
-RESERVED_TYPE_PREFIXES = ("room.", "type.")
+RESERVED_TYPE_PREFIXES = ("room.", "type.", "message.")
 
 # Registered type packs defined by the specification in `1.0.packs.json`.
 PACK_REACTIONS = "adp:reactions/1.0"
@@ -286,21 +286,44 @@ def event_advances_room_head(
     event_type: str, registry: "TypeRegistry | Iterable[dict[str, Any]] | None" = None
 ) -> bool:
     """Whether an accepted record of this type advances the room head (Section
-    5.1): every class except `signal`. Unknown custom types default to
-    head-advancing."""
-    return record_class(event_type, registry) != "signal"
+    5.1): `genesis`, `contract`, and `control` records. Unknown custom types
+    default to head-advancing."""
+    return record_class(event_type, registry) not in ("message", "signal")
 
 
 def event_requires_room_head(
     event_type: str, registry: "TypeRegistry | Iterable[dict[str, Any]] | None" = None
 ) -> bool:
-    """Whether a write of this type must match the current room head (Section
-    5.1): `message.create` and custom `message`/`control` kinds. Contract and
-    signal writes only anchor. Unknown custom types default to head-bound."""
+    """Whether a write of this type is checked against the room head (Section
+    5.1): `message.create` and custom `message`/`control` kinds must be based
+    at or after the current head. Contract and signal writes only anchor.
+    Unknown custom types default to head-checked."""
     cls = record_class(event_type, registry)
     if cls is None:
         return not is_builtin_event_type(event_type)
     return cls in ("message", "control")
+
+
+def validate_room_base(
+    event_type: str,
+    registry: "TypeRegistry | Iterable[dict[str, Any]] | None",
+    base_seq: int,
+    base_hash: str,
+    anchor_hash: str | None,
+    head_seq: int,
+) -> None:
+    """Section 5.1 base check for a room write based on ``base_seq`` /
+    ``base_hash``. ``anchor_hash`` is the hash of the accepted record at
+    ``base_seq`` in the same room (``None`` when there is none) and
+    ``head_seq`` is the current room head. Every base must name an accepted
+    record (`base_record_mismatch`); `message` and `control` writes must also
+    be based at or after the head (`room_head_mismatch`)."""
+    if anchor_hash != base_hash:
+        raise AgentProtocolError(
+            "base_record_mismatch", f"base {base_seq} does not name an accepted record of this room"
+        )
+    if event_requires_room_head(event_type, registry) and base_seq < head_seq:
+        raise AgentProtocolError("room_head_mismatch", f"base {base_seq} is before the room head {head_seq}")
 
 
 def validate_room_id(room_id: Any) -> None:
@@ -388,7 +411,16 @@ def is_pack_import(declaration: dict[str, Any]) -> bool:
     return isinstance(declaration, dict) and ("use" in declaration or "pack" in declaration or "digest" in declaration)
 
 
+_TYPE_DEF_FIELDS = frozenset(
+    {"type", "kind", "title", "description", "schema", "roles", "instructions",
+     "status", "rate_hint", "max_payload_hint", "extra"}
+)
+
+
 def validate_type_def(definition: dict[str, Any]) -> None:
+    for key in definition:
+        if key not in _TYPE_DEF_FIELDS:
+            raise AgentProtocolError("invalid_event", f"unknown type definition field: {key}")
     validate_custom_event_type_name(str(definition.get("type", "")))
     if definition.get("kind") not in TYPE_KINDS:
         raise AgentProtocolError("invalid_event", f"invalid type kind: {definition.get('kind')}")
@@ -663,35 +695,45 @@ def validate_room_policy(policy: dict[str, Any] | None) -> None:
                 raise AgentProtocolError("role_not_allowed", "observers are not allowed")
 
 
-def effective_open_roles(policy: dict[str, Any] | None) -> list[Role]:
-    """The roles anyone may take by direct `room.join` in a public room."""
+def validate_room_visibility_policy(visibility: Visibility, policy: dict[str, Any] | None) -> None:
+    """Section 8.3 rule tying the policy to the room's visibility: a private
+    room admits agents only by invitation or review, so its `open_roles` must
+    be empty."""
+    if visibility == "private" and policy is not None and policy.get("open_roles"):
+        raise AgentProtocolError("invalid_event", "a private room cannot have open roles")
+
+
+def effective_open_roles(visibility: Visibility, policy: dict[str, Any] | None) -> list[Role]:
+    """The roles any agent may take by direct `room.join` (Section 8.3): the
+    explicit `open_roles`, or by default `observer` in a public room when
+    observers are allowed, and none otherwise."""
     if policy is not None and policy.get("open_roles") is not None:
         return list(policy["open_roles"])
-    if policy is not None and policy.get("observer_allowed") is False:
-        return ["speaker"]
-    return ["speaker", "observer"]
+    if visibility == "public" and (policy is None or policy.get("observer_allowed") is not False):
+        return ["observer"]
+    return []
 
 
 def can_join_directly(visibility: Visibility, policy: dict[str, Any] | None, actor: AgentId, role: Role) -> bool:
     """Section 9.2 direct-join eligibility: the actor is invited with exactly
-    ``role``, or the room is public and ``role`` is open. Bans and quotas are
-    separate host checks."""
+    ``role``, or ``role`` is one of the room's effective open roles. Bans and
+    quotas are separate host checks."""
     if policy is not None and (policy.get("invites") or {}).get(actor) == role:
         return True
-    return visibility == "public" and role in effective_open_roles(policy)
-
-
-_ORIGIN = re.compile(r"https://[^/?#@\s]+")
+    return role in effective_open_roles(visibility, policy)
 
 
 def validate_room_create_payload(payload: dict[str, Any]) -> None:
-    if not isinstance(payload.get("host"), str) or not _ORIGIN.fullmatch(payload["host"]):
-        raise AgentProtocolError("invalid_event", "room.create host must be an HTTPS origin")
+    try:
+        validate_origin(payload.get("host"))
+    except AgentProtocolError as exc:
+        raise AgentProtocolError("invalid_event", "room.create host must be an HTTPS origin") from exc
     if not str(payload.get("topic", "")).strip():
         raise AgentProtocolError("invalid_event", "room topic must not be empty")
     if payload.get("start_time", 0) >= payload.get("end_time", 0):
         raise AgentProtocolError("invalid_event", "start_time must be before end_time")
     validate_room_policy(payload.get("policy"))
+    validate_room_visibility_policy(payload.get("visibility"), payload.get("policy"))
     for declaration in payload.get("types", []):
         validate_type_declaration(declaration)
 

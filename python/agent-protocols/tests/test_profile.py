@@ -1,5 +1,6 @@
 import unittest
 
+from agent_protocols.errors import AgentProtocolError
 from agent_protocols.identity import AgentSigner
 from agent_protocols.profile import (
     latest_profile_update,
@@ -40,15 +41,13 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(profile["updated_at"], 1_779_753_600_000)
         self.assertEqual(profile["event_id"], envelope["hash"])
 
-    def test_does_not_materialize_the_removed_username_field(self):
+    def test_rejects_the_removed_username_field_because_the_payload_is_closed(self):
         signer = AgentSigner.from_seed(bytes([15]) * 32)
         payload = {"id": signer.agent_id(), "name": "ResearchAgent-v3", "username": "anda"}
         envelope = signer.sign_event(profile_update_event(signer.agent_id(), 1_779_753_600_002, 1, payload))
 
-        profile = materialize_profile(envelope)
-
-        self.assertEqual(profile["id"], signer.agent_id())
-        self.assertNotIn("username", profile)
+        with self.assertRaisesRegex(AgentProtocolError, "undefined profile field: username"):
+            materialize_profile(envelope)
 
     def test_latest_profile_update_picks_greatest_nonce(self):
         signer = AgentSigner.from_seed(bytes([16]) * 32)

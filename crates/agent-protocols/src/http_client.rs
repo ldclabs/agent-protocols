@@ -217,11 +217,13 @@ impl DiscourseClient {
         .await
     }
 
+    /// Public room discovery (ADP Section 17): `GET /v1/rooms` lists the
+    /// public and restricted rooms of the host.
     pub async fn public_rooms(
         &self,
         options: &PublicRoomsOptions,
     ) -> Result<ListResponse<RoomResponse>> {
-        let path = with_query("/v1/rooms/public".to_owned(), &options.pairs());
+        let path = with_query("/v1/rooms".to_owned(), &options.pairs());
         send_json(self.inner.get(self.url(&path))).await
     }
 

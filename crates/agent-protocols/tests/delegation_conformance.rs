@@ -115,6 +115,64 @@ fn delegation_id_grammar_vectors() {
 }
 
 #[test]
+fn audience_vectors() {
+    let vectors = vectors();
+    for audience in vectors["audiences"]["valid"].as_array().unwrap() {
+        validate_audience(audience.as_str().unwrap()).unwrap();
+    }
+    for audience in vectors["audiences"]["invalid"].as_array().unwrap() {
+        assert!(
+            validate_audience(audience.as_str().unwrap()).is_err(),
+            "{audience}"
+        );
+    }
+}
+
+#[test]
+fn acceptance_vectors() {
+    let vectors = vectors();
+    let acceptance = &vectors["acceptance"];
+    let document: PrincipalDocument =
+        serde_json::from_value(acceptance["document"].clone()).unwrap();
+    validate_principal_document(&document).unwrap();
+    for case in acceptance["cases"].as_array().unwrap() {
+        let envelope: Envelope<DelegationPayload> =
+            serde_json::from_value(case["envelope"].clone()).unwrap();
+        let accepted_at = case["accepted_at"].as_i64().unwrap();
+        let previous: Option<DelegationCredential> =
+            serde_json::from_value(case["previous"].clone()).unwrap();
+        let result = match case["mode"].as_str().unwrap() {
+            "live" => validate_delegation_acceptance(
+                &envelope,
+                &document,
+                &document.id,
+                accepted_at,
+                previous.as_ref(),
+            ),
+            _ => validate_historical_delegation(
+                &DelegationRecord {
+                    envelope,
+                    accepted_at,
+                },
+                &document,
+                &document.id,
+                previous.as_ref(),
+            ),
+        };
+        let outcome = match &result {
+            Ok(()) => "ok",
+            Err(error) => error.code().unwrap_or("other"),
+        };
+        assert_eq!(
+            outcome,
+            case["expected"].as_str().unwrap(),
+            "{}: {result:?}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
 fn authority_ownership_and_materialization() {
     let doc = document();
     let envelope = grant(&signer(), 1);
@@ -253,7 +311,7 @@ fn a_restricted_successor_manages_its_predecessors_credentials() {
 }
 
 #[test]
-fn verify_delegation_credential_replays_accepted_records() {
+fn verify_delegation_credential_checks_the_latest_grant() {
     let doc = document();
     let envelope = grant(&signer(), 1);
     let credential = materialize(&envelope, 250, None);
@@ -289,6 +347,12 @@ fn verify_delegation_credential_replays_accepted_records() {
     let mut hidden = revoked.clone();
     hidden.status = DelegationStatus::Active;
     assert!(!verify_delegation_credential(&hidden, &history, &doc, ID, ORIGIN, 500).verified);
+    // Relying parties need only the latest grant record; auditors replay all.
+    let latest_only = vec![record(&envelope, 250)];
+    assert!(verify_delegation_credential(&revoked, &latest_only, &doc, ID, ORIGIN, 500).verified);
+    audit_delegation_history(&revoked, &history, &doc, ID).unwrap();
+    assert!(audit_delegation_history(&hidden, &history, &doc, ID).is_err());
+    assert!(audit_delegation_history(&revoked, &latest_only, &doc, ID).is_err());
 }
 
 #[test]
@@ -330,7 +394,6 @@ fn credential_verification_binds_grant_fields_and_preserves_service_metadata() {
     let mut control = credential;
     control.constraints =
         Some(serde_json::from_value(json!({"project": "alpha", "limit": 1.0})).unwrap());
-    control.updated_at = 350;
     control.checked_at = 400;
     assert!(verify_delegation_credential(&control, &records, &doc, ID, ORIGIN, 400).usable);
     control.status = DelegationStatus::Suspended;

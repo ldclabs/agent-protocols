@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::{Result, SdkError};
 use crate::identity::{
-    validate_event_fields, verify_envelope, AcceptedRecord, AgentId, Envelope, Event, ListResponse,
+    validate_event_fields, validate_origin, verify_envelope, AcceptedRecord, AgentId, Envelope,
+    Event, ListResponse,
 };
 use url::Url;
 
@@ -47,6 +48,8 @@ pub struct PrincipalLink {
 }
 
 /// Display descriptor of a principal, used by Agent Profile delegation hints.
+/// The descriptor is open: other members are display metadata, kept in
+/// `extra` so a signed hint re-serializes to the bytes that were signed.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrincipalDescriptor {
     pub id: String,
@@ -54,6 +57,8 @@ pub struct PrincipalDescriptor {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl PrincipalDescriptor {
@@ -62,6 +67,7 @@ impl PrincipalDescriptor {
             id: id.into(),
             kind: None,
             name: None,
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -245,7 +251,6 @@ pub struct DelegationCredential {
     pub grant_event_id: String,
     pub event_id: String,
     pub accepted_at: i64,
-    pub updated_at: i64,
     pub checked_at: i64,
 }
 
@@ -294,7 +299,7 @@ pub type DelegationEventsResponse = ListResponse<DelegationRecord>;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DelegationVerdict {
     pub credential: DelegationCredential,
-    /// Signature, history, controller, and replay checks all passed.
+    /// Latest-grant signature, controller, ceiling, and consistency checks passed.
     pub verified: bool,
     /// Verified, and usable for the audience now.
     pub usable: bool,
@@ -350,8 +355,8 @@ pub fn validate_controller(controller: &Controller, retired: bool) -> Result<()>
         Some(DelegationAuthority::Restricted(policy)) => {
             strings(&policy.scopes, "scopes", false)?;
             strings(&policy.audiences, "audiences", false)?;
-            for origin in &policy.audiences {
-                validate_origin(origin)?;
+            for audience in &policy.audiences {
+                validate_audience(audience)?;
             }
         }
         _ => {}
@@ -493,8 +498,8 @@ pub fn validate_delegation_grant_payload(
     payload.subject.public_key_bytes()?;
     strings(&payload.scopes, "scopes", false)?;
     strings(&payload.audiences, "audiences", false)?;
-    for origin in &payload.audiences {
-        validate_origin(origin)?;
+    for audience in &payload.audiences {
+        validate_audience(audience)?;
     }
     if let Some(time) = created_at {
         timestamp(time, "created_at")?;
@@ -637,7 +642,6 @@ pub fn materialize_delegation_credential(
             result.status = DelegationStatus::Revoked;
             result.event_id = envelope.hash.clone();
             result.accepted_at = accepted_at;
-            result.updated_at = accepted_at;
             result.checked_at = accepted_at;
             Ok(result)
         }
@@ -667,7 +671,6 @@ pub fn materialize_delegation_credential(
                 grant_event_id: envelope.hash.clone(),
                 event_id: envelope.hash.clone(),
                 accepted_at,
-                updated_at: accepted_at,
                 checked_at: accepted_at,
             })
         }
@@ -757,7 +760,7 @@ pub fn validate_delegation_use(
     audience: &str,
     now: i64,
 ) -> Result<()> {
-    validate_origin(audience)?;
+    validate_audience(audience)?;
     timestamp(now, "now")?;
     validate_delegation_grant_payload(&grant_from_credential(credential), None)?;
     if credential.protocol != PROTOCOL
@@ -772,11 +775,13 @@ pub fn validate_delegation_use(
 }
 
 /// Verifies a credential under Agent Delegation Section 8 with the online
-/// service-trusting evidence policy: replays its accepted records against the
-/// authoritative principal document — signatures, controller intervals,
-/// ceilings, and ownership lineage — confirms the replay matches the
-/// credential, and then checks use for `audience` at `now`. Relying parties
-/// still enforce scopes and constraints and authenticate the subject.
+/// service-trusting evidence policy: checks the accepted record of its latest
+/// grant — signature, Controller binding, ceiling, and authority interval —
+/// confirms that the grant matches the credential, and then checks use for
+/// `audience` at `now`. Ownership and `supersedes` lineage govern management,
+/// which the service enforced at acceptance; auditors replay them with
+/// [`audit_delegation_history`]. Relying parties still enforce scopes and
+/// constraints and authenticate the subject.
 pub fn verify_delegation_credential(
     credential: &DelegationCredential,
     records: &[DelegationRecord],
@@ -786,7 +791,7 @@ pub fn verify_delegation_credential(
     now: i64,
 ) -> DelegationVerdict {
     let mut reasons = Vec::new();
-    if let Err(error) = replay_matches(credential, records, document, resolved_url) {
+    if let Err(error) = latest_grant_matches(credential, records, document, resolved_url) {
         reasons.push(error.to_string());
     }
     let verified = reasons.is_empty();
@@ -814,7 +819,46 @@ pub fn verify_delegation_credential(
     }
 }
 
-fn replay_matches(
+/// Section 8 relying-party check: the latest grant record is authorized by a
+/// Controller of the principal and agrees with the credential.
+fn latest_grant_matches(
+    credential: &DelegationCredential,
+    records: &[DelegationRecord],
+    document: &PrincipalDocument,
+    resolved_url: &str,
+) -> Result<()> {
+    let record = records
+        .iter()
+        .find(|record| record.envelope.hash == credential.grant_event_id)
+        .ok_or_else(|| SdkError::InvalidPayload("latest grant record is missing".into()))?;
+    validate_historical_delegation(record, document, resolved_url, None)?;
+    let DelegationPayload::Grant(grant) = &record.envelope.event.payload else {
+        return fail("grant_event_id does not name a grant");
+    };
+    if credential.protocol != PROTOCOL
+        || serde_jcs::to_vec(grant)? != serde_jcs::to_vec(&grant_from_credential(credential))?
+    {
+        return fail("credential does not match its latest grant");
+    }
+    if credential.event_id == credential.grant_event_id {
+        if credential.accepted_at != record.accepted_at
+            || credential.controller != record.envelope.event.actor
+            || credential.status == DelegationStatus::Revoked
+        {
+            return fail("credential does not match its latest grant");
+        }
+    } else if credential.status != DelegationStatus::Revoked {
+        return fail("a credential last changed by a revocation must be revoked");
+    }
+    Ok(())
+}
+
+/// Auditor check (Section 8): replays every accepted record of a credential
+/// against the authoritative principal document — signatures, controller
+/// intervals, ceilings, and ownership lineage — and confirms that the replay
+/// matches the credential. Relying parties use
+/// [`verify_delegation_credential`] instead.
+pub fn audit_delegation_history(
     credential: &DelegationCredential,
     records: &[DelegationRecord],
     document: &PrincipalDocument,
@@ -1018,13 +1062,14 @@ fn strings(values: &[String], field: &str, empty: bool) -> Result<()> {
     }
     Ok(())
 }
-fn validate_origin(value: &str) -> Result<()> {
-    validate_https_url(value, "origin")?;
-    let url = Url::parse(value).map_err(|_| SdkError::InvalidPayload("invalid origin".into()))?;
-    if url.origin().ascii_serialization() != value {
-        return fail("origin must be a serialized HTTPS origin");
+/// A relying-party audience (Section 5): an origin for a relying
+/// application, or an Agent ID for a relying agent.
+pub fn validate_audience(value: &str) -> Result<()> {
+    if value.starts_with(crate::identity::AGENT_ID_PREFIX) {
+        value.parse::<AgentId>().map(|_| ())
+    } else {
+        validate_origin(value)
     }
-    Ok(())
 }
 
 fn validate_https_url(value: &str, field: &str) -> Result<()> {

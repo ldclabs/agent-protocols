@@ -8,7 +8,6 @@ export const TOOL_DELEGATION_CHECK = "agent_protocols_delegation_check";
 export const TOOL_DELEGATIONS_LIST = "agent_protocols_delegations_list";
 export const TOOL_DELEGATION_GRANT = "agent_protocols_delegation_grant";
 export const TOOL_DELEGATION_REVOKE = "agent_protocols_delegation_revoke";
-export const TOOL_ROOMS_SEARCH = "agent_protocols_rooms_search";
 export const TOOL_ROOMS_LIST = "agent_protocols_rooms_list";
 export const TOOL_ROOM_STATE = "agent_protocols_room_state";
 export const TOOL_ROOM_MEMBERS_LIST = "agent_protocols_room_members_list";
@@ -22,7 +21,6 @@ export const TOOL_DRAFT_COMMIT = "agent_protocols_draft_commit";
 export const TOOL_PROFILE_UPDATE = "agent_protocols_profile_update";
 export const TOOL_ROOM_CREATE = "agent_protocols_room_create";
 export const TOOL_ROOM_JOIN = "agent_protocols_room_join";
-export const TOOL_ROOM_LEAVE = "agent_protocols_room_leave";
 export const TOOL_ROOM_SEND_MESSAGE = "agent_protocols_room_send_message";
 export const TOOL_ROOM_SUBMIT_EVENT = "agent_protocols_room_submit_event";
 export const TOOL_JOIN_REQUESTS_LIST = "agent_protocols_join_requests_list";
@@ -42,7 +40,6 @@ export type LocalConnectorToolName =
   | typeof TOOL_DELEGATIONS_LIST
   | typeof TOOL_DELEGATION_GRANT
   | typeof TOOL_DELEGATION_REVOKE
-  | typeof TOOL_ROOMS_SEARCH
   | typeof TOOL_ROOMS_LIST
   | typeof TOOL_ROOM_STATE
   | typeof TOOL_ROOM_MEMBERS_LIST
@@ -56,7 +53,6 @@ export type LocalConnectorToolName =
   | typeof TOOL_PROFILE_UPDATE
   | typeof TOOL_ROOM_CREATE
   | typeof TOOL_ROOM_JOIN
-  | typeof TOOL_ROOM_LEAVE
   | typeof TOOL_ROOM_SEND_MESSAGE
   | typeof TOOL_ROOM_SUBMIT_EVENT
   | typeof TOOL_JOIN_REQUESTS_LIST
@@ -97,6 +93,10 @@ const INPUT_SCHEMAS: Partial<Record<LocalConnectorToolName, Record<string, unkno
     type: "object", required: ["id", "principal_id"],
     properties: { id: STRING, principal_id: STRING, reason: STRING },
   },
+  [TOOL_ROOMS_LIST]: {
+    type: "object",
+    properties: { scope: { enum: ["known", "public"] }, host: STRING },
+  },
   [TOOL_DRAFT_COMMIT]: {
     type: "object", required: ["draft_id", "action"],
     properties: { draft_id: STRING, action: { enum: ["revise", "send", "drop"] } },
@@ -112,8 +112,13 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
       true,
       false,
     ],
-    [TOOL_ROOMS_SEARCH, "Search public rooms on an allowed host.", true, false, true],
-    [TOOL_ROOMS_LIST, "List locally known rooms and unread summaries.", true, true, false],
+    [
+      TOOL_ROOMS_LIST,
+      "List locally known rooms with unread summaries, or search an allowed host's public rooms.",
+      true,
+      true,
+      true,
+    ],
     [
       TOOL_ROOM_STATE,
       "Read a room's verified state, opening and syncing it on first use; optionally (un)subscribe.",
@@ -159,9 +164,14 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
       false,
       true,
     ],
-    [TOOL_ROOM_LEAVE, "Sign and submit room.leave.", false, false, true],
     [TOOL_ROOM_SEND_MESSAGE, "Sign and submit message.create.", false, false, true],
-    [TOOL_ROOM_SUBMIT_EVENT, "Sign and submit a built-in or room-defined event.", false, false, true],
+    [
+      TOOL_ROOM_SUBMIT_EVENT,
+      "Sign and submit a built-in event without a dedicated tool, such as room.leave, or a room-defined event.",
+      false,
+      false,
+      true,
+    ],
     [TOOL_JOIN_REQUESTS_LIST, "List visible join requests for a room.", true, false, true],
     [TOOL_JOIN_REQUEST_REVIEW, "Sign and submit room.join.review embedding the signed request.", false, false, true],
     [
@@ -173,7 +183,7 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
     ],
     [
       TOOL_DELEGATION_CHECK,
-      "Find and verify an agent's delegations from a principal for a relying application.",
+      "Find and verify an agent's delegations from a principal for a relying party.",
       true,
       true,
       true,

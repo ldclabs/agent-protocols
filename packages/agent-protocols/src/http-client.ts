@@ -143,7 +143,7 @@ export class DiscourseClient {
 
   async publicRooms(options: PublicRoomsOptions = {}): Promise<ListResponse<RoomResponse>> {
     return this.getJson(
-      addQuery("/v1/rooms/public", {
+      addQuery("/v1/rooms", {
         status: options.status,
         tag: options.tag,
         keyword: options.keyword,

@@ -28,14 +28,23 @@ pub(crate) fn record_advances_room_head(room: &LocalRoomState, record: &ArchiveR
     event_type_advances_room_head(room, record.event_type())
 }
 
-/// Every record class except `signal` advances the room head.
+/// `genesis`, `contract`, and `control` records advance the room head.
 pub(crate) fn event_type_advances_room_head(room: &LocalRoomState, event_type: &str) -> bool {
     event_type_advances_head(event_type, &room.room.types)
 }
 
-/// Head-bound writes — `message.create` and `message`/`control` kinds — must match the head.
+/// Message and control writes — `message.create` and `message`/`control`
+/// kinds — must be based at or after the room head.
 pub(crate) fn event_type_requires_room_head(room: &LocalRoomState, event_type: &str) -> bool {
     event_requires_room_head(event_type, &room.room.types)
+}
+
+/// Whether a message or control write based on `base` still passes the ADP
+/// Section 5.1 head check against the verified local head: the base is the
+/// head itself or a later record.
+pub(crate) fn base_is_current(room: &LocalRoomState, base: &(u64, String)) -> bool {
+    base.0 > room.head_seq
+        || (base.0 == room.head_seq && room.head_hash.as_deref() == Some(base.1.as_str()))
 }
 
 pub(crate) fn materialize_creator(room: &mut LocalRoomState) {
@@ -175,10 +184,13 @@ pub(crate) fn validate_record_base_precondition(
             "record base_seq must reference an earlier accepted record",
         ));
     }
-    if event_type_requires_room_head(room, &event.kind) {
-        if room.head_seq != base_seq || room.head_hash.as_deref() != Some(base_hash) {
+    if event_type_requires_room_head(room, &event.kind) && base_seq < room.head_seq {
+        return Err(invalid("record base_seq must be at or after the room head"));
+    }
+    if base_seq == room.head_seq {
+        if room.head_hash.as_deref() != Some(base_hash) {
             return Err(invalid(
-                "record base_seq/base_hash must match current room head",
+                "record base_hash does not match the anchored record",
             ));
         }
         return Ok(());
@@ -395,7 +407,7 @@ pub(crate) fn apply_record_projection(
                 }
             }
         }
-        "steer.create" if steer_targets_agent(&event.payload, active_agent) => {
+        "steer.create" if steer_targets_agent(&item.mentions, active_agent) => {
             inbox.push(inbox_from_item(
                 InboxKind::RoomSteer,
                 InboxPriority::High,
@@ -430,12 +442,10 @@ fn active_turn_from_item(item: &TimelineItem) -> Option<ActiveTurn> {
     })
 }
 
-fn steer_targets_agent(payload: &Value, active_agent: &AgentId) -> bool {
-    payload
-        .get("target")
-        .and_then(Value::as_str)
-        .map(|target| target == active_agent.as_str())
-        .unwrap_or(true)
+/// A steer addresses every member when its `mentions` are empty, and
+/// otherwise only the mentioned agents.
+fn steer_targets_agent(mentions: &[AgentId], active_agent: &AgentId) -> bool {
+    mentions.is_empty() || mentions.contains(active_agent)
 }
 
 fn inbox_from_item(

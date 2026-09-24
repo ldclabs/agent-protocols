@@ -59,7 +59,11 @@
     },
     "httpsOrigin": {
       "type": "string",
-      "pattern": "^https://[^/?#@\\s]+$"
+      "description": "Serialized HTTPS origin (Agent Identity Section 4.4). The pattern approximates the rule; implementations also require that WHATWG URL parsing and origin serialization reproduce the value.",
+      "pattern": "^https://(?:[a-z0-9_-]+(?:\\.[a-z0-9_-]+)*\\.?|\\[[0-9a-f:.]+\\])(?::(?:0|[1-9][0-9]{0,4}))?$",
+      "not": {
+        "pattern": ":443$"
+      }
     },
     "eventHashArray": {
       "type": "array",
@@ -112,7 +116,7 @@
         },
         {
           "not": {
-            "pattern": "^(room|type)\\."
+            "pattern": "^(room|type|message)\\."
           }
         }
       ]
@@ -535,7 +539,32 @@
           "$ref": "#/$defs/extra"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "visibility": {
+                "const": "private"
+              }
+            },
+            "required": [
+              "visibility"
+            ]
+          },
+          "then": {
+            "properties": {
+              "policy": {
+                "properties": {
+                  "open_roles": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "roomUpdatePayload": {
       "type": "object",
@@ -676,10 +705,6 @@
         },
         "instructions": {
           "type": "string"
-        },
-        "version": {
-          "type": "string",
-          "minLength": 1
         },
         "status": {
           "type": "string",
@@ -1251,6 +1276,9 @@
           "properties": {
             "rooms": {
               "$ref": "#/$defs/httpsUrl"
+            },
+            "my_rooms": {
+              "$ref": "#/$defs/httpsUrl"
             }
           },
           "additionalProperties": {
@@ -1273,8 +1301,7 @@
           "uniqueItems": true
         },
         "profile": {
-          "type": "object",
-          "additionalProperties": true
+          "$ref": "#/$defs/profileResolver"
         }
       },
       "additionalProperties": true
@@ -1288,7 +1315,8 @@
         "url",
         "generated_at",
         "last_seq",
-        "last_hash"
+        "last_hash",
+        "formats"
       ],
       "properties": {
         "protocol": {
@@ -1314,8 +1342,25 @@
         },
         "formats": {
           "type": "object",
+          "required": [
+            "jsonl"
+          ],
+          "properties": {
+            "jsonl": {
+              "$ref": "#/$defs/httpsUrl"
+            },
+            "markdown": {
+              "$ref": "#/$defs/httpsUrl"
+            }
+          },
           "additionalProperties": {
-            "$ref": "#/$defs/uri"
+            "$ref": "#/$defs/httpsUrl"
+          }
+        },
+        "packs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/archivedPack"
           }
         },
         "extra": {
@@ -1323,6 +1368,26 @@
         }
       },
       "additionalProperties": true
+    },
+    "archivedPack": {
+      "type": "object",
+      "required": [
+        "pack",
+        "digest",
+        "url"
+      ],
+      "properties": {
+        "pack": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "digest": {
+          "$ref": "#/$defs/contentDigest"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        }
+      },
+      "additionalProperties": false
     },
     "packDocument": {
       "type": "object",
@@ -1398,6 +1463,21 @@
             }
           },
           "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "profileResolver": {
+      "type": "object",
+      "required": [
+        "service"
+      ],
+      "properties": {
+        "service": {
+          "$ref": "#/$defs/httpsOrigin"
+        },
+        "required": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

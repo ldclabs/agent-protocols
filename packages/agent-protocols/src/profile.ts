@@ -5,10 +5,11 @@ import {
   Event,
   ListResponse,
   createEvent,
+  validateAgentId,
   validateEventFields,
   verifyEnvelope,
 } from "./identity.js";
-import type { PrincipalDescriptor } from "./delegation.js";
+import { validateDelegationId, type PrincipalDescriptor } from "./delegation.js";
 
 export const PROFILE_PROTOCOL = "agent-profile/1.0";
 export const PROFILE_UPDATE = "profile.update";
@@ -133,15 +134,104 @@ export function validateProfileUpdate(
       `expected ${PROFILE_UPDATE}, got ${envelope.event.type}`,
     );
   }
-  if (
-    !envelope.event.payload.id ||
-    envelope.event.actor !== envelope.event.payload.id
-  ) {
-    throw protocolError(
-      "invalid_actor",
-      "profile update actor must match payload.id",
-    );
+  validateProfilePayload(envelope.event.payload, envelope.event.actor);
+}
+
+const PAYLOAD_FIELDS = [
+  "id", "name", "description", "avatar_url", "provider", "capabilities",
+  "service_endpoints", "links", "delegations", "extra",
+];
+
+/**
+ * Section 4.1 rules for a closed `profile.update` payload: only defined
+ * fields, `id` equal to the signing `actor`, and the field rules for names,
+ * URLs, uniqueness, and delegation hints.
+ */
+export function validateProfilePayload(payload: unknown, actor: AgentId): asserts payload is ProfileUpdatePayload {
+  if (!isRecord(payload)) invalid("payload must be an object");
+  if (!payload.id || payload.id !== actor) {
+    throw protocolError("invalid_actor", "profile update actor must match payload.id");
   }
+  validateAgentId(payload.id as string);
+  for (const key of Object.keys(payload)) {
+    if (!PAYLOAD_FIELDS.includes(key)) invalid(`undefined profile field: ${key}`);
+  }
+  if (typeof payload.name !== "string" || payload.name === "") invalid("name must be a non-empty string");
+  for (const field of ["description", "provider"]) {
+    if (payload[field] !== undefined && typeof payload[field] !== "string") invalid(`${field} must be a string`);
+  }
+  if (payload.avatar_url !== undefined) requireUrl(payload.avatar_url, ["https:"], "avatar_url");
+  if (payload.extra !== undefined && !isRecord(payload.extra)) invalid("extra must be an object");
+  uniqueStrings(payload.capabilities, "capabilities");
+  const endpoints = new Set<string>();
+  for (const endpoint of list(payload.service_endpoints, "service_endpoints")) {
+    closed(endpoint, ["type", "url", "protocols"], "service endpoint");
+    if (typeof endpoint.type !== "string" || endpoint.type === "") invalid("service endpoint type must not be empty");
+    requireUrl(endpoint.url, ["https:"], "service endpoint url");
+    uniqueStrings(endpoint.protocols, "service endpoint protocols");
+    const key = JSON.stringify([endpoint.type, endpoint.url]);
+    if (endpoints.has(key)) invalid("service endpoints must be unique by type and url");
+    endpoints.add(key);
+  }
+  const links = new Set<string>();
+  for (const link of list(payload.links, "links")) {
+    closed(link, ["name", "url", "rel"], "link");
+    if (typeof link.name !== "string" || link.name === "" || typeof link.rel !== "string" || link.rel === "") {
+      invalid("link name and rel must not be empty");
+    }
+    requireUrl(link.url, ["http:", "https:"], "link url");
+    const key = JSON.stringify([link.url, link.rel]);
+    if (links.has(key)) invalid("links must be unique by url and rel");
+    links.add(key);
+  }
+  for (const hint of list(payload.delegations, "delegations")) {
+    closed(hint, ["id", "principal", "relationship", "scopes"], "delegation hint");
+    if (hint.id !== undefined) validateDelegationId(hint.id as string);
+    if (!isRecord(hint.principal)) invalid("delegation hint requires a principal");
+    requireUrl(hint.principal.id, ["https:"], "delegation principal id");
+    if (hint.relationship !== undefined && typeof hint.relationship !== "string") invalid("relationship must be a string");
+    uniqueStrings(hint.scopes, "delegation hint scopes");
+  }
+}
+
+function invalid(message: string): never {
+  throw protocolError("invalid_event", message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function list(value: unknown, field: string): Record<string, unknown>[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every(isRecord)) invalid(`${field} must be an array of objects`);
+  return value as Record<string, unknown>[];
+}
+
+function closed(value: Record<string, unknown>, fields: readonly string[], name: string): void {
+  for (const key of Object.keys(value)) {
+    if (!fields.includes(key)) invalid(`undefined ${name} field: ${key}`);
+  }
+}
+
+function requireUrl(value: unknown, protocols: readonly string[], field: string): void {
+  let url: URL | undefined;
+  try {
+    url = typeof value === "string" ? new URL(value) : undefined;
+  } catch {
+    url = undefined;
+  }
+  if (!url || !protocols.includes(url.protocol) || url.hostname === "") {
+    invalid(`${field} must be an ${protocols.map((p) => p.slice(0, -1)).join(" or ")} URL`);
+  }
+}
+
+function uniqueStrings(value: unknown, field: string): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item === "")) {
+    invalid(`${field} entries must be non-empty strings`);
+  }
+  if (new Set(value).size !== value.length) invalid(`${field} entries must be unique`);
 }
 
 export function materializeProfile(

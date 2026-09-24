@@ -12,7 +12,6 @@ pub const TOOL_DELEGATION_CHECK: &str = "agent_protocols_delegation_check";
 pub const TOOL_DELEGATIONS_LIST: &str = "agent_protocols_delegations_list";
 pub const TOOL_DELEGATION_GRANT: &str = "agent_protocols_delegation_grant";
 pub const TOOL_DELEGATION_REVOKE: &str = "agent_protocols_delegation_revoke";
-pub const TOOL_ROOMS_SEARCH: &str = "agent_protocols_rooms_search";
 pub const TOOL_ROOMS_LIST: &str = "agent_protocols_rooms_list";
 pub const TOOL_ROOM_STATE: &str = "agent_protocols_room_state";
 pub const TOOL_ROOM_MEMBERS_LIST: &str = "agent_protocols_room_members_list";
@@ -26,21 +25,19 @@ pub const TOOL_DRAFT_COMMIT: &str = "agent_protocols_draft_commit";
 pub const TOOL_PROFILE_UPDATE: &str = "agent_protocols_profile_update";
 pub const TOOL_ROOM_CREATE: &str = "agent_protocols_room_create";
 pub const TOOL_ROOM_JOIN: &str = "agent_protocols_room_join";
-pub const TOOL_ROOM_LEAVE: &str = "agent_protocols_room_leave";
 pub const TOOL_ROOM_SEND_MESSAGE: &str = "agent_protocols_room_send_message";
 pub const TOOL_ROOM_SUBMIT_EVENT: &str = "agent_protocols_room_submit_event";
 pub const TOOL_JOIN_REQUESTS_LIST: &str = "agent_protocols_join_requests_list";
 pub const TOOL_JOIN_REQUEST_REVIEW: &str = "agent_protocols_join_request_review";
 
 /// Every standard tool name, in `tools/list` order.
-pub const TOOL_NAMES: [&str; 25] = [
+pub const TOOL_NAMES: [&str; 23] = [
     TOOL_IDENTITY_CURRENT,
     TOOL_PRINCIPAL_RESOLVE,
     TOOL_DELEGATION_CHECK,
     TOOL_DELEGATIONS_LIST,
     TOOL_DELEGATION_GRANT,
     TOOL_DELEGATION_REVOKE,
-    TOOL_ROOMS_SEARCH,
     TOOL_ROOMS_LIST,
     TOOL_ROOM_STATE,
     TOOL_ROOM_MEMBERS_LIST,
@@ -54,7 +51,6 @@ pub const TOOL_NAMES: [&str; 25] = [
     TOOL_PROFILE_UPDATE,
     TOOL_ROOM_CREATE,
     TOOL_ROOM_JOIN,
-    TOOL_ROOM_LEAVE,
     TOOL_ROOM_SEND_MESSAGE,
     TOOL_ROOM_SUBMIT_EVENT,
     TOOL_JOIN_REQUESTS_LIST,
@@ -96,18 +92,11 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
             false,
         ),
         (
-            TOOL_ROOMS_SEARCH,
-            "Search public rooms on an allowed host.",
-            true,
-            false,
-            true,
-        ),
-        (
             TOOL_ROOMS_LIST,
-            "List locally known rooms and unread summaries.",
+            "List locally known rooms with unread summaries, or search an allowed host's public rooms.",
             true,
             true,
-            false,
+            true,
         ),
         (
             TOOL_ROOM_STATE,
@@ -197,13 +186,6 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
             true,
         ),
         (
-            TOOL_ROOM_LEAVE,
-            "Sign and submit room.leave.",
-            false,
-            false,
-            true,
-        ),
-        (
             TOOL_ROOM_SEND_MESSAGE,
             "Sign and submit message.create.",
             false,
@@ -212,7 +194,7 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
         ),
         (
             TOOL_ROOM_SUBMIT_EVENT,
-            "Sign and submit a built-in or room-defined event.",
+            "Sign and submit a built-in event without a dedicated tool, such as room.leave, or a room-defined event.",
             false,
             false,
             true,
@@ -240,7 +222,7 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
         ),
         (
             TOOL_DELEGATION_CHECK,
-            "Find and verify an agent's delegations from a principal for a relying application.",
+            "Find and verify an agent's delegations from a principal for a relying party.",
             true,
             true,
             true,
@@ -305,6 +287,10 @@ fn input_schema(name: &str) -> Value {
         TOOL_DELEGATION_REVOKE => json!({
             "type": "object", "required": ["id", "principal_id"],
             "properties": {"id": string, "principal_id": string, "reason": string}
+        }),
+        TOOL_ROOMS_LIST => json!({
+            "type": "object",
+            "properties": {"scope": {"enum": ["known", "public"]}, "host": string}
         }),
         TOOL_DRAFT_COMMIT => json!({
             "type": "object", "required": ["draft_id", "action"],

@@ -145,3 +145,44 @@ def test_profile_updates_need_a_greater_nonce_and_the_six_event_fields():
     extra["room_id"] = "r1"
     with pytest.raises(AgentProtocolError, match="unknown event field"):
         validate_profile_update(signer.sign_event(extra))
+
+
+def test_origins_are_serialized_https_origins():
+    from agent_protocols.identity import validate_origin
+
+    for origin in VECTORS["origins"]["valid"]:
+        validate_origin(origin)
+    for origin in VECTORS["origins"]["invalid"]:
+        with pytest.raises(AgentProtocolError):
+            validate_origin(origin)
+
+
+def test_request_jwts_verify_exactly_as_listed():
+    from agent_protocols.identity import verify_request_jwt
+
+    jwts = VECTORS["request_jwts"]
+    options = {"audience": jwts["audience"], "now_secs": jwts["now_secs"], "max_ttl_secs": jwts["max_ttl_secs"]}
+    for case in jwts["valid"]:
+        assert verify_request_jwt(case["token"], **options) == case["claims"]
+    for case in jwts["invalid"]:
+        with pytest.raises(Exception):
+            verify_request_jwt(case["token"], **options)
+
+
+def test_submissions_resolve_resubmission_windows_and_nonce_replays():
+    submissions = VECTORS["submissions"]
+    envelopes = submissions["envelopes"]
+    store = MemoryNonceStore()
+    for step in submissions["steps"]:
+        accepted = {envelopes[name]["hash"] for name in step["accepted"]}
+        try:
+            outcome = verify_submission(
+                envelopes[step["envelope"]],
+                store,
+                is_accepted=accepted.__contains__,
+                now_ms=step["now_ms"],
+                window_ms=submissions["window_ms"],
+            ).kind
+        except AgentProtocolError as error:
+            outcome = error.code
+        assert outcome == step["expected"], step["name"]

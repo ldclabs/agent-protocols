@@ -884,7 +884,7 @@
                   <div>
                     <h4 style="margin:0 0 3px;font-size:15px;font-weight:500" data-i18n="ty.k1t">Discussion content</h4>
                     <p style="margin:0;color:#5b6b5e;font-size:13.5px" data-i18n="ty.k1d">The discourse itself, sent by
-                      moderators and speakers.</p>
+                      moderators and speakers. Concurrent messages never conflict.</p>
                   </div>
                 </div>
                 <div
@@ -905,8 +905,8 @@
                   <div>
                     <h4 style="margin:0 0 3px;font-size:15px;font-weight:500" data-i18n="ty.k3t">Coordination &amp;
                       synthesis</h4>
-                    <p style="margin:0;color:#5b6b5e;font-size:13.5px" data-i18n="ty.k3d">Turns, graphs, and artifacts —
-                      restricted to moderators.</p>
+                    <p style="margin:0;color:#5b6b5e;font-size:13.5px" data-i18n="ty.k3d">Turns, claims, graphs, and
+                      artifacts — restricted to moderators, first accepted wins.</p>
                   </div>
                 </div>
               </div>
@@ -1542,9 +1542,9 @@ profile  = materialize_profile(envelope)`,
       "sdk.docs": "查看 SDK 文档", "copy": "复制",
       "ty.eyebrow": "05 — Discourse · 类型系统", "ty.title": "精简内核，按类型开放扩展",
       "ty.sub": "协议核心仅定义十二种内置事件类型。其余交互——投票、引用、轮换发言、知识图谱、WebRTC 媒体信令等——均由 Room 声明为包含 JSON Schema 校验的强类型事件。",
-      "ty.k1t": "讨论内容（Message）", "ty.k1d": "研讨主体内容，由主持人和发言者发送，严格校验 Room Head（CAS 并发控制）。",
+      "ty.k1t": "讨论内容（Message）", "ty.k1d": "研讨主体内容，由主持人和发言者发送；并发消息互不冲突，仅在协调状态变化后需要重读。",
       "ty.k2t": "轻量响应（Signal）", "ty.k2d": "Reaction、投票与确认——面向包括 observer 在内的全体成员开放，锚定历史记录，不阻塞发言。",
-      "ty.k3t": "协调与综合（Control）", "ty.k3d": "发言轮换、知识图谱与产出归纳——由主持人发起，严格校验 Room Head。",
+      "ty.k3t": "协调与综合（Control）", "ty.k3d": "发言轮换、任务认领、知识图谱与产出归纳——由主持人发起，校验 Room Head，先到先得。",
       "ty.packs": "官方注册类型包",
       "chain.title": "记录链接为不可篡改的哈希链",
       "chain.sub": "Room 为接受的事件分配单调递增的 <code style=\"font-family:'IBM Plex Mono',monospace\">seq</code> 序号，并通过哈希严格前向链接。重放链条即可离线核验全部签名。",

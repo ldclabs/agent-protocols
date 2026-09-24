@@ -2,6 +2,7 @@ import canonicalize from "canonicalize";
 
 import { protocolError } from "./errors.js";
 import {
+  AGENT_ID_PREFIX,
   AcceptedRecord,
   AgentId,
   Envelope,
@@ -10,6 +11,7 @@ import {
   createEvent,
   validateAgentId,
   validateEventFields,
+  validateOrigin,
   verifyEnvelope,
 } from "./identity.js";
 
@@ -123,7 +125,6 @@ export interface DelegationCredential {
   grant_event_id: string;
   event_id: string;
   accepted_at: number;
-  updated_at: number;
   checked_at: number;
 }
 
@@ -159,7 +160,7 @@ export type DelegationEventsResponse = ListResponse<DelegationRecord>;
 /** Result of {@link verifyDelegationCredential}. */
 export interface DelegationVerdict {
   credential: DelegationCredential;
-  /** Signature, history, controller, and replay checks all passed. */
+  /** Latest-grant signature, controller, ceiling, and consistency checks passed. */
   verified: boolean;
   /** Verified, and usable for the audience now: active, in its window, audience listed. */
   usable: boolean;
@@ -210,7 +211,7 @@ export function validateController(controller: Controller, retired = false): voi
     if (!isRecord(policy) || Object.keys(policy).sort().join(",") !== "audiences,scopes") fail("invalid delegation policy");
     stringList(policy.scopes, "scopes");
     stringList(policy.audiences, "audiences");
-    for (const origin of policy.audiences) validateOrigin(origin);
+    for (const audience of policy.audiences) validateAudience(audience);
   }
   if (controller.supersedes !== undefined) {
     stringList(controller.supersedes, "supersedes");
@@ -318,7 +319,7 @@ export function validateDelegationGrantPayload(
   validateAgentId(payload.subject);
   stringList(payload.scopes, "scopes");
   stringList(payload.audiences, "audiences");
-  for (const origin of payload.audiences) validateOrigin(origin);
+  for (const audience of payload.audiences) validateAudience(audience);
   if (createdAt !== undefined) timestamp(createdAt, "created_at");
   if (payload.not_before !== undefined) timestamp(payload.not_before, "not_before");
   if (payload.expires_at !== undefined) timestamp(payload.expires_at, "expires_at");
@@ -432,7 +433,7 @@ export function validateDelegationEnvelope(
  * and the service's actual acceptance time; this function does not authorize it. */
 export function materializeDelegationCredential(
   envelope: Envelope<DelegationPayload>,
-  options: { acceptedAt: number; previous?: DelegationCredential; status?: DelegationStatus; updatedAt?: number; checkedAt?: number },
+  options: { acceptedAt: number; previous?: DelegationCredential; status?: DelegationStatus; checkedAt?: number },
 ): DelegationCredential {
   validateDelegationEnvelope(envelope);
   timestamp(options.acceptedAt, "accepted_at");
@@ -440,14 +441,12 @@ export function materializeDelegationCredential(
   const previous = options.previous;
   checkPrevious(event, previous);
   if (previous && options.acceptedAt < previous.accepted_at) fail("acceptance order reversed");
-  const updatedAt = options.updatedAt ?? options.acceptedAt;
-  timestamp(updatedAt, "updated_at");
-  if (updatedAt < options.acceptedAt) fail("updated_at precedes acceptance");
-  const checkedAt = options.checkedAt ?? updatedAt;
+  const checkedAt = options.checkedAt ?? options.acceptedAt;
   timestamp(checkedAt, "checked_at");
+  if (checkedAt < options.acceptedAt) fail("checked_at precedes acceptance");
   if (event.type === DELEGATION_REVOKE) {
     if (!previous) fail("revocation requires previous credential");
-    return { ...structuredClone(previous!), controller: event.actor, status: "revoked", event_id: envelope.hash, accepted_at: options.acceptedAt, updated_at: updatedAt, checked_at: checkedAt };
+    return { ...structuredClone(previous!), controller: event.actor, status: "revoked", event_id: envelope.hash, accepted_at: options.acceptedAt, checked_at: checkedAt };
   }
   const payload = event.payload as DelegationGrantPayload;
   if (payload.expires_at !== undefined && payload.expires_at <= options.acceptedAt) {
@@ -456,7 +455,7 @@ export function materializeDelegationCredential(
   const status = options.status ?? "active";
   if (!["active", "suspended", "expired", "revoked"].includes(status)) fail("invalid status");
   return { ...structuredClone(payload), protocol: DELEGATION_PROTOCOL, controller: event.actor,
-    owner_controller: previous?.owner_controller ?? event.actor, status, updated_at: updatedAt,
+    owner_controller: previous?.owner_controller ?? event.actor, status,
     event_id: envelope.hash, grant_event_id: envelope.hash, accepted_at: options.acceptedAt, checked_at: checkedAt };
 }
 
@@ -499,20 +498,28 @@ export function validateControllerEnumeration(document: PrincipalDocument, actor
 /** Checks audience/status/time only, after cryptographic and historical verification.
  * The application still authenticates the subject and enforces scopes and constraints. */
 export function validateDelegationUse(credential: DelegationCredential, audience: string, now: number): void {
-  validateOrigin(audience); timestamp(now, "now");
+  validateAudience(audience); timestamp(now, "now");
   validateDelegationGrantPayload(credential);
   if (credential.protocol !== DELEGATION_PROTOCOL || credential.status !== "active" ||
       !credential.audiences.includes(audience) || (credential.not_before !== undefined && now < credential.not_before) ||
       (credential.expires_at !== undefined && now >= credential.expires_at)) fail("delegation is not usable");
 }
 
+/** Grant fields a credential carries from its latest grant. */
+const GRANT_FIELDS = [
+  "id", "principal_id", "subject", "relationship", "scopes", "audiences",
+  "constraints", "not_before", "expires_at",
+] as const;
+
 /**
  * Verifies a credential under Agent Delegation Section 8 with the online
- * service-trusting evidence policy: replays its accepted records against the
- * authoritative principal document — signatures, controller intervals,
- * ceilings, and ownership lineage — confirms the replay matches the
- * credential, and then checks use for `audience` at `now`. Relying parties
- * still enforce scopes and constraints and authenticate the subject.
+ * service-trusting evidence policy: checks the accepted record of its latest
+ * grant — signature, Controller binding, ceiling, and authority interval —
+ * confirms that the grant matches the credential, and then checks use for
+ * `audience` at `now`. Ownership and `supersedes` lineage govern management,
+ * which the service enforced at acceptance; auditors replay them with
+ * {@link auditDelegationHistory}. Relying parties still enforce scopes and
+ * constraints and authenticate the subject.
  */
 export function verifyDelegationCredential(
   credential: DelegationCredential,
@@ -523,23 +530,23 @@ export function verifyDelegationCredential(
   now: number,
 ): DelegationVerdict {
   const reasons: string[] = [];
-  let replayed: DelegationCredential | undefined;
   try {
-    if (records.length === 0) fail("no accepted records");
-    for (const record of records) {
-      validateHistoricalDelegation(record, document, resolvedUrl, replayed);
-      replayed = materializeDelegationCredential(record.envelope, { acceptedAt: record.accepted_at, previous: replayed });
+    const record = records.find((candidate) => candidate.envelope.hash === credential.grant_event_id);
+    if (!record) fail("latest grant record is missing");
+    validateHistoricalDelegation(record!, document, resolvedUrl);
+    if (record!.envelope.event.type !== DELEGATION_GRANT) fail("grant_event_id does not name a grant");
+    const grant = record!.envelope.event.payload as DelegationGrantPayload;
+    if (credential.protocol !== DELEGATION_PROTOCOL ||
+        GRANT_FIELDS.some((field) => canonicalize(grant[field]) !== canonicalize(credential[field]))) {
+      fail("credential does not match its latest grant");
     }
-    const r = replayed!;
-    // Only status and its service timestamps may differ from event replay.
-    const fields = [
-      "id", "protocol", "principal_id", "subject", "relationship", "scopes", "audiences",
-      "constraints", "not_before", "expires_at", "event_id", "grant_event_id",
-      "owner_controller", "controller", "accepted_at",
-    ] as const;
-    if (fields.some((field) => canonicalize(r[field]) !== canonicalize(credential[field])) ||
-        (r.status === "revoked") !== (credential.status === "revoked")) {
-      fail("credential does not match its accepted records");
+    if (credential.event_id === credential.grant_event_id) {
+      if (credential.accepted_at !== record!.accepted_at || credential.controller !== record!.envelope.event.actor ||
+          credential.status === "revoked") {
+        fail("credential does not match its latest grant");
+      }
+    } else if (credential.status !== "revoked") {
+      fail("a credential last changed by a revocation must be revoked");
     }
   } catch (error) {
     reasons.push(error instanceof Error ? error.message : String(error));
@@ -550,6 +557,44 @@ export function verifyDelegationCredential(
   if (credential.not_before !== undefined && now < credential.not_before) reasons.push("not yet valid");
   if (credential.expires_at !== undefined && now >= credential.expires_at) reasons.push("expired");
   return { credential, verified, usable: reasons.length === 0, reasons };
+}
+
+/**
+ * Auditor check (Section 8): replays every accepted record of a credential
+ * against the authoritative principal document — signatures, controller
+ * intervals, ceilings, and ownership lineage — and confirms that the replay
+ * matches the credential. Relying parties use {@link verifyDelegationCredential}.
+ */
+export function auditDelegationHistory(
+  credential: DelegationCredential,
+  records: readonly DelegationRecord[],
+  document: PrincipalDocument,
+  resolvedUrl: string,
+): void {
+  if (records.length === 0) fail("no accepted records");
+  let replayed: DelegationCredential | undefined;
+  for (const record of records) {
+    validateHistoricalDelegation(record, document, resolvedUrl, replayed);
+    replayed = materializeDelegationCredential(record.envelope, { acceptedAt: record.accepted_at, previous: replayed });
+  }
+  const r = replayed!;
+  // Only status and the service's check time may differ from event replay.
+  const fields = [
+    ...GRANT_FIELDS, "protocol", "event_id", "grant_event_id", "owner_controller", "controller", "accepted_at",
+  ] as const;
+  if (fields.some((field) => canonicalize(r[field]) !== canonicalize(credential[field])) ||
+      (r.status === "revoked") !== (credential.status === "revoked")) {
+    fail("credential does not match its accepted records");
+  }
+}
+
+/** A relying-party audience (Section 5): an origin for a relying application, or an Agent ID for a relying agent. */
+export function validateAudience(value: unknown): void {
+  if (typeof value === "string" && value.startsWith(AGENT_ID_PREFIX)) {
+    validateAgentId(value);
+    return;
+  }
+  validateOrigin(value);
 }
 
 function eventIdentity(event: Event<DelegationPayload>): { id: string; principalId: string } {
@@ -614,12 +659,6 @@ function stringList(value: unknown, field: string, empty = false): asserts value
   for (const item of value) { validateNonEmpty(item, field); if (item === "*") fail(`${field} cannot contain wildcard`); }
   if (new Set(value).size !== value.length) fail(`${field} contains duplicates`);
 }
-function validateOrigin(value: unknown): void {
-  validateHttpsUrl(value, "origin");
-  const url = new URL(value as string);
-  if (url.origin !== value) fail("origin must be a serialized HTTPS origin");
-}
-
 function validateHttpsUrl(value: unknown, field: string): void {
   if (typeof value !== "string") {
     throw protocolError("invalid_url", `${field} must be an HTTPS URL`);
