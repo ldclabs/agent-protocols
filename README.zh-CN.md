@@ -20,7 +20,7 @@ Agent Protocols 是一个面向自治智能体互操作的开放规范仓库。�
 | Agent Delegation Protocol | [docs/protocols/agent-delegation/1.0.md](docs/protocols/agent-delegation/1.0.md) | [docs/protocols/agent-delegation/1.0.zh-CN.md](docs/protocols/agent-delegation/1.0.zh-CN.md) | 草案 |
 | Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | 草案 |
 
-Delegation 草案现已定义 controller 来源、显式权限与淘汰历史。Rust、TypeScript 和 Python 源码 SDK 已提供对应的 controller、权限、历史与物化辅助函数。
+各规范的机器可读文件（JSON Schema、ADP 类型包与规范性测试向量）均在 [docs/protocols](docs/protocols/README.zh-CN.md) 中列出。Rust、TypeScript 和 Python SDK 运行同一套测试向量。
 
 ## 协议关系
 
@@ -78,9 +78,9 @@ docs/
 - TypeScript：[packages/agent-protocols](packages/agent-protocols)
 - Python：[python/agent-protocols](python/agent-protocols)
 
-这些 SDK 覆盖 Agent ID 编码、签名事件信封、Profile 实体化、Delegation controller 权限与历史、Discourse payload 类型、权限 helper，以及 HTTP client。
+这些 SDK 覆盖 Agent ID 编码、严格 Ed25519 验证、签名事件信封、Profile 物化、Delegation controller 权限、历史与凭证验证、Discourse 内核与类型系统、权限 helper，以及 HTTP client。Rust 与 TypeScript SDK 还包含本地 MCP Connector 核心。
 
-未来可能会增加更多 JSON Schema 文件、OpenAPI 描述、其他语言的 SDK 指南和更完整的一致性测试套件。
+未来可能会增加 OpenAPI 描述、其他语言的 SDK 指南和更完整的一致性测试套件。
 
 ## 参与贡献
 

@@ -4,11 +4,11 @@ Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, and Ag
 
 ## Modules
 
-- `agent_protocols.identity`: `did:agent:` encoding, JCS canonicalization, event hashes, Ed25519 signing and verification, live-write nonce checks, request JWT helpers.
-- `agent_protocols.profile`: `profile.update` payload helpers, delegation discovery hints, validation, materialization.
-- `agent_protocols.delegation`: Agent Delegation principal documents and alias resolution, grant/revoke payloads, credential documents, validation, and materialization.
-- `agent_protocols.discourse`: ADP kernel event constants, the room type system (type definitions, pack imports, type registry, JSON Schema payload validation), join request helpers, room-path checks, kind-based permission and state helpers.
-- `agent_protocols.http_client`: optional requests-based Profile, Delegation, and Discourse clients. Install with `agent-protocols[http]`.
+- `agent_protocols.identity`: `did:agent:` encoding, strict JSON parsing (`parse_strict_json`, `parse_envelope_json`), JCS canonicalization, event hashes, Ed25519 signing and strict verification (`verify_ed25519_strict`), closed event objects (`validate_event_fields`), clock-derived nonces with bounded `Max-Seen-Nonce` resynchronization, live-write and exact-resubmission checks (`verify_submission`), request JWT helpers.
+- `agent_protocols.profile`: `profile.update` payload helpers, delegation discovery hints, validation, succession checks, materialization.
+- `agent_protocols.delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, authority, acceptance, historical, and use checks, and `verify_delegation_credential` over accepted records.
+- `agent_protocols.discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
+- `agent_protocols.http_client`: optional requests-based Profile, Delegation, and Discourse clients. Install with `agent-protocols[http]`. Lists use `{"result", "next_cursor"}`; non-2xx responses raise `HttpResponseError` with the protocol `code`, `data`, and `max_seen_nonce`.
 
 ## Example
 
@@ -17,34 +17,33 @@ from agent_protocols import AgentSigner, ClientNonceManager, materialize_profile
 
 signer = AgentSigner.generate()
 nonces = ClientNonceManager()
+created_at = unix_ms()
 event = profile_update_event(
     signer.agent_id(),
-    unix_ms(),
-    nonces.next_nonce(),
+    created_at,
+    nonces.next_nonce(created_at),
     {"id": signer.agent_id(), "name": "ResearchAgent-v3"},
 )
 envelope = signer.sign_event(event)
 profile = materialize_profile(envelope)
 ```
 
-Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
+`next_nonce(created_at)` derives `max(last + 1, created_at)`, so nonces stay monotonic across restarts and devices. Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
 
-ADP room writes declare a signed `base_seq` / `base_hash`: discussion and contract writes must match the current room head, while `signal`-kind writes — including the built-in membership events — only anchor to an accepted record and never contend for the head. Use `discourse_event` or `type_define_event` with `base_seq` and `base_hash`. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.
+ADP room writes carry a signed `base_seq` / `base_hash`. Head-bound writes — `message.create` and custom `message` or `control` kinds — must match the current room head; contract writes (`room.update`, `room.close`, `room.cancel`, `type.define`) and signal writes, including the membership events, only anchor to an accepted record. Use `event_requires_room_head` and `event_advances_room_head` to tell them apart, `discourse_event` to build them, and `room_join_request_event` for a join request, which carries `room_id` but no base. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.
 
-## Delegation draft revision
+## Delegation
 
-Controllers are records shared by `controllers` and `retired_controllers`: `id` is the Agent ID, `source` is an HTTPS origin or `local`, and `valid_from` starts the binding. Omit `delegation` for a signing-only key, use `"*"` for full authority, or supply `{ "scopes": [...], "audiences": [...] }` for restricted authority. Retirement adds `retired_at`; compromise additionally sets `invalid_from`. Keys cannot be reused within one principal.
+Controllers are records shared by `controllers` and `retired_controllers`: `id` is the Agent ID, `source` is an HTTPS origin or `local`, and `valid_from` starts the binding. Omit `delegation` for a signing-only key, use `"*"` for full authority, or supply `{ "scopes": [...], "audiences": [...] }` for restricted authority. `supersedes` lets a successor key manage its predecessors' credentials. Retirement adds `retired_at`; compromise additionally sets `invalid_from`. A principal that grants delegations publishes `delegation_query_url`.
 
-Grant payloads now require `audiences`. Credentials retain an immutable `owner_controller`, the latest `grant_event_id`, and the actual service `accepted_at`. Materialization requires an explicit acceptance time and accepts previous credential state for replacement/revocation; it never derives acceptance time from `created_at`. A revocation preserves grant fields and ownership while recording the revoker as `controller`.
+Grants name the canonical `principal_id`. Credentials carry `principal_id`, an immutable `subject` and `owner_controller`, the latest `grant_event_id`, the service `accepted_at`, and `checked_at`. Materialization requires an explicit acceptance time and trusted previous state; it never derives acceptance time from `created_at`.
 
 The validation layers have different responsibilities:
 
-- Envelope validation checks cryptography and payload shape, not principal authority.
-- Event-authority validation checks the controller policy before signing. Acceptance validation also checks the envelope and authoritative-resolution URL.
-- Historical validation binds a caller-authenticated acceptance record to the exact event hash and checks the original controller interval and ceiling. It does not authenticate a service receipt or prove offline revocation status.
+- Envelope validation checks cryptography, the closed event object, and payload shape, not principal authority.
+- Event-authority validation checks the controller policy before signing. Acceptance validation also checks the envelope and the authoritative-resolution URL.
+- Historical validation checks an accepted record `{"envelope", "accepted_at"}` against the original controller interval and ceiling. It does not authenticate a service receipt or prove offline revocation status.
 - Use validation checks audience, status, and validity. Applications still authenticate the subject and enforce the requested scopes and every constraint.
-
-Services remain responsible for fresh HTTPS resolution, live Identity timestamp/nonce checks, exact-envelope idempotency, atomic state/history storage, and current revocation or compromise reevaluation. Pass only authoritative documents, authenticated acceptance evidence, and trusted previous state. These are SDK building blocks, not a hosted delegation service.
 
 ```python
 # principal was freshly resolved over HTTPS; previous is trusted service state.
@@ -52,10 +51,14 @@ validate_delegation_acceptance(envelope, principal, resolved_url, accepted_at, p
 credential = materialize_delegation_credential(
     envelope, accepted_at=accepted_at, previous=previous,
 )
-validate_delegation_use(credential, "https://dmsg.net", now)
+
+# A relying party replays the credential's accepted records.
+verdict = verify_delegation_credential(credential, records, principal, principal["id"], "https://dmsg.net", now)
 ```
 
-The same module exports `Controller`, `DelegationPolicy`, `DelegationAcceptance`, `validate_controller`, `validate_controller_enumeration`, and `validate_historical_delegation`. Transport implementations injected into the HTTP client must honor `allow_redirects=False`.
+Services remain responsible for fresh HTTPS resolution, live Identity timestamp and nonce checks, exact-resubmission lookups, atomic state and history storage, and current revocation or compromise reevaluation. These are SDK building blocks, not a hosted delegation service.
+
+`DelegationClient.discover(origin)` reads a delegation service's discovery document and prefers its endpoints. Transport implementations injected into the HTTP client must honor `allow_redirects=False`.
 
 ## Running tests
 

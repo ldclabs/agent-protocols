@@ -32,9 +32,9 @@
                 "maxLength": 64
               },
               "score": {
-                "type": "number",
-                "minimum": -1,
-                "maximum": 1
+                "type": "integer",
+                "minimum": -100,
+                "maximum": 100
               },
               "extra": {
                 "type": "object",
@@ -43,7 +43,7 @@
             },
             "additionalProperties": false
           },
-          "instructions": "React to accepted events in this room. RECOMMENDED reaction values are agree, disagree, neutral, important, and confusing; other strings are allowed and preserved."
+          "instructions": "React to accepted events in this room. RECOMMENDED reaction values are agree, disagree, neutral, important, and confusing; other strings are allowed and preserved. score, when present, is an integer from -100 (strongly against) to 100 (strongly for)."
         }
       ]
     },
@@ -108,9 +108,9 @@
                 "uniqueItems": true
               },
               "priority": {
-                "type": "number",
+                "type": "integer",
                 "minimum": 0,
-                "maximum": 1
+                "maximum": 100
               },
               "extra": {
                 "type": "object",
@@ -658,13 +658,13 @@
     {
       "id": "adp:moderation/1.0",
       "title": "Moderation",
-      "description": "Turn assignment and discussion steering for moderated rooms.",
+      "description": "Turn assignment, task and resource claims, and discussion steering for moderated rooms.",
       "types": [
         {
           "type": "turn.update",
           "kind": "control",
           "title": "Turn update",
-          "description": "Assigns the floor or records a short-lived task/resource ownership lease.",
+          "description": "Assigns the floor to one speaker.",
           "version": "1.0",
           "status": "active",
           "schema": {
@@ -682,32 +682,6 @@
                 "type": "string",
                 "pattern": "^did:agent:[A-Za-z0-9_-]{43}$"
               },
-              "scope": {
-                "type": "string",
-                "enum": [
-                  "floor",
-                  "task",
-                  "resource"
-                ]
-              },
-              "state": {
-                "type": "string",
-                "enum": [
-                  "assigned",
-                  "handoff",
-                  "released",
-                  "completed",
-                  "cancelled"
-                ]
-              },
-              "claim_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "handoff_to": {
-                "type": "string",
-                "pattern": "^did:agent:[A-Za-z0-9_-]{43}$"
-              },
               "intent": {
                 "type": "string"
               },
@@ -715,10 +689,6 @@
                 "type": "string"
               },
               "expires_at": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "lease_until": {
                 "type": "integer",
                 "minimum": 0
               },
@@ -740,7 +710,97 @@
             },
             "additionalProperties": false
           },
-          "instructions": "turn_id MUST be strictly greater than the previously accepted turn_id in the room. expires_at and lease_until, when present, MUST be greater than the event's created_at. scope defaults to floor and state defaults to assigned. For scope task or resource, claim_id identifies the work item or resource; the latest accepted turn.update for the same claim_id is the current owner/lease state. Rooms MAY allow speakers to self-claim with a roles override; the ADP room head precondition makes competing claims first-accepted-wins. Members SHOULD respect active turns and leases; moderators handle violations with role updates or documented host-local policy."
+          "instructions": "turn_id MUST be strictly greater than the previously accepted turn_id in the room. expires_at, when present, MUST be greater than the event's created_at. The speaker named by the latest accepted turn.update holds the floor until expires_at or the next turn.update. Members SHOULD respect the active turn; moderators handle violations through role updates."
+        },
+        {
+          "type": "claim.update",
+          "kind": "control",
+          "title": "Claim update",
+          "description": "Records who owns a task or resource, and hands it off, releases it, or completes it.",
+          "version": "1.0",
+          "status": "active",
+          "schema": {
+            "type": "object",
+            "required": [
+              "claim_id",
+              "owner",
+              "state"
+            ],
+            "properties": {
+              "claim_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "owner": {
+                "type": "string",
+                "pattern": "^did:agent:[A-Za-z0-9_-]{43}$"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "claimed",
+                  "handoff",
+                  "released",
+                  "completed",
+                  "cancelled"
+                ]
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "task",
+                  "resource"
+                ]
+              },
+              "handoff_to": {
+                "type": "string",
+                "pattern": "^did:agent:[A-Za-z0-9_-]{43}$"
+              },
+              "expires_at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "intent": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{43}$"
+                },
+                "uniqueItems": true
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "state": {
+                      "const": "handoff"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "handoff_to"
+                  ]
+                }
+              }
+            ],
+            "additionalProperties": false
+          },
+          "instructions": "The latest accepted claim.update for a claim_id is that claim's current state; scope defaults to task. expires_at, when present, is the ownership lease and MUST be greater than the event's created_at. Rooms MAY let speakers self-claim with a roles override; the ADP room head precondition makes competing claims first-accepted-wins, so a rejected claimant reads the latest head and decides again. Members SHOULD respect active claims; moderators handle violations."
         },
         {
           "type": "steer.create",
@@ -767,9 +827,9 @@
                 "type": "string"
               },
               "priority": {
-                "type": "number",
+                "type": "integer",
                 "minimum": 0,
-                "maximum": 1
+                "maximum": 100
               },
               "references": {
                 "type": "array",
@@ -793,7 +853,7 @@
     {
       "id": "adp:realtime/1.0",
       "title": "Realtime sessions",
-      "description": "WebRTC session signaling over signed room events. Media and file bytes never enter the room log.",
+      "description": "WebRTC session signaling over signed room events. Offers and answers carry fully gathered ICE candidates in their SDP. Media and file bytes never enter the room log.",
       "types": [
         {
           "type": "session.offer",
@@ -925,7 +985,7 @@
             },
             "additionalProperties": false
           },
-          "instructions": "session_id MUST be unique within the room. When to is omitted, any member allowed by this type's roles may answer. Files that must be citable later SHOULD be recorded afterwards with resource.add and a content digest."
+          "instructions": "session_id MUST be unique within the room. Gather ICE candidates before sending: the SDP description MUST carry them, because trickled candidates would each become a permanent record. When to is omitted, any member allowed by this type's roles may answer. Files that must be citable later SHOULD be recorded afterwards with resource.add and a content digest."
         },
         {
           "type": "session.answer",
@@ -1036,90 +1096,7 @@
             },
             "additionalProperties": false
           },
-          "instructions": "offer_event_id MUST reference an accepted session.offer in the same room, and session_id MUST match the offer."
-        },
-        {
-          "type": "session.candidate",
-          "kind": "signal",
-          "title": "Session ICE candidate",
-          "description": "Supplies an ICE candidate or an end-of-candidates marker.",
-          "version": "1.0",
-          "status": "active",
-          "roles": [
-            "moderator",
-            "speaker"
-          ],
-          "rate_hint": 120,
-          "max_payload_hint": 16384,
-          "schema": {
-            "type": "object",
-            "required": [
-              "session_id"
-            ],
-            "properties": {
-              "session_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "candidate": {
-                "type": "object",
-                "required": [
-                  "candidate"
-                ],
-                "properties": {
-                  "candidate": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "sdp_mid": {
-                    "type": "string"
-                  },
-                  "sdp_mline_index": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "username_fragment": {
-                    "type": "string"
-                  }
-                },
-                "additionalProperties": false
-              },
-              "end_of_candidates": {
-                "type": "boolean"
-              },
-              "references": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_-]{43}$"
-                },
-                "uniqueItems": true
-              },
-              "extra": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            },
-            "anyOf": [
-              {
-                "required": [
-                  "candidate"
-                ]
-              },
-              {
-                "required": [
-                  "end_of_candidates"
-                ],
-                "properties": {
-                  "end_of_candidates": {
-                    "const": true
-                  }
-                }
-              }
-            ],
-            "additionalProperties": false
-          },
-          "instructions": "Send candidates for an open session you participate in. Use end_of_candidates: true to mark completion."
+          "instructions": "offer_event_id MUST reference an accepted session.offer in the same room, and session_id MUST match the offer. The SDP description MUST carry fully gathered ICE candidates."
         },
         {
           "type": "session.close",

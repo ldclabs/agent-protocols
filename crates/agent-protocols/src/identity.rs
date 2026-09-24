@@ -18,6 +18,37 @@ pub const DEFAULT_NONCE_TTL_MS: i64 = 300_000;
 pub const DEFAULT_REQUEST_JWT_TTL_SECS: i64 = 300;
 pub const MAX_NONCE_HEADER: &str = "Max-Seen-Nonce";
 pub const MAX_SAFE_NONCE: u64 = 0x1FFFFFFFFFFFFF;
+/// Largest jump a single `Max-Seen-Nonce` header may cause beyond
+/// `max(next_nonce, now)` (Agent Identity Section 6.2). The nonce sequence is
+/// shared by every service an agent uses, so one hostile service must not be
+/// able to exhaust it.
+pub const MAX_NONCE_JUMP: u64 = 1 << 32;
+
+/// The six Agent Identity event fields; protocols add their own on top.
+pub const IDENTITY_EVENT_FIELDS: [&str; 6] = [
+    "protocol",
+    "type",
+    "actor",
+    "created_at",
+    "nonce",
+    "payload",
+];
+
+/// Error codes shared by every Agent Protocols service (Section 8.1).
+pub const SHARED_ERROR_CODES: [&str; 12] = [
+    "invalid_request",
+    "invalid_event",
+    "invalid_event_hash",
+    "invalid_signature",
+    "invalid_actor",
+    "timestamp_out_of_window",
+    "nonce_not_greater",
+    "invalid_token",
+    "permission_denied",
+    "not_found",
+    "rate_limited",
+    "payload_too_large",
+];
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct AgentId(String);
@@ -135,7 +166,7 @@ impl AgentSigner {
         P: Serialize,
     {
         let event_hash = event_hash_bytes(&event)?;
-        let hash = URL_SAFE_NO_PAD.encode(&event_hash);
+        let hash = URL_SAFE_NO_PAD.encode(event_hash);
         let signature = sign_event_hash(&self.signing_key, &event_hash)
             .expect("event hashes are always 32 bytes");
         Ok(Envelope {
@@ -183,9 +214,13 @@ pub struct Event<P = Value> {
     pub base_seq: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_hash: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mentions: Vec<AgentId>,
+    /// `None` when the field is absent. An explicit empty list is kept, so a
+    /// deserialized event re-serializes to the bytes that were signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mentions: Option<Vec<AgentId>>,
     pub payload: P,
+    /// Unknown top-level fields, kept so the event hashes as signed. Protocol
+    /// validators reject them (the closed event object, Section 5.1).
     #[serde(default, flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -208,7 +243,7 @@ impl<P> Event<P> {
             room_id: None,
             base_seq: None,
             base_hash: None,
-            mentions: Vec::new(),
+            mentions: None,
             payload,
             extra: BTreeMap::new(),
         }
@@ -226,14 +261,93 @@ impl<P> Event<P> {
     }
 
     pub fn with_mentions(mut self, mentions: Vec<AgentId>) -> Self {
-        self.mentions = mentions;
+        self.mentions = Some(mentions);
         self
     }
 
     pub fn with_mention(mut self, agent_id: AgentId) -> Self {
-        self.mentions.push(agent_id);
+        self.mentions.get_or_insert_with(Vec::new).push(agent_id);
         self
     }
+
+    /// The event's mentions, empty when the field is absent.
+    pub fn mentions(&self) -> &[AgentId] {
+        self.mentions.as_deref().unwrap_or(&[])
+    }
+}
+
+/// Enforces the closed event object (Section 5.1): the event may carry only
+/// the six Agent Identity fields plus `extra_fields` the protocol defines.
+pub fn validate_event_fields<P>(event: &Event<P>, extra_fields: &[&str]) -> Result<()> {
+    let present = [
+        ("room_id", event.room_id.is_some()),
+        ("base_seq", event.base_seq.is_some()),
+        ("base_hash", event.base_hash.is_some()),
+        ("mentions", event.mentions.is_some()),
+    ];
+    for (field, is_present) in present {
+        if is_present && !extra_fields.contains(&field) {
+            return Err(SdkError::protocol(
+                "invalid_event",
+                format!("unknown event field: {field}"),
+            ));
+        }
+    }
+    if let Some(field) = event
+        .extra
+        .keys()
+        .find(|key| !extra_fields.contains(&key.as_str()))
+    {
+        return Err(SdkError::protocol(
+            "invalid_event",
+            format!("unknown event field: {field}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Error response body shared by every Agent Protocols service (Section 8.1).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ErrorResponse {
+    pub error: ErrorBody,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ErrorBody {
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+/// List response shape (Section 8.2). `next_cursor` is present exactly when
+/// more items follow.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ListResponse<T> {
+    pub result: Vec<T>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// An accepted envelope with the service's acceptance time (Section 8.3).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AcceptedRecord<P = Value> {
+    pub envelope: Envelope<P>,
+    pub accepted_at: i64,
+}
+
+/// Discovery document skeleton served at `/.well-known/{protocol-name}`
+/// (Section 8.4). Protocols add members, kept in `extra`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DiscoveryDocument {
+    pub protocol: String,
+    pub service: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub endpoints: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -319,9 +433,226 @@ pub fn verify_event_hash_signature(
     let signature_bytes: [u8; 64] = signature_bytes
         .try_into()
         .map_err(|bytes: Vec<u8>| SdkError::InvalidSignatureLength(bytes.len()))?;
-    let signature = Signature::from_bytes(&signature_bytes);
-    verifying_key.verify_strict(valid_event_hash_bytes(event_hash)?, &signature)?;
-    Ok(())
+    verify_ed25519_strict(
+        verifying_key,
+        valid_event_hash_bytes(event_hash)?,
+        &signature_bytes,
+    )
+}
+
+/// p = 2^255 - 19, little-endian.
+const FIELD_P_LE: [u8; 32] = [
+    0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+/// L = 2^252 + 27742317777372353535851937790883648493, little-endian.
+const GROUP_L_LE: [u8; 32] = [
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+];
+/// y-coordinates (sign bit cleared) of every small-order point (Appendix B).
+const SMALL_ORDER_Y: [[u8; 32]; 5] = [
+    [0; 32],
+    [
+        0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0,
+    ],
+    [
+        0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+    [
+        0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98,
+        0xf0, 0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53,
+        0xfc, 0x05,
+    ],
+    [
+        0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67,
+        0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac,
+        0x03, 0x7a,
+    ],
+];
+
+/// Little-endian `a < b`.
+fn less_than_le(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    for i in (0..32).rev() {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+    }
+    false
+}
+
+/// Canonical encoding (y < p) of a point that is not of small order.
+fn is_strict_point(encoding: &[u8; 32]) -> bool {
+    let mut y = *encoding;
+    y[31] &= 0x7f;
+    less_than_le(&y, &FIELD_P_LE) && !SMALL_ORDER_Y.contains(&y)
+}
+
+/// Ed25519 verification under the deterministic rules of Agent Identity
+/// Section 3.1: canonical, non-small-order `A` and `R`, reduced `S`, and the
+/// cofactorless equation (`verify_strict`).
+pub fn verify_ed25519_strict(
+    verifying_key: &VerifyingKey,
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Result<()> {
+    let failed = || SdkError::protocol("invalid_signature", "signature verification failed");
+    let r: [u8; 32] = signature[..32].try_into().expect("64-byte signature");
+    let s: [u8; 32] = signature[32..].try_into().expect("64-byte signature");
+    if !is_strict_point(verifying_key.as_bytes()) || !is_strict_point(&r) {
+        return Err(failed());
+    }
+    if !less_than_le(&s, &GROUP_L_LE) {
+        return Err(failed());
+    }
+    verifying_key
+        .verify_strict(message, &Signature::from_bytes(signature))
+        .map_err(|_| failed())
+}
+
+/// [`verify_ed25519_strict`] over a raw 32-byte public key, which may fail to
+/// decode as a point at all.
+pub fn verify_ed25519_strict_bytes(
+    public_key: &[u8; 32],
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Result<()> {
+    let failed = || SdkError::protocol("invalid_signature", "signature verification failed");
+    if !is_strict_point(public_key) {
+        return Err(failed());
+    }
+    let key = VerifyingKey::from_bytes(public_key).map_err(|_| failed())?;
+    verify_ed25519_strict(&key, message, signature)
+}
+
+/// Parses signed JSON strictly (Agent Identity Section 4.1): rejects
+/// duplicate member names, unpaired surrogates, and integers outside the safe
+/// range. `serde_json::Value` silently keeps the last of two duplicate names,
+/// so parse raw request bodies with this before hashing.
+pub fn parse_strict_json(text: &str) -> Result<Value> {
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    let value = StrictJson::deserialize(&mut deserializer)
+        .map_err(|err| SdkError::protocol("invalid_event", format!("invalid JSON: {err}")))?;
+    deserializer
+        .end()
+        .map_err(|err| SdkError::protocol("invalid_event", format!("invalid JSON: {err}")))?;
+    Ok(value.0)
+}
+
+/// [`parse_strict_json`] for a signed envelope, checking its outer shape.
+pub fn parse_envelope_json<P>(text: &str) -> Result<Envelope<P>>
+where
+    P: serde::de::DeserializeOwned,
+{
+    let value = parse_strict_json(text)?;
+    let object = value.as_object().ok_or_else(|| {
+        SdkError::protocol(
+            "invalid_event",
+            "envelope must contain hash, event, and signature",
+        )
+    })?;
+    if let Some(key) = object
+        .keys()
+        .find(|key| !matches!(key.as_str(), "hash" | "event" | "signature"))
+    {
+        return Err(SdkError::protocol(
+            "invalid_event",
+            format!("unknown envelope field: {key}"),
+        ));
+    }
+    serde_json::from_value(value)
+        .map_err(|err| SdkError::protocol("invalid_event", format!("invalid envelope: {err}")))
+}
+
+struct StrictJson(Value);
+
+impl<'de> Deserialize<'de> for StrictJson {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer
+            .deserialize_any(StrictJsonVisitor)
+            .map(StrictJson)
+    }
+}
+
+struct StrictJsonVisitor;
+
+impl<'de> serde::de::Visitor<'de> for StrictJsonVisitor {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("I-JSON")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> std::result::Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E: DeError>(self, value: i64) -> std::result::Result<Value, E> {
+        if value.unsigned_abs() > MAX_SAFE_NONCE {
+            return Err(E::custom("integer outside the safe range"));
+        }
+        Ok(Value::from(value))
+    }
+
+    fn visit_u64<E: DeError>(self, value: u64) -> std::result::Result<Value, E> {
+        if value > MAX_SAFE_NONCE {
+            return Err(E::custom("integer outside the safe range"));
+        }
+        Ok(Value::from(value))
+    }
+
+    fn visit_f64<E: DeError>(self, value: f64) -> std::result::Result<Value, E> {
+        if value.fract() == 0.0 && value.abs() > MAX_SAFE_NONCE as f64 {
+            return Err(E::custom("integer outside the safe range"));
+        }
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("number out of range"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> std::result::Result<Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> std::result::Result<Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(StrictJson(value)) = seq.next_element()? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> std::result::Result<Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut object = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if object.contains_key(&key) {
+                return Err(A::Error::custom(format!("duplicate member name {key:?}")));
+            }
+            let StrictJson(value) = map.next_value()?;
+            object.insert(key, value);
+        }
+        Ok(Value::Object(object))
+    }
 }
 
 fn valid_event_hash_bytes(event_hash: &[u8]) -> Result<&[u8; 32]> {
@@ -449,19 +780,37 @@ impl ClientNonceManager {
         Ok(nonce)
     }
 
-    pub fn observe_max_nonce(&mut self, max_nonce: u64) {
+    /// Clock-derived nonce, `max(last + 1, created_at)` (Section 6.2): it
+    /// stays monotonic across restarts, restores, and devices sharing a key.
+    pub fn next_nonce_at(&mut self, created_at: i64) -> Result<u64> {
+        let clock = u64::try_from(created_at).unwrap_or(0);
+        if clock > self.next_nonce {
+            self.next_nonce = clock;
+        }
+        self.next_nonce()
+    }
+
+    /// Applies a `Max-Seen-Nonce` value. A value more than [`MAX_NONCE_JUMP`]
+    /// beyond `max(next_nonce, now_ms)` is rejected rather than applied.
+    pub fn observe_max_nonce(&mut self, max_nonce: u64, now_ms: i64) -> Result<()> {
+        validate_nonce(max_nonce)?;
+        let floor = self.next_nonce.max(u64::try_from(now_ms).unwrap_or(0));
+        if max_nonce > floor.saturating_add(MAX_NONCE_JUMP) {
+            return Err(SdkError::InvalidNonce(format!(
+                "Max-Seen-Nonce {max_nonce} jumps too far beyond the local sequence"
+            )));
+        }
         if max_nonce >= self.next_nonce {
             self.next_nonce = max_nonce.saturating_add(1);
         }
+        Ok(())
     }
 
-    pub fn observe_max_nonce_header(&mut self, value: &str) -> Result<()> {
+    pub fn observe_max_nonce_header(&mut self, value: &str, now_ms: i64) -> Result<()> {
         let max_nonce = value
             .parse::<u64>()
             .map_err(|_| SdkError::InvalidNonce("invalid max nonce header".to_owned()))?;
-        validate_nonce(max_nonce)?;
-        self.observe_max_nonce(max_nonce);
-        Ok(())
+        self.observe_max_nonce(max_nonce, now_ms)
     }
 }
 
@@ -491,6 +840,42 @@ impl Default for LiveWriteOptions {
             nonce_ttl_ms: DEFAULT_NONCE_TTL_MS,
         }
     }
+}
+
+/// Outcome of [`verify_submission`]: an exact resubmission of an accepted
+/// envelope, or a new live write with the nonce now recorded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmissionResult {
+    Resubmission,
+    Accepted { max_nonce: u64 },
+}
+
+/// Agent Identity Section 6.1 for one submission: verifies the envelope,
+/// answers an exact resubmission of an accepted envelope before the time
+/// window and nonce checks (Section 6.3), and otherwise enforces both.
+pub fn verify_submission<P, S, F>(
+    envelope: &Envelope<P>,
+    options: &LiveWriteOptions,
+    nonce_store: &mut S,
+    is_accepted: F,
+) -> Result<SubmissionResult>
+where
+    P: Serialize,
+    S: NonceStore,
+    F: Fn(&str) -> bool,
+{
+    verify_envelope(envelope)?;
+    if is_accepted(&envelope.hash) {
+        return Ok(SubmissionResult::Resubmission);
+    }
+    verify_timestamp(envelope.event.created_at, options.now_ms, options.window_ms)?;
+    let max_nonce = nonce_store.check_and_update(
+        &envelope.event.actor,
+        envelope.event.nonce,
+        options.now_ms,
+        options.nonce_ttl_ms,
+    )?;
+    Ok(SubmissionResult::Accepted { max_nonce })
 }
 
 pub fn verify_live_envelope<P, S>(
@@ -601,10 +986,11 @@ pub fn verify_request_jwt(token: &str, context: &RequestAuthContext) -> Result<R
         return Err(SdkError::InvalidJwtClaim("kid/iss/sub"));
     }
 
-    header
-        .kid
-        .verifying_key()?
-        .verify_strict(signing_input.as_bytes(), &signature)?;
+    verify_ed25519_strict(
+        &header.kid.verifying_key()?,
+        signing_input.as_bytes(),
+        &signature.to_bytes(),
+    )?;
 
     if claims.aud != context.audience {
         return Err(SdkError::InvalidJwtClaim("aud"));
@@ -792,10 +1178,10 @@ mod tests {
         let mut manager = ClientNonceManager::new();
 
         assert_eq!(manager.next_nonce().unwrap(), 1);
-        manager.observe_max_nonce(5);
+        manager.observe_max_nonce(5, 0).unwrap();
 
         assert_eq!(manager.peek(), 6);
-        manager.observe_max_nonce(4);
+        manager.observe_max_nonce(4, 0).unwrap();
         assert_eq!(manager.peek(), 6);
         assert_eq!(manager.next_nonce().unwrap(), 6);
 
@@ -1056,14 +1442,14 @@ mod tests {
         let mut manager = ClientNonceManager::with_next(5).unwrap();
         assert_eq!(manager.peek(), 5);
 
-        manager.observe_max_nonce_header("10").unwrap();
+        manager.observe_max_nonce_header("10", 0).unwrap();
         assert_eq!(manager.peek(), 11);
         assert!(matches!(
-            manager.observe_max_nonce_header("not-a-number"),
+            manager.observe_max_nonce_header("not-a-number", 0),
             Err(SdkError::InvalidNonce(_))
         ));
         assert!(matches!(
-            manager.observe_max_nonce_header("9007199254740992"),
+            manager.observe_max_nonce_header("9007199254740992", 0),
             Err(SdkError::InvalidNonce(_))
         ));
     }

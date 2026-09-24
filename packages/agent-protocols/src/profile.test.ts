@@ -155,3 +155,19 @@ test("materializes payloads that carry every optional collection", () => {
   assert.deepEqual(profile.capabilities, payload.capabilities);
   assert.deepEqual(profile.delegations, payload.delegations);
 });
+
+test("profile updates must exceed the latest accepted nonce and carry no extra event fields", async () => {
+  const { validateProfileSuccession, validateProfileUpdate, profileUpdateEvent } = await import("./profile.js");
+  const { AgentSigner } = await import("./identity.js");
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(90));
+  const envelope = signer.signEvent(profileUpdateEvent(signer.agentId(), 1_000, 7, { id: signer.agentId(), name: "A" }));
+  validateProfileSuccession(envelope, undefined);
+  validateProfileSuccession(envelope, 6);
+  for (const latest of [7, 8]) {
+    assert.throws(() => validateProfileSuccession(envelope, latest), (error: unknown) =>
+      (error as { code: string; data: { max_nonce: number } }).code === "nonce_not_greater" &&
+      (error as { data: { max_nonce: number } }).data.max_nonce === latest);
+  }
+  const extra = signer.signEvent({ ...profileUpdateEvent(signer.agentId(), 1_000, 8, { id: signer.agentId(), name: "A" }), room_id: "r" });
+  assert.throws(() => validateProfileUpdate(extra), /unknown event field: room_id/);
+});

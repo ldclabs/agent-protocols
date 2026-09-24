@@ -4,9 +4,9 @@
 
 import {
   AgentStatus,
-  RoomJoinRequestStatus,
+  ArchiveRecord,
+  RoomJoinRequest,
   RoomResponse,
-  ServerRecord,
 } from "../discourse.js";
 import { AgentId } from "../identity.js";
 import { AgentProfile } from "../profile.js";
@@ -31,19 +31,22 @@ export interface LocalRoomState {
   room: RoomResponse;
   headSeq: number;
   headHash?: string;
+  /** Presented head for this connector session (local connector Section 4.2). */
+  presentedSeq?: number;
+  presentedHash?: string;
   syncedSeq: number;
   syncedHash?: string;
   subscribed: boolean;
   members: Map<AgentId, RoomMemberView>;
   timeline: TimelineItem[];
-  records: ServerRecord[];
+  records: ArchiveRecord[];
   readSeq: number;
   activeTurn?: ActiveTurn;
 }
 
 export type InboxEntryState =
   | { kind: "pending" }
-  | { kind: "claimed" }
+  | { kind: "claimed"; until: number }
   | { kind: "deferred"; until: number }
   | { kind: "acknowledged" };
 
@@ -70,7 +73,10 @@ export class LocalConnectorState {
   hosts = new Map<string, AgentProtocolsHost>();
   rooms = new Map<string, LocalRoomState>();
   profiles = new Map<AgentId, AgentProfile>();
-  joinRequests = new Map<string, RoomJoinRequestStatus[]>();
+  /** Join requests visible to this agent as a reviewer, by room key. */
+  joinRequests = new Map<string, RoomJoinRequest[]>();
+  /** This agent's own join requests, by room key. */
+  ownJoinRequests = new Map<string, RoomJoinRequest>();
   agentStatuses = new Map<string, Map<AgentId, AgentStatus>>();
   inbox = new Map<string, InboxEntry>();
   drafts = new Map<string, HeldDraftEntry>();

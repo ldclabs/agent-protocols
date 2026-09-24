@@ -85,7 +85,55 @@ pub enum SdkError {
     #[error("invalid JWT claim: {0}")]
     InvalidJwtClaim(&'static str),
 
+    /// A protocol error identified by its Agent Protocols error code.
+    #[error("{code}: {message}")]
+    Protocol { code: &'static str, message: String },
+
+    /// A non-2xx response. `code` and `data` come from the Agent Identity
+    /// error body when the service sent one; `max_seen_nonce` from the
+    /// `Max-Seen-Nonce` header.
+    #[error("HTTP {status}: {body}")]
+    HttpStatus {
+        status: u16,
+        code: Option<String>,
+        data: Option<serde_json::Value>,
+        max_seen_nonce: Option<String>,
+        body: String,
+    },
+
     #[cfg(feature = "http-client")]
     #[error("HTTP client error: {0}")]
     Http(#[from] reqwest::Error),
+}
+
+impl SdkError {
+    /// Builds a [`SdkError::Protocol`] error.
+    pub fn protocol(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Protocol {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// The Agent Protocols error code this error corresponds to, when there is one.
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Protocol { code, .. } => Some(code),
+            Self::HttpStatus { code, .. } => code.as_deref(),
+            Self::InvalidSignatureLength(_) | Self::Ed25519(_) => Some("invalid_signature"),
+            Self::InvalidEventHash { .. } | Self::InvalidEventHashLength(_) => {
+                Some("invalid_event_hash")
+            }
+            Self::TimestampOutOfWindow => Some("timestamp_out_of_window"),
+            Self::NonceNotGreater { .. } => Some("nonce_not_greater"),
+            Self::PermissionDenied => Some("permission_denied"),
+            Self::TypeNotDefined(_) => Some("type_not_defined"),
+            Self::TypeDisabled(_) => Some("type_disabled"),
+            Self::PayloadSchemaViolation(_) => Some("payload_schema_violation"),
+            Self::PackUnavailable(_) => Some("pack_unavailable"),
+            Self::InvalidJwt(_) | Self::InvalidJwtClaim(_) => Some("invalid_token"),
+            Self::InvalidActor(_) => Some("invalid_actor"),
+            _ => None,
+        }
+    }
 }

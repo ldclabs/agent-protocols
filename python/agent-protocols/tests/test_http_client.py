@@ -1,9 +1,11 @@
+import json
 import unittest
 
 import agent_protocols.http_client as http_client
 from agent_protocols.http_client import (
     DelegationClient,
     DiscourseClient,
+    HttpResponseError,
     ProfileClient,
     sse_events_url,
 )
@@ -13,16 +15,17 @@ AGENT_ID = AgentSigner.from_seed(bytes([1]) * 32).agent_id()
 
 
 class FakeResponse:
-    def __init__(self, payload, *, ok=True):
+    status_code = 200
+
+    def __init__(self, payload, *, status=None, headers=None, text=None):
         self._payload = payload
-        self._ok = ok
+        if status is not None:
+            self.status_code = status
+        self.headers = headers or {}
+        self.text = text if text is not None else json.dumps(payload)
 
     def json(self):
         return self._payload
-
-    def raise_for_status(self):
-        if not self._ok:
-            raise RuntimeError("HTTP error")
 
 
 class FakeSession:
@@ -77,11 +80,23 @@ class ProfileClientTests(unittest.TestCase):
         client.profile_events(AGENT_ID)
         self.assertTrue(session.calls[0][1].endswith("/events?limit=1"))
 
-    def test_raise_for_status_propagates(self):
-        session = FakeSession([FakeResponse(None, ok=False)])
+    def test_error_responses_carry_code_data_and_max_seen_nonce(self):
+        body = {"error": {"code": "nonce_not_greater", "message": "stale", "data": {"max_nonce": 10}}}
+        session = FakeSession(
+            [
+                FakeResponse(None, status=500, text="boom"),
+                FakeResponse(body, status=409, headers={"Max-Seen-Nonce": "10"}),
+            ]
+        )
         client = ProfileClient("https://api.example.com", session=session)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(HttpResponseError) as plain:
             client.get_profile(AGENT_ID)
+        self.assertEqual((plain.exception.status, plain.exception.code), (500, None))
+        with self.assertRaises(HttpResponseError) as coded:
+            client.get_profile(AGENT_ID)
+        self.assertEqual(coded.exception.code, "nonce_not_greater")
+        self.assertEqual(coded.exception.data, {"max_nonce": 10})
+        self.assertEqual(coded.exception.max_seen_nonce, "10")
 
 
 class DiscourseClientTests(unittest.TestCase):
@@ -93,9 +108,9 @@ class DiscourseClientTests(unittest.TestCase):
         client.protocol()
         client.create_room(envelope)
         client.room("room1")
-        client.request_join("room1", "jwt-a", {"role": "speaker"})
+        client.request_join("room1", envelope)
         client.join_request("room1", "req1", "jwt-b")
-        client.join_requests("room1", "jwt-c")
+        client.join_requests("room1", "jwt-c", status="pending")
         client.join_room("room1", envelope)
         client.leave_room("room1", envelope)
         client.submit_event("room1", envelope)
@@ -107,12 +122,15 @@ class DiscourseClientTests(unittest.TestCase):
         self.assertEqual(urls[0], "https://api.example.com/.well-known/agent-discourse")
         self.assertEqual(urls[1], "https://api.example.com/v1/rooms")
         self.assertEqual(urls[2], "https://api.example.com/v1/rooms/room1")
-        # bearer tokens forwarded
-        self.assertEqual(session.calls[3][2], {"Authorization": "Bearer jwt-a"})
+        # The signed join request authenticates the applicant; no JWT is sent.
+        self.assertEqual(urls[3], "https://api.example.com/v1/rooms/room1/join-requests")
+        self.assertIsNone(session.calls[3][2])
+        self.assertEqual(session.calls[3][3], envelope)
         self.assertEqual(
             urls[4], "https://api.example.com/v1/rooms/room1/join-requests/req1"
         )
         self.assertEqual(session.calls[4][2], {"Authorization": "Bearer jwt-b"})
+        self.assertEqual(urls[5], "https://api.example.com/v1/rooms/room1/join-requests?status=pending")
         self.assertEqual(session.calls[5][2], {"Authorization": "Bearer jwt-c"})
         # plain reads carry no auth header
         self.assertIsNone(session.calls[2][2])
@@ -166,11 +184,12 @@ class DiscourseClientTests(unittest.TestCase):
 
 PRINCIPAL_ID = "https://api.al.ink/d9c6a99cne5g00a6scn0"
 PRINCIPAL_DOCUMENT = {"id": PRINCIPAL_ID, "protocol": "agent-delegation/1.0", "updated_at": 1000, "controllers": [{"id": AGENT_ID, "source": "local", "valid_from": 0}], "aliases": ["https://al.ink/yan"]}
+DISCOVERY = {"protocol": "agent-delegation/1.0", "service": "https://api.al.ink", "endpoints": {"delegations": "https://api.al.ink/api/grants", "query": "https://api.al.ink/api/find"}}
 
 
 class DelegationClientTests(unittest.TestCase):
     def test_every_endpoint_uses_expected_method_and_path(self):
-        responses = [FakeResponse({"ok": True}) for _ in range(7)]
+        responses = [FakeResponse({"ok": True}) for _ in range(6)]
         responses[1] = FakeResponse(PRINCIPAL_DOCUMENT)
         session = FakeSession(responses)
         client = DelegationClient("https://api.al.ink/", session=session)
@@ -190,7 +209,6 @@ class DelegationClientTests(unittest.TestCase):
         client.protocol()
         client.principal(PRINCIPAL_ID)
         client.delegation("del_1")
-        client.delegation_status("del_1")
         client.delegation_events("del_1")
         client.submit_delegation_event(envelope)
         client.query_delegations(
@@ -202,36 +220,46 @@ class DelegationClientTests(unittest.TestCase):
         self.assertEqual(urls[1], PRINCIPAL_ID)
         self.assertEqual(session.calls[1][2], {"Accept": "application/json"})
         self.assertEqual(urls[2], "https://api.al.ink/v1/delegations/del_1")
-        self.assertEqual(urls[3], "https://api.al.ink/v1/delegations/del_1/status")
-        self.assertEqual(urls[4], "https://api.al.ink/v1/delegations/del_1/events")
-        self.assertEqual((session.calls[5][0], urls[5]), ("POST", "https://api.al.ink/v1/delegations"))
+        self.assertEqual(urls[3], "https://api.al.ink/v1/delegations/del_1/events")
+        self.assertEqual((session.calls[4][0], urls[4]), ("POST", "https://api.al.ink/v1/delegations"))
         self.assertEqual(
-            (session.calls[6][0], urls[6]), ("POST", "https://api.al.ink/v1/delegations/query")
+            (session.calls[5][0], urls[5]), ("POST", "https://api.al.ink/v1/delegations/query")
         )
-        self.assertEqual(session.calls[6][3]["status"], "active")
+        self.assertEqual(session.calls[5][3]["status"], "active")
 
-    def test_opaque_delegation_ids_are_encoded_as_one_path_segment(self):
-        session = FakeSession([FakeResponse({}) for _ in range(3)])
-        client = DelegationClient("https://api.example.com", session=session)
-        delegation_id = "a/b?#% 雪"
-
-        client.delegation(delegation_id)
-        client.delegation_status(delegation_id)
-        client.delegation_events(delegation_id)
-
-        encoded = "a%2Fb%3F%23%25%20%E9%9B%AA"
+    def test_discovered_endpoints_win_and_history_pages_are_followed(self):
+        session = FakeSession(
+            [
+                FakeResponse(DISCOVERY),
+                FakeResponse({"result": [{"accepted_at": 1}], "next_cursor": "c1"}),
+                FakeResponse({"result": [{"accepted_at": 2}]}),
+                FakeResponse({"result": []}),
+            ]
+        )
+        client = DelegationClient.discover("https://api.al.ink/", session=session)
+        records = client.all_delegation_events("del_1")
+        self.assertEqual([record["accepted_at"] for record in records], [1, 2])
+        client.query_delegations({"subject": AGENT_ID, "principal_id": PRINCIPAL_ID})
         self.assertEqual(
             [call[1] for call in session.calls],
             [
-                f"https://api.example.com/v1/delegations/{encoded}",
-                f"https://api.example.com/v1/delegations/{encoded}/status",
-                f"https://api.example.com/v1/delegations/{encoded}/events",
+                "https://api.al.ink/.well-known/agent-delegation",
+                "https://api.al.ink/api/grants/del_1/events",
+                "https://api.al.ink/api/grants/del_1/events?cursor=c1",
+                "https://api.al.ink/api/find",
             ],
         )
-        for dot_segment in (".", ".."):
-            with self.assertRaisesRegex(Exception, "dot segment"):
-                client.delegation(dot_segment)
-        self.assertEqual(len(session.calls), 3)
+        # Invalid IDs never leave the client.
+        for delegation_id in ("a/b", ".", "..", "", "a" * 129):
+            with self.assertRaisesRegex(Exception, "delegation id"):
+                client.delegation(delegation_id)
+        self.assertEqual(len(session.calls), 4)
+
+    def test_discovery_falls_back_to_default_paths(self):
+        session = FakeSession([FakeResponse({"error": {"code": "not_found", "message": "none"}}, status=404), FakeResponse({})])
+        client = DelegationClient.discover("https://api.example.com", session=session)
+        client.delegation("del_1")
+        self.assertEqual(session.calls[1][1], "https://api.example.com/v1/delegations/del_1")
 
     def test_enumeration_requires_a_jwt_and_queries_the_principal_endpoint(self):
         session = FakeSession([FakeResponse({"result": []}), FakeResponse({"result": []})])

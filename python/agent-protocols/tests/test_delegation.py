@@ -20,11 +20,7 @@ class DelegationTests(unittest.TestCase):
         subject = AgentSigner.from_seed(bytes([32]) * 32)
         payload = {
             "id": "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
-            "principal": {
-                "id": "https://api.al.ink/d9c6a99cne5g00a6scn0",
-                "type": "person",
-                "name": "Yan",
-            },
+            "principal_id": "https://api.al.ink/d9c6a99cne5g00a6scn0",
             "subject": subject.agent_id(),
             "relationship": "primary_delegate",
             "scopes": ["inbox.screen", "meeting.propose"],
@@ -68,7 +64,7 @@ class DelegationTests(unittest.TestCase):
             validate_delegation_grant_payload(
                 {
                     "id": "del",
-                    "principal": {"id": "http://example.com"},
+                    "principal_id": "http://example.com",
                     "subject": controller.agent_id(),
                     "scopes": [],
                     "audiences": ["https://dmsg.net"],
@@ -113,7 +109,7 @@ class DelegationTests(unittest.TestCase):
                 validate_delegation_grant_payload(
                     {
                         "id": "del",
-                        "principal": {"id": principal_id},
+                        "principal_id": principal_id,
                         "subject": signer.agent_id(),
                         "scopes": ["scope"],
                         "audiences": ["https://dmsg.net"],
@@ -134,7 +130,7 @@ class Revision20260704DelegationTests(unittest.TestCase):
         subject = AgentSigner.from_seed(bytes([46]) * 32).agent_id()
         base = {
             "id": "del_1",
-            "principal": {"id": "https://api.al.ink/d9c6a99cne5g00a6scn0"},
+            "principal_id": "https://api.al.ink/d9c6a99cne5g00a6scn0",
             "subject": subject,
             "scopes": ["inbox.screen"],
             "audiences": ["https://dmsg.net"],

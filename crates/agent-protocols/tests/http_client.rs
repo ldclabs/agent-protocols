@@ -12,16 +12,18 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use agent_protocols::delegation::{
-    delegation_revoke_event, DelegationQueryRequest, DelegationRevokePayload, DelegationStatus,
+    delegation_revoke_event, DelegationQueryRequest, DelegationRevokePayload,
+    DelegationServiceEndpoints, DelegationStatus,
 };
 use agent_protocols::discourse::{
-    build_server_record, discourse_event, event_type, room_create_event, AgentStatusInput, Role,
-    RoomCreatePayload, RoomJoinPayload, RoomJoinRequestInput, RoomLeavePayload, Visibility,
+    build_server_record, discourse_event, event_type, room_create_event, room_join_request_event,
+    AgentStatusInput, Role, RoomCreatePayload, RoomJoinPayload, RoomJoinRequestPayload,
+    RoomLeavePayload, Visibility,
 };
 use agent_protocols::error::SdkError;
 use agent_protocols::http_client::{
-    sse_events_url, DelegationClient, DiscourseClient, ProfileClient, PublicRoomsOptions,
-    RoomEventsOptions,
+    sse_events_url, DelegationClient, DiscourseClient, JoinRequestsOptions, ProfileClient,
+    PublicRoomsOptions, RoomEventsOptions,
 };
 use agent_protocols::identity::{AgentId, AgentSigner};
 use agent_protocols::profile::{profile_update_event, ProfileUpdatePayload};
@@ -37,15 +39,17 @@ struct RecordedRequest {
     body: String,
 }
 
+type Response = (u16, String, Option<(String, String)>);
+
 struct MockServer {
     base_url: String,
-    responses: Arc<Mutex<VecDeque<(u16, String)>>>,
+    responses: Arc<Mutex<VecDeque<Response>>>,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
 impl MockServer {
     fn start() -> Self {
-        let responses: Arc<Mutex<VecDeque<(u16, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let responses: Arc<Mutex<VecDeque<Response>>> = Arc::new(Mutex::new(VecDeque::new()));
         let requests: Arc<Mutex<Vec<RecordedRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = std::sync::mpsc::channel();
         let responses_for_server = responses.clone();
@@ -61,12 +65,12 @@ impl MockServer {
                     };
                     let request = read_request(&mut socket).await;
                     requests_for_server.lock().unwrap().push(request);
-                    let (status, body) = responses_for_server
+                    let (status, body, header) = responses_for_server
                         .lock()
                         .unwrap()
                         .pop_front()
-                        .unwrap_or((200, "null".to_owned()));
-                    write_response(&mut socket, status, &body).await;
+                        .unwrap_or((200, "null".to_owned(), None));
+                    write_response(&mut socket, status, &body, header).await;
                 }
             });
         });
@@ -82,7 +86,15 @@ impl MockServer {
         self.responses
             .lock()
             .unwrap()
-            .push_back((status, body.into()));
+            .push_back((status, body.into(), None));
+    }
+
+    fn enqueue_with_header(&self, status: u16, body: &str, name: &str, value: &str) {
+        self.responses.lock().unwrap().push_back((
+            status,
+            body.to_owned(),
+            Some((name.to_owned(), value.to_owned())),
+        ));
     }
 
     fn requests(&self) -> Vec<RecordedRequest> {
@@ -135,9 +147,17 @@ async fn read_request(socket: &mut TcpStream) -> RecordedRequest {
     }
 }
 
-async fn write_response(socket: &mut TcpStream, status: u16, body: &str) {
+async fn write_response(
+    socket: &mut TcpStream,
+    status: u16,
+    body: &str,
+    header: Option<(String, String)>,
+) {
+    let extra = header
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .unwrap_or_default();
     let response = format!(
-        "HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} OK\r\ncontent-type: application/json\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = socket.write_all(response.as_bytes()).await;
@@ -178,7 +198,6 @@ fn server_record_body() -> String {
             1,
             "room-head-hash",
             RoomJoinPayload {
-                request_id: Some("jr1".to_owned()),
                 role: Role::Speaker,
                 perspective: None,
             },
@@ -260,33 +279,47 @@ fn discourse_client_round_trips_every_endpoint() {
     let server = MockServer::start();
     let record_body = server_record_body();
     let aid = sample_agent_id();
-    let join_status = format!(
-        r#"{{"request":{{"id":"jr1","room_id":"room1","applicant":"{aid}","role":"speaker","created_at":1,"expires_at":2}},"status":"pending"}}"#
-    );
+    let applicant = AgentSigner::from_seed([5; 32]);
+    let join_envelope = applicant
+        .sign_event(room_join_request_event(
+            applicant.agent_id(),
+            1,
+            1,
+            "room1",
+            RoomJoinRequestPayload::new(Role::Speaker),
+        ))
+        .unwrap();
+    let join_status = serde_json::json!({
+        "id": join_envelope.hash,
+        "request": join_envelope,
+        "status": "pending",
+        "expires_at": 2
+    })
+    .to_string();
     let room_body =
-        r#"{"id":"room1","status":"active","url":"http://x","seq":1,"hash":"h","received_at":1}"#;
+        r#"{"id":"room1","status":"active","url":"http://x","seq":1,"hash":"h","accepted_at":1}"#;
     let status_body = format!(
         r#"{{"room_id":"room1","agent_id":"{aid}","state":"idle","expires_at":2,"updated_at":1}}"#
     );
 
     server.enqueue(
         200,
-        r#"{"protocol":"agent-discourse/1.0","host":"example"}"#,
+        r#"{"protocol":"agent-discourse/1.0","service":"https://api.example.com"}"#,
     );
     server.enqueue(200, room_body); // create_room
     server.enqueue(200, room_body); // room
-    server.enqueue(200, "[]"); // public_rooms
-    server.enqueue(200, "[]"); // my_rooms
+    server.enqueue(200, r#"{"result":[]}"#); // public_rooms
+    server.enqueue(200, r#"{"result":[]}"#); // my_rooms
     server.enqueue(200, join_status.clone()); // request_join
     server.enqueue(200, join_status.clone()); // join_request
-    server.enqueue(200, format!("[{join_status}]")); // join_requests
+    server.enqueue(200, format!(r#"{{"result":[{join_status}]}}"#)); // join_requests
     server.enqueue(200, record_body.clone()); // join_room
     server.enqueue(200, record_body.clone()); // leave_room
     server.enqueue(200, record_body.clone()); // submit_event
-    server.enqueue(200, "[]"); // events
-    server.enqueue(200, "[]"); // events_with_options
-    server.enqueue(200, r#"{"statuses":[]}"#); // agent_statuses
-    server.enqueue(200, format!(r#"{{"status":{status_body}}}"#)); // agent_status
+    server.enqueue(200, r#"{"result":[]}"#); // events
+    server.enqueue(200, r#"{"result":[],"next_cursor":"n"}"#); // events_with_options
+    server.enqueue(200, r#"{"result":[]}"#); // agent_statuses
+    server.enqueue(200, status_body.clone()); // agent_status
     server.enqueue(200, status_body); // set_agent_status
     server.enqueue(200, r#"{"manifest":true}"#); // archive
 
@@ -295,18 +328,25 @@ fn discourse_client_round_trips_every_endpoint() {
         let client = DiscourseClient::with_client(&server.base_url, no_proxy_client());
         let signer = AgentSigner::from_seed([3; 32]);
 
-        client.protocol().await.unwrap();
+        let discovery = client.protocol().await.unwrap();
+        assert_eq!(discovery.service, "https://api.example.com");
 
         let create_envelope = signer
             .sign_event(room_create_event(
                 signer.agent_id(),
                 1,
                 1,
-                RoomCreatePayload::new("Topic", Visibility::Public, 1, 2),
+                RoomCreatePayload::new(
+                    "https://api.example.com",
+                    "Topic",
+                    Visibility::Public,
+                    1,
+                    2,
+                ),
             ))
             .unwrap();
         client.create_room(&create_envelope).await.unwrap();
-        client.room("room1").await.unwrap();
+        client.room("room1", None).await.unwrap();
         client
             .public_rooms(&PublicRoomsOptions {
                 status: Some("active".to_owned()),
@@ -319,12 +359,26 @@ fn discourse_client_round_trips_every_endpoint() {
             .unwrap();
         client.my_rooms("jwt-me").await.unwrap();
 
-        let input = RoomJoinRequestInput::new(Role::Speaker);
-        client.request_join("room1", "jwt-a", &input).await.unwrap();
-        client.join_request("room1", "jr1", "jwt-b").await.unwrap();
-        client.join_requests("room1", "jwt-c").await.unwrap();
+        let request = client.request_join("room1", &join_envelope).await.unwrap();
+        assert_eq!(request.id, join_envelope.hash);
+        client
+            .join_request("room1", &join_envelope.hash, "jwt-b")
+            .await
+            .unwrap();
+        let requests = client
+            .join_requests(
+                "room1",
+                "jwt-c",
+                &JoinRequestsOptions {
+                    status: Some("pending".to_owned()),
+                    ..JoinRequestsOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(requests.result.len(), 1);
 
-        let join_envelope = signer
+        let join = signer
             .sign_event(discourse_event(
                 event_type::ROOM_JOIN,
                 signer.agent_id(),
@@ -334,13 +388,12 @@ fn discourse_client_round_trips_every_endpoint() {
                 1,
                 "room-head-hash",
                 RoomJoinPayload {
-                    request_id: Some("jr1".to_owned()),
                     role: Role::Speaker,
                     perspective: None,
                 },
             ))
             .unwrap();
-        client.join_room("room1", &join_envelope).await.unwrap();
+        client.join_room("room1", &join).await.unwrap();
 
         let leave_envelope = signer
             .sign_event(discourse_event(
@@ -374,7 +427,7 @@ fn discourse_client_round_trips_every_endpoint() {
             .unwrap();
 
         client.events("room1").await.unwrap();
-        client
+        let page = client
             .events_with_options(
                 "room1",
                 &RoomEventsOptions {
@@ -386,18 +439,19 @@ fn discourse_client_round_trips_every_endpoint() {
             )
             .await
             .unwrap();
+        assert_eq!(page.next_cursor.as_deref(), Some("n"));
 
         let agent_id: AgentId = aid.parse().unwrap();
         let statuses = client
             .agent_statuses("room1", Some("jwt-status-list"))
             .await
             .unwrap();
-        assert!(statuses.statuses.is_empty());
+        assert!(statuses.result.is_empty());
         let status = client
             .agent_status("room1", &agent_id, Some("jwt-status-get"))
             .await
             .unwrap();
-        assert_eq!(status.status.state, "idle");
+        assert_eq!(status.state, "idle");
         let status = client
             .set_agent_status(
                 "room1",
@@ -427,8 +481,15 @@ fn discourse_client_round_trips_every_endpoint() {
     );
     assert_eq!(requests[4].path, "/v1/me/rooms");
     assert_eq!(requests[4].authorization.as_deref(), Some("Bearer jwt-me"));
-    assert_eq!(requests[5].authorization.as_deref(), Some("Bearer jwt-a"));
+    // The signed request authenticates the applicant; no JWT is sent.
+    assert_eq!(requests[5].path, "/v1/rooms/room1/join-requests");
+    assert_eq!(requests[5].authorization, None);
+    assert!(requests[5].body.contains("room.join.request"));
     assert_eq!(requests[6].authorization.as_deref(), Some("Bearer jwt-b"));
+    assert_eq!(
+        requests[7].path,
+        "/v1/rooms/room1/join-requests?status=pending"
+    );
     assert_eq!(requests[7].authorization.as_deref(), Some("Bearer jwt-c"));
     assert_eq!(requests[11].path, "/v1/rooms/room1/events");
     assert_eq!(
@@ -459,24 +520,27 @@ fn discourse_client_round_trips_every_endpoint() {
     assert_eq!(requests[16].path, "/v1/rooms/room1/archive");
 }
 
+fn credential_body(id: &str) -> String {
+    const PRINCIPAL_ID: &str = "https://api.al.ink/d9c6a99cne5g00a6scn0";
+    let aid = sample_agent_id();
+    format!(
+        r#"{{"id":"{id}","protocol":"agent-delegation/1.0","principal_id":"{PRINCIPAL_ID}","controller":"{aid}","owner_controller":"{aid}","grant_event_id":"e","accepted_at":1,"subject":"{aid}","scopes":["inbox.screen"],"audiences":["https://dmsg.net"],"status":"active","updated_at":1,"checked_at":2,"event_id":"e"}}"#
+    )
+}
+
 #[test]
 fn delegation_client_round_trips_every_endpoint() {
     const PRINCIPAL_ID: &str = "https://api.al.ink/d9c6a99cne5g00a6scn0";
     let server = MockServer::start();
     let aid = sample_agent_id();
-    let credential_body = format!(
-        r#"{{"id":"del_1","protocol":"agent-delegation/1.0","principal":{{"id":"{PRINCIPAL_ID}"}},"controller":"{aid}","owner_controller":"{aid}","grant_event_id":"e","accepted_at":1,"subject":"{aid}","scopes":["inbox.screen"],"audiences":["https://dmsg.net"],"status":"active","updated_at":1,"event_id":"e"}}"#
-    );
-    let status_body = r#"{"protocol":"agent-delegation/1.0","grant_event_id":"e","accepted_at":1,"id":"del_1","status":"active","checked_at":2,"event_id":"e"}"#;
 
     server.enqueue(
         200,
         r#"{"protocol":"agent-delegation/1.0","service":"https://api.al.ink","endpoints":{"delegations":"https://api.al.ink/v1/delegations"}}"#,
     );
-    server.enqueue(200, credential_body);
-    server.enqueue(200, status_body);
-    server.enqueue(200, r#"{"result":[],"acceptances":[]}"#);
-    server.enqueue(200, status_body);
+    server.enqueue(200, credential_body("del_1"));
+    server.enqueue(200, r#"{"result":[]}"#);
+    server.enqueue(200, credential_body("del_1"));
     server.enqueue(200, r#"{"result":[]}"#);
 
     block_on(async {
@@ -496,9 +560,7 @@ fn delegation_client_round_trips_every_endpoint() {
         assert!(err.to_string().contains("HTTPS"), "{err}");
         let credential = client.delegation("del_1").await.unwrap();
         assert_eq!(credential.id, "del_1");
-        let status = client.delegation_status("del_1").await.unwrap();
-        assert_eq!(status.status, DelegationStatus::Active);
-        let events = client.delegation_events("del_1").await.unwrap();
+        let events = client.delegation_events("del_1", None).await.unwrap();
         assert!(events.result.is_empty());
 
         let envelope = signer
@@ -514,7 +576,7 @@ fn delegation_client_round_trips_every_endpoint() {
             ))
             .unwrap();
         let response = client.submit_delegation_event(&envelope).await.unwrap();
-        assert_eq!(response["status"], "active");
+        assert_eq!(response.status, DelegationStatus::Active);
         let query = client
             .query_delegations(
                 &DelegationQueryRequest {
@@ -534,72 +596,125 @@ fn delegation_client_round_trips_every_endpoint() {
     let requests = server.requests();
     assert_eq!(requests[0].path, "/.well-known/agent-delegation");
     assert_eq!(requests[1].path, "/v1/delegations/del_1");
-    assert_eq!(requests[2].path, "/v1/delegations/del_1/status");
-    assert_eq!(requests[3].path, "/v1/delegations/del_1/events");
+    assert_eq!(requests[2].path, "/v1/delegations/del_1/events");
+    assert_eq!(requests[3].method, "POST");
+    assert_eq!(requests[3].path, "/v1/delegations");
     assert_eq!(requests[4].method, "POST");
-    assert_eq!(requests[4].path, "/v1/delegations");
-    assert_eq!(requests[5].method, "POST");
-    assert_eq!(requests[5].path, "/v1/delegations/query");
-    assert!(requests[5].body.contains("active"));
+    assert_eq!(requests[4].path, "/v1/delegations/query");
+    assert!(requests[4].body.contains("active"));
 }
 
 #[test]
-fn delegation_ids_are_encoded_as_one_path_segment() {
-    const PRINCIPAL_ID: &str = "https://api.al.ink/d9c6a99cne5g00a6scn0";
+fn delegation_client_prefers_discovered_endpoints_and_pages_history() {
     let server = MockServer::start();
-    let aid = sample_agent_id();
-    let credential_body = format!(
-        r#"{{"id":"a/b?#% 雪","protocol":"agent-delegation/1.0","principal":{{"id":"{PRINCIPAL_ID}"}},"controller":"{aid}","owner_controller":"{aid}","grant_event_id":"e","accepted_at":1,"subject":"{aid}","scopes":["inbox.screen"],"audiences":["https://dmsg.net"],"status":"active","updated_at":1,"event_id":"e"}}"#
+    let base = server.base_url.clone();
+    server.enqueue(
+        200,
+        format!(
+            r#"{{"protocol":"agent-delegation/1.0","service":"{base}","endpoints":{{"delegations":"{base}/api/grants","query":"{base}/api/find"}}}}"#
+        ),
     );
-    let status_body = r#"{"protocol":"agent-delegation/1.0","grant_event_id":"e","accepted_at":1,"id":"a/b?#% 雪","status":"active","checked_at":2,"event_id":"e"}"#;
-    server.enqueue(200, credential_body);
-    server.enqueue(200, status_body);
-    server.enqueue(200, r#"{"result":[],"acceptances":[]}"#);
+    server.enqueue(200, r#"{"result":[],"next_cursor":"c1"}"#);
+    server.enqueue(200, r#"{"result":[]}"#);
+    server.enqueue(200, r#"{"result":[]}"#);
 
     block_on(async {
-        let client = DelegationClient::with_client(&server.base_url, no_proxy_client());
-        let id = "a/b?#% 雪";
-        client.delegation(id).await.unwrap();
-        client.delegation_status(id).await.unwrap();
-        client.delegation_events(id).await.unwrap();
-        assert!(client.delegation(".").await.is_err());
-        assert!(client.delegation("..").await.is_err());
+        let client = DelegationClient::discover_with_client(&base, no_proxy_client()).await;
+        let records = client.all_delegation_events("del_1").await.unwrap();
+        assert!(records.is_empty());
+        client
+            .query_delegations(
+                &DelegationQueryRequest {
+                    subject: Some(sample_agent_id().parse().unwrap()),
+                    principal_id: Some("https://example.com/p".to_owned()),
+                    ..DelegationQueryRequest::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        // Invalid IDs are rejected before any request.
+        for id in ["a/b", ".", "..", ""] {
+            assert!(client.delegation(id).await.is_err(), "{id}");
+        }
+        // Without discovery, the RECOMMENDED paths apply.
+        let fallback = DelegationClient::with_endpoints(
+            &base,
+            no_proxy_client(),
+            &DelegationServiceEndpoints::default(),
+        );
+        drop(fallback);
     });
 
-    let encoded = "a%2Fb%3F%23%25%20%E9%9B%AA";
+    let paths = server
+        .requests()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect::<Vec<_>>();
     assert_eq!(
-        server
-            .requests()
-            .iter()
-            .map(|request| request.path.as_str())
-            .collect::<Vec<_>>(),
+        paths,
         vec![
-            format!("/v1/delegations/{encoded}"),
-            format!("/v1/delegations/{encoded}/status"),
-            format!("/v1/delegations/{encoded}/events"),
+            "/.well-known/agent-delegation".to_owned(),
+            "/api/grants/del_1/events".to_owned(),
+            "/api/grants/del_1/events?cursor=c1".to_owned(),
+            "/api/find".to_owned(),
         ]
     );
 }
 
 #[test]
-fn error_status_is_propagated() {
+fn delegation_discovery_falls_back_to_default_paths() {
     let server = MockServer::start();
-    server.enqueue(500, r#"{"error":"boom"}"#);
-    server.enqueue(503, r#"{"error":"unavailable"}"#);
+    server.enqueue(404, r#"{"error":{"code":"not_found","message":"none"}}"#);
+    server.enqueue(200, r#"{"result":[]}"#);
+    block_on(async {
+        let client =
+            DelegationClient::discover_with_client(&server.base_url, no_proxy_client()).await;
+        client.delegation_events("del_1", None).await.unwrap();
+    });
+    assert_eq!(server.requests()[1].path, "/v1/delegations/del_1/events");
+}
+
+#[test]
+fn error_responses_carry_code_data_and_max_seen_nonce() {
+    let server = MockServer::start();
+    server.enqueue(500, "boom");
+    server.enqueue_with_header(
+        409,
+        r#"{"error":{"code":"nonce_not_greater","message":"stale","data":{"max_nonce":10}}}"#,
+        "Max-Seen-Nonce",
+        "10",
+    );
     let aid = sample_agent_id();
     block_on(async {
         let profile_client = ProfileClient::with_client(&server.base_url, no_proxy_client());
         let agent_id: AgentId = aid.parse().unwrap();
-        assert!(matches!(
-            profile_client.get_profile(&agent_id).await,
-            Err(SdkError::Http(_))
-        ));
+        match profile_client.get_profile(&agent_id).await {
+            Err(SdkError::HttpStatus {
+                status: 500,
+                code: None,
+                body,
+                ..
+            }) => assert_eq!(body, "boom"),
+            other => panic!("unexpected {other:?}"),
+        }
 
         let discourse_client = DiscourseClient::with_client(&server.base_url, no_proxy_client());
-        assert!(matches!(
-            discourse_client.room("room1").await,
-            Err(SdkError::Http(_))
-        ));
+        let error = discourse_client.room("room1", None).await.unwrap_err();
+        assert_eq!(error.code(), Some("nonce_not_greater"));
+        match error {
+            SdkError::HttpStatus {
+                status,
+                data,
+                max_seen_nonce,
+                ..
+            } => {
+                assert_eq!(status, 409);
+                assert_eq!(data, Some(serde_json::json!({"max_nonce": 10})));
+                assert_eq!(max_seen_nonce.as_deref(), Some("10"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     });
 }
 

@@ -90,7 +90,11 @@ class ValidationTests(unittest.TestCase):
 
     def test_validate_pack_import_covers_each_arm(self):
         validate_pack_import({"use": PACK_REACTIONS})
-        validate_pack_import({"pack": "https://example.com/p.json", "digest": "sha256:abc"})
+        validate_pack_import({"pack": "https://example.com/p.json", "digest": "sha256:" + "A" * 43})
+        with self.assertRaises(AgentProtocolError):
+            validate_pack_import({"pack": "https://example.com/p.json", "digest": "sha256:abc"})
+        with self.assertRaises(AgentProtocolError):
+            validate_pack_import({"pack": "http://example.com/p.json", "digest": "sha256:" + "A" * 43})
         with self.assertRaises(AgentProtocolError):
             validate_pack_import({"pack": "https://example.com/p.json", "digest": "  "})
         with self.assertRaises(AgentProtocolError):

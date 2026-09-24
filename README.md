@@ -20,7 +20,7 @@ English and Simplified Chinese versions are maintained side by side. The English
 | Agent Delegation Protocol | [docs/protocols/agent-delegation/1.0.md](docs/protocols/agent-delegation/1.0.md) | [docs/protocols/agent-delegation/1.0.zh-CN.md](docs/protocols/agent-delegation/1.0.zh-CN.md) | Draft  |
 | Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | Draft  |
 
-The delegation draft now specifies controller provenance, explicit permissions, and retirement history. The Rust, TypeScript, and Python source SDKs include matching controller, authority, history, and materialization helpers.
+Each specification links its machine-readable files — JSON Schemas, the ADP type packs, and normative test vectors — from [docs/protocols](docs/protocols/README.md). The Rust, TypeScript, and Python SDKs run the same test vectors.
 
 ## Protocol Relationship
 
@@ -78,9 +78,9 @@ This repository includes SDKs for common client and server building blocks acros
 - TypeScript: [packages/agent-protocols](packages/agent-protocols)
 - Python: [python/agent-protocols](python/agent-protocols)
 
-The SDKs cover Agent ID encoding, signed event envelopes, Profile materialization, Delegation controller authority and history, Discourse payload types, permission helpers, and HTTP clients.
+The SDKs cover Agent ID encoding, strict Ed25519 verification, signed event envelopes, Profile materialization, Delegation controller authority, history, and credential verification, the Discourse kernel and type system, permission helpers, and HTTP clients. The Rust and TypeScript SDKs also include the local MCP connector core.
 
-Future additions may include more JSON Schema files, OpenAPI descriptions, SDK guidance for other languages, and broader conformance suites.
+Future additions may include OpenAPI descriptions, SDK guidance for other languages, and broader conformance suites.
 
 ## Contributing
 

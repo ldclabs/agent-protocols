@@ -8,26 +8,36 @@ import * as discourse from "./discourse.js";
 import {
   PackDocument,
   PermissionContext,
+  RoomCreatePayload,
   RoomJoinReviewPayload,
   TypeDef,
   TypeRegistry,
-  archiveEventsDigest,
   buildServerRecord,
   canAcceptRoomWrite,
+  canJoinDirectly,
   canSubmitEvent,
   canWriteInState,
+  effectiveOpenRoles,
+  eventRequiresRoomHead,
   eventType,
   packId,
   packMap,
+  redactServerRecord,
   roomCreateEvent,
+  roomJoinRequestEvent,
   serverRecordHash,
   typeDefineEvent,
   validateCustomEventTypeName,
   validateDiscourseEnvelope,
   validateEventAgainstRegistry,
   validatePackImport,
+  validatePortablePattern,
+  validateRoomCreateHost,
   validateRoomCreatePayload,
+  validateRoomJoinReviewPayload,
   validateRoomPath,
+  validateTypeSchemaProfile,
+  verifyArchiveRecords,
   verifyPackDigest,
   verifyServerRecord,
   verifyServerRecordChain,
@@ -44,6 +54,7 @@ const packsDocument = JSON.parse(
   ),
 ) as PackDocument;
 const packs = packMap(packsDocument);
+const HOST = "https://api.example.com";
 
 const findingDef: TypeDef = {
   type: "review.finding",
@@ -60,6 +71,17 @@ const findingDef: TypeDef = {
   },
 };
 
+function roomPayload(overrides: Partial<RoomCreatePayload> = {}): RoomCreatePayload {
+  return {
+    host: HOST,
+    topic: "Research room",
+    visibility: "public",
+    start_time: 1000,
+    end_time: 2000,
+    ...overrides,
+  };
+}
+
 test("loads the registered packs document", () => {
   assert.equal(packsDocument.protocol, "agent-discourse/1.0");
   assert.deepEqual(Object.keys(packs).sort(), [
@@ -69,38 +91,38 @@ test("loads the registered packs document", () => {
     packId.REACTIONS,
     packId.REALTIME,
   ].sort());
+  // Registered schemas follow the type schema profile and use integers only.
+  for (const pack of packsDocument.packs) {
+    for (const def of pack.types) validateTypeSchemaProfile(def.schema);
+  }
+  assert.ok(packs[packId.MODERATION].types.some((def) => def.type === "claim.update"));
+  assert.ok(!packs[packId.REALTIME].types.some((def) => def.type === "session.candidate"));
 });
 
-test("validates room.create without room_id", () => {
+test("validates room.create without room fields and binds it to a host", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(14));
-  const event = roomCreateEvent(signer.agentId(), 100, 1, {
-    topic: "Research room",
-    visibility: "public",
-    start_time: 1000,
-    end_time: 2000,
-  });
-  const envelope = signer.signEvent(event);
+  const envelope = signer.signEvent(roomCreateEvent(signer.agentId(), 100, 1, roomPayload()));
 
   assert.doesNotThrow(() => validateDiscourseEnvelope(envelope));
   assert.doesNotThrow(() => validateRoomPath(envelope, "d8ftedhpqhsusbg001tg"));
+  validateRoomCreateHost(envelope.event.payload, HOST);
+  assert.throws(() => validateRoomCreateHost(envelope.event.payload, "https://other.example"), /names/);
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ host: "https://api.example.com/v1" })), /origin/);
 });
 
-test("rejects room.create with room_id", () => {
+test("rejects room.create with room_id and unknown event fields", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(14));
-  const event = roomCreateEvent(signer.agentId(), 100, 1, {
-    topic: "Research room",
-    visibility: "public",
-    start_time: 1000,
-    end_time: 2000,
-  });
+  const event = roomCreateEvent(signer.agentId(), 100, 1, roomPayload());
   event.room_id = "d8ftedhpqhsusbg001tg";
   const envelope = signer.signEvent(event);
-
   assert.throws(() => validateDiscourseEnvelope(envelope), /room_id/);
   assert.throws(() => validateRoomPath(envelope, "d8ftedhpqhsusbg001tg"), /room_id/);
+
+  const extra = signer.signEvent({ ...roomCreateEvent(signer.agentId(), 100, 1, roomPayload()), audience: "x" });
+  assert.throws(() => validateDiscourseEnvelope(extra), /unknown event field: audience/);
 });
 
-test("rejects room events without room_id", () => {
+test("rejects room events without room_id or with a malformed one", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(15));
   const event = createEvent(
     "agent-discourse/1.0",
@@ -110,47 +132,51 @@ test("rejects room events without room_id", () => {
     1,
     { content_type: "text/plain", content: "hello" },
   );
-  const envelope = signer.signEvent(event);
-
-  assert.throws(() => validateDiscourseEnvelope(envelope), /room_id/);
+  assert.throws(() => validateDiscourseEnvelope(signer.signEvent(event)), /room_id/);
+  const bad = discourse.discourseEvent(eventType.MESSAGE_CREATE, signer.agentId(), 100, 1, "room/../x", 1, "h", { content_type: "text/plain", content: "x" });
+  assert.throws(() => validateDiscourseEnvelope(signer.signEvent(bad)), /room_id/);
 });
 
-test("validates room.join.review envelopes with canonical requests", () => {
+test("join requests are signed, unanchored, and embedded by reviews", () => {
   const moderator = AgentSigner.fromSeed(new Uint8Array(32).fill(21));
   const applicant = AgentSigner.fromSeed(new Uint8Array(32).fill(22));
-  const payload: RoomJoinReviewPayload = {
-    request: {
-      id: "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
-      room_id: "d8ftedhpqhsusbg001tg",
-      applicant: applicant.agentId(),
-      role: "speaker",
-      perspective: "distributed-systems reviewer",
-      reason: "I can cover replication and failure-mode tradeoffs.",
-      created_at: 1_779_757_210_000,
-      expires_at: 1_779_760_810_000,
-      extra: {},
-    },
-    decision: "approve",
+  const roomId = "d8ftedhpqhsusbg001tg";
+  const request = applicant.signEvent(roomJoinRequestEvent(applicant.agentId(), 1_779_757_210_000, 1, roomId, {
     role: "speaker",
-    reason: "relevant expertise",
-  };
-  const event = createEvent(
-    "agent-discourse/1.0",
-    eventType.ROOM_JOIN_REVIEW,
-    moderator.agentId(),
-    1_779_757_250_000,
-    1,
-    payload,
-  );
-  event.room_id = "d8ftedhpqhsusbg001tg";
-  event.base_seq = 17;
-  event.base_hash = "previous-record-hash";
-  const envelope = moderator.signEvent(event);
+    perspective: "distributed-systems reviewer",
+    reason: "I can cover replication and failure-mode tradeoffs.",
+  }));
+  validateDiscourseEnvelope(request);
+  // A join request carries no base: its author may not be able to read the room.
+  const anchored = applicant.signEvent({ ...roomJoinRequestEvent(applicant.agentId(), 1, 2, roomId, { role: "speaker" }), base_seq: 1, base_hash: "h" });
+  assert.throws(() => validateDiscourseEnvelope(anchored), /unknown event field: base_seq/);
 
-  assert.doesNotThrow(() => validateDiscourseEnvelope(envelope));
-  assert.equal(envelope.event.payload.request.applicant, applicant.agentId());
-  assert.equal(envelope.event.payload.request.role, "speaker");
-  assert.equal("member" in envelope.event.payload, false);
+  const payload: RoomJoinReviewPayload = { request, decision: "approve", role: "speaker", reason: "relevant expertise" };
+  const review = moderator.signEvent(discourse.discourseEvent(eventType.ROOM_JOIN_REVIEW, moderator.agentId(), 1_779_757_250_000, 1, roomId, 17, "previous-record-hash", payload));
+  validateDiscourseEnvelope(review);
+  validateRoomJoinReviewPayload(review.event.payload, roomId);
+  assert.equal(review.event.payload.request.event.actor, applicant.agentId());
+  assert.throws(() => validateRoomJoinReviewPayload({ ...payload, role: undefined }, roomId), /requires a role/);
+  assert.throws(() => validateRoomJoinReviewPayload(payload, "other-room"), /another room/);
+  const tampered = { ...payload, request: { ...request, event: { ...request.event, payload: { role: "moderator" as const } } } };
+  assert.throws(() => validateRoomJoinReviewPayload(tampered, roomId), /hash/);
+});
+
+test("direct join follows invites and open roles", () => {
+  const invited = AgentSigner.fromSeed(new Uint8Array(32).fill(23)).agentId();
+  const stranger = AgentSigner.fromSeed(new Uint8Array(32).fill(24)).agentId();
+  const policy = { invites: { [invited]: "moderator" as const }, open_roles: ["observer" as const] };
+  assert.equal(canJoinDirectly("private", policy, invited, "moderator"), true);
+  assert.equal(canJoinDirectly("private", policy, invited, "speaker"), false);
+  assert.equal(canJoinDirectly("private", policy, stranger, "observer"), false);
+  assert.equal(canJoinDirectly("public", policy, stranger, "observer"), true);
+  assert.equal(canJoinDirectly("public", policy, stranger, "speaker"), false);
+  assert.deepEqual(effectiveOpenRoles(undefined), ["speaker", "observer"]);
+  assert.deepEqual(effectiveOpenRoles({ observer_allowed: false }), ["speaker"]);
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { open_roles: ["moderator"] } })), /open_roles/);
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { observer_allowed: false, open_roles: ["observer"] } })), /observers/);
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { invites: { [invited]: "owner" as never } } })), /invited role/);
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { moderator_agent_ids: [invited] } as never })), /unknown policy field/);
 });
 
 test("validates custom event type names", () => {
@@ -196,7 +222,7 @@ test("materializes a type registry from packs and inline defs", () => {
   assert.ok(!subset.has("question.create"));
 });
 
-test("rejects bad pack imports", () => {
+test("rejects bad pack imports and declaration conflicts", () => {
   assert.throws(
     () => TypeRegistry.fromDeclarations([{ use: "adp:unknown/1.0" }], packs),
     /pack/,
@@ -216,6 +242,17 @@ test("rejects bad pack imports", () => {
       digest: "sha256:abc",
     }),
   );
+  assert.throws(() => validatePackImport({ pack: "http://example.com/p.json", digest: `sha256:${"A".repeat(43)}` }), /HTTPS/);
+  assert.throws(() => validatePackImport({ pack: "https://example.com/p.json", digest: "sha256:abc" }), /digest/);
+  // room.create declarations may not name a type twice.
+  assert.throws(
+    () => TypeRegistry.fromDeclarations([findingDef, { ...findingDef, title: "Again" }]),
+    /declared twice/,
+  );
+  assert.throws(
+    () => TypeRegistry.fromDeclarations([{ use: packId.REACTIONS }, { use: packId.REACTIONS }], packs),
+    /declared twice/,
+  );
 });
 
 test("latest type definition wins", () => {
@@ -227,7 +264,7 @@ test("latest type definition wins", () => {
 
 test("validates custom payloads against pack schemas", () => {
   const registry = TypeRegistry.fromDeclarations(
-    [{ use: packId.DELIBERATION }],
+    [{ use: packId.DELIBERATION }, { use: packId.CURATION }],
     packs,
   );
   const hash = "GDt8oHZQfQ3jl5ZUfyNxKZu07yAJdDYuaw_jf_JjLYs";
@@ -246,6 +283,8 @@ test("validates custom payloads against pack schemas", () => {
     () => validateEventAgainstRegistry("turn.update", {}, registry),
     /turn.update/,
   );
+  // `format` is an annotation: a non-URI string is not a schema violation.
+  registry.validatePayload("resource.add", { resource_type: "web", uri: "not a uri" });
 
   const disabled = new TypeRegistry();
   disabled.define({ ...findingDef, status: "disabled" });
@@ -257,6 +296,43 @@ test("validates custom payloads against pack schemas", () => {
       }),
     /review.finding/,
   );
+});
+
+test("type schemas follow the portable profile", () => {
+  for (const pattern of ["^[A-Za-z0-9_-]{43}$", "^did:agent:[A-Za-z0-9_-]{43}$", "a|b", "(ab)+c?", "[^,]{1,3}", "x{2,}", "\\.\\-"]) {
+    validatePortablePattern(pattern);
+  }
+  for (const pattern of ["\\d+", "a.b", "(?:a)", "(?=a)", "a*?", "\\p{L}", "[]a]", "[a[b]]", "a^b", "\\1", "{2}", "a{x}"]) {
+    assert.throws(() => validatePortablePattern(pattern), /not portable/, pattern);
+  }
+  validateTypeSchemaProfile({ type: "object", properties: { a: { $ref: "#/$defs/x" } }, $defs: { x: { type: "string", pattern: "^a$" } } });
+  for (const schema of [
+    { $ref: "https://example.com/schema.json" },
+    { $dynamicRef: "#x" },
+    { $schema: "http://json-schema.org/draft-07/schema#" },
+    { properties: { a: { pattern: "\\w" } } },
+    { patternProperties: { "\\d": {} } },
+    { allOf: [{ items: { pattern: "." } }] },
+  ]) {
+    assert.throws(() => validateTypeSchemaProfile(schema as Record<string, unknown>), /not allowed|dialect|fragment|portable/);
+  }
+  assert.throws(() => new TypeRegistry().define({ ...findingDef, schema: { type: "string", pattern: "\\s" } }), /portable/);
+});
+
+test("freshness classes decide which writes are head-bound", () => {
+  const registry = TypeRegistry.fromDeclarations([{ use: packId.REACTIONS }, { use: packId.MODERATION }], packs);
+  for (const type of [eventType.MESSAGE_CREATE, "turn.update", "claim.update", "unknown.custom"]) {
+    assert.equal(eventRequiresRoomHead(type, registry), true, type);
+  }
+  for (const type of [...discourse.CONTRACT_EVENT_TYPES, ...discourse.MEMBERSHIP_EVENT_TYPES, "reaction.create", "steer.create", eventType.ROOM_CREATE, eventType.ROOM_JOIN_REQUEST]) {
+    assert.equal(eventRequiresRoomHead(type, registry), false, type);
+  }
+  for (const type of discourse.CONTRACT_EVENT_TYPES) {
+    assert.equal(discourse.builtinEventClass(type), "contract");
+    assert.equal(discourse.eventAdvancesRoomHead(type), true);
+  }
+  assert.equal(discourse.recordClass(eventType.ROOM_JOIN_REQUEST), undefined);
+  assert.equal(discourse.recordClass("claim.update", registry), "control");
 });
 
 test("applies kind-based permissions", () => {
@@ -295,7 +371,7 @@ test("applies kind-based permissions", () => {
   // undefined types are rejected
   assert.equal(canSubmitEvent("session.offer", speaker, registry), false);
 
-  // built-in lifecycle rules
+  // built-in rules
   assert.equal(canSubmitEvent(eventType.ROOM_JOIN_REVIEW, moderator, registry), true);
   assert.equal(canSubmitEvent(eventType.ROOM_JOIN_REVIEW, speaker, registry), false);
   assert.equal(
@@ -308,11 +384,13 @@ test("applies kind-based permissions", () => {
   assert.equal(canSubmitEvent(eventType.MESSAGE_CREATE, speaker, registry), true);
   assert.equal(canSubmitEvent(eventType.MESSAGE_CREATE, observer, registry), false);
   assert.equal(canSubmitEvent(eventType.ROOM_LEAVE, observer, registry), true);
+  // The creator is a member until the room ends.
+  assert.equal(canSubmitEvent(eventType.ROOM_LEAVE, { isCreator: true, role: "moderator" }, registry), false);
   assert.equal(canSubmitEvent(eventType.ROOM_JOIN, observer, registry), false);
-  assert.equal(
-    canSubmitEvent(eventType.ROOM_JOIN, { joinRequestApproved: true }, registry),
-    true,
-  );
+  assert.equal(canSubmitEvent(eventType.ROOM_JOIN, { directJoinAllowed: true }, registry), true);
+  assert.equal(canSubmitEvent(eventType.ROOM_JOIN, {}, registry), false);
+  assert.equal(canSubmitEvent(eventType.ROOM_JOIN_REQUEST, {}, registry), true);
+  assert.equal(canSubmitEvent(eventType.ROOM_JOIN_REQUEST, speaker, registry), false);
 });
 
 test("applies state restrictions", () => {
@@ -327,7 +405,8 @@ test("applies state restrictions", () => {
     canAcceptRoomWrite(eventType.MESSAGE_CREATE, "scheduled", speaker),
     false,
   );
-  // scheduled allows pre-start setup: reviews, role updates, leave, type.define
+  // scheduled allows pre-start setup: requests, reviews, role updates, leave, type.define
+  assert.equal(canWriteInState(eventType.ROOM_JOIN_REQUEST, "scheduled"), true);
   assert.equal(canWriteInState(eventType.ROOM_JOIN_REVIEW, "scheduled"), true);
   assert.equal(
     canWriteInState(eventType.ROOM_MEMBER_ROLE_UPDATE, "scheduled"),
@@ -345,6 +424,7 @@ test("applies state restrictions", () => {
   assert.equal(canWriteInState("reaction.create", "ended"), false);
   assert.equal(canWriteInState(eventType.ROOM_LEAVE, "ended"), false);
   assert.equal(canWriteInState(eventType.ROOM_JOIN, "cancelled"), false);
+  assert.equal(canWriteInState(eventType.ROOM_JOIN_REQUEST, "ended"), false);
   // cancel only while scheduled, close only while active
   assert.equal(canWriteInState(eventType.ROOM_CLOSE, "active"), true);
   assert.equal(canWriteInState(eventType.ROOM_CANCEL, "active"), false);
@@ -352,58 +432,27 @@ test("applies state restrictions", () => {
 
 test("validates room creation payloads", () => {
   assert.doesNotThrow(() =>
-    validateRoomCreatePayload({
-      topic: "Research room",
+    validateRoomCreatePayload(roomPayload({
       guidance: "Cite sources.",
-      visibility: "public",
-      start_time: 1000,
-      end_time: 2000,
       policy: { max_speakers: 2 },
       types: [{ use: packId.REACTIONS }, findingDef],
-    }),
+    })),
   );
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ topic: " " })), /topic/);
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ start_time: 2000, end_time: 1000 })), /start_time/);
+  assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { max_speakers: 0 } })), /max_speakers/);
   assert.throws(
-    () =>
-      validateRoomCreatePayload({
-        topic: " ",
-        visibility: "public",
-        start_time: 1000,
-        end_time: 2000,
-      }),
-    /topic/,
-  );
-  assert.throws(
-    () =>
-      validateRoomCreatePayload({
-        topic: "Research room",
-        visibility: "public",
-        start_time: 2000,
-        end_time: 1000,
-      }),
-    /start_time/,
-  );
-  assert.throws(
-    () =>
-      validateRoomCreatePayload({
-        topic: "Research room",
-        visibility: "public",
-        start_time: 1000,
-        end_time: 2000,
-        policy: { max_speakers: 0 },
-      }),
-    /max_speakers/,
-  );
-  assert.throws(
-    () =>
-      validateRoomCreatePayload({
-        topic: "Research room",
-        visibility: "public",
-        start_time: 1000,
-        end_time: 2000,
-        types: [{ ...findingDef, type: "room.custom" }],
-      }),
+    () => validateRoomCreatePayload(roomPayload({ types: [{ ...findingDef, type: "room.custom" }] })),
     /reserved/,
   );
+});
+
+test("message content is a string or an object", () => {
+  discourse.validateMessageCreatePayload({ content_type: "text/plain", content: "hi" });
+  discourse.validateMessageCreatePayload({ content_type: "application/json", content: { a: 1 } });
+  for (const content of [1, [], null, true]) {
+    assert.throws(() => discourse.validateMessageCreatePayload({ content_type: "application/json", content } as never), /string or an object/);
+  }
 });
 
 test("signs and validates type.define envelopes", () => {
@@ -425,57 +474,51 @@ test("verifies pack digests", () => {
   const bytes = new TextEncoder().encode("pack document bytes");
   const expected = `sha256:${createHash("sha256").update(bytes).digest("base64url")}`;
   assert.doesNotThrow(() => verifyPackDigest(bytes, expected));
+  const sha3 = `sha3-256:${createHash("sha3-256").update(bytes).digest("base64url")}`;
+  assert.doesNotThrow(() => verifyPackDigest(bytes, sha3));
   assert.throws(
     () => verifyPackDigest(new TextEncoder().encode("tampered"), expected),
     /digest/,
   );
-  assert.throws(() => verifyPackDigest(bytes, "md5:abc"), /algorithm/);
+  assert.throws(() => verifyPackDigest(bytes, "md5:abc"), /format/);
   assert.throws(() => verifyPackDigest(bytes, "not-a-digest"), /format/);
 });
 
-test("builds and verifies server record chains", () => {
+test("builds, redacts, and verifies server record chains and archives", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(18));
-  const envelope1 = signer.signEvent(
-    roomCreateEvent(signer.agentId(), 100, 1, {
-      topic: "Research room",
-      visibility: "public",
-      start_time: 1000,
-      end_time: 2000,
-    }),
-  );
+  const envelope1 = signer.signEvent(roomCreateEvent(signer.agentId(), 100, 1, roomPayload()));
   const record1 = buildServerRecord("room123", 1, null, 110, envelope1);
-  const event2 = createEvent(
-    "agent-discourse/1.0",
-    eventType.MESSAGE_CREATE,
-    signer.agentId(),
-    120,
-    2,
-    { content_type: "text/plain", content: "hello" },
-  );
-  event2.room_id = "room123";
-  event2.base_seq = 1;
-  event2.base_hash = record1.hash;
+  const event2 = discourse.discourseEvent(eventType.MESSAGE_CREATE, signer.agentId(), 120, 2, "room123", 1, record1.hash, { content_type: "text/plain", content: "hello" });
   const envelope2 = signer.signEvent(event2);
-  const record2 = buildServerRecord(
-    "room123",
-    2,
-    record1.hash,
-    130,
-    envelope2,
-  );
+  const record2 = buildServerRecord("room123", 2, record1.hash, 130, envelope2);
 
   assert.equal(
     record1.hash,
     serverRecordHash("room123", 1, null, envelope1.hash, 110),
   );
+  assert.equal(record1.accepted_at, 110);
   assert.doesNotThrow(() => verifyServerRecord(record1));
   assert.doesNotThrow(() => verifyServerRecordChain([record1, record2]));
-  assert.equal(archiveEventsDigest([record1, record2]).length, 43);
   assert.throws(() => verifyServerRecordChain([record2]), /first seq/);
   assert.throws(
     () => verifyServerRecordChain([{ ...record2, pre_hash: "bad" }]),
     /hash|chain/,
   );
+
+  // Redaction keeps the chain: the record hash commits to the envelope hash.
+  const redacted = redactServerRecord(record2);
+  assert.deepEqual(redacted.envelope, { hash: envelope2.hash, redacted: true, type: eventType.MESSAGE_CREATE });
+  verifyServerRecordChain([record1, redacted]);
+  assert.throws(() => redactServerRecord(record1), /cannot be redacted/);
+
+  const manifest: discourse.ArchiveManifest = {
+    protocol: "agent-discourse/1.0", type: "room.archive", room_id: "room123",
+    url: `${HOST}/v1/rooms/room123`, generated_at: 200, last_seq: 2, last_hash: record2.hash,
+  };
+  assert.deepEqual(verifyArchiveRecords(manifest, [record1, record2]), []);
+  assert.deepEqual(verifyArchiveRecords(manifest, [record1, redacted]), [2]);
+  assert.throws(() => verifyArchiveRecords({ ...manifest, last_hash: record1.hash }, [record1, record2]), /last_hash/);
+  assert.throws(() => verifyArchiveRecords(manifest, [record1]), /last_seq/);
 });
 
 test("builds SSE event stream URLs", () => {
@@ -485,15 +528,16 @@ test("builds SSE event stream URLs", () => {
   );
 });
 
-test("kernel defines eleven built-in types with membership events as signals", () => {
+test("kernel defines twelve built-in types with membership events as signals", () => {
   const {
     BUILTIN_EVENT_TYPES,
     MEMBERSHIP_EVENT_TYPES,
     builtinEventClass,
     eventAdvancesRoomHead,
   } = discourse;
-  assert.equal(BUILTIN_EVENT_TYPES.length, 11);
+  assert.equal(BUILTIN_EVENT_TYPES.length, 12);
   assert.ok(BUILTIN_EVENT_TYPES.includes("room.update"));
+  assert.ok(BUILTIN_EVENT_TYPES.includes("room.join.request"));
   assert.ok(BUILTIN_EVENT_TYPES.includes("room.member.remove"));
 
   assert.deepEqual(MEMBERSHIP_EVENT_TYPES, [
@@ -507,20 +551,11 @@ test("kernel defines eleven built-in types with membership events as signals", (
     assert.equal(builtinEventClass(type), "signal");
     assert.equal(eventAdvancesRoomHead(type), false);
   }
-  assert.equal(builtinEventClass(eventType.ROOM_UPDATE), "lifecycle");
-  assert.equal(builtinEventClass(eventType.TYPE_DEFINE), "control");
+  assert.equal(builtinEventClass(eventType.ROOM_CREATE), "genesis");
+  assert.equal(builtinEventClass(eventType.ROOM_UPDATE), "contract");
+  assert.equal(builtinEventClass(eventType.TYPE_DEFINE), "contract");
   assert.equal(builtinEventClass(eventType.MESSAGE_CREATE), "message");
   assert.equal(builtinEventClass("review.finding"), undefined);
-  for (const type of [
-    eventType.ROOM_CREATE,
-    eventType.ROOM_UPDATE,
-    eventType.ROOM_CLOSE,
-    eventType.ROOM_CANCEL,
-    eventType.TYPE_DEFINE,
-    eventType.MESSAGE_CREATE,
-  ]) {
-    assert.equal(eventAdvancesRoomHead(type), true);
-  }
 
   const registry = new TypeRegistry();
   registry.define({
@@ -532,9 +567,9 @@ test("kernel defines eleven built-in types with membership events as signals", (
   assert.equal(eventAdvancesRoomHead("reaction.create", registry), false);
   assert.equal(eventAdvancesRoomHead("unknown.type", registry), true);
 
-  assert.ok(discourse.DISCOURSE_ERROR_CODES.includes("member_banned"));
-  assert.ok(discourse.DISCOURSE_ERROR_CODES.includes("role_not_allowed"));
-  assert.ok(discourse.DISCOURSE_ERROR_CODES.includes("max_speakers_exceeded"));
+  for (const code of ["member_banned", "role_not_allowed", "max_speakers_exceeded", "host_mismatch", "type_conflict", "invalid_type_schema", "join_request_not_pending"]) {
+    assert.ok(discourse.DISCOURSE_ERROR_CODES.includes(code), code);
+  }
 });
 
 test("room.update and room.member.remove follow moderator permissions and state rules", () => {
@@ -560,13 +595,12 @@ test("validateRoomUpdatePayload enforces the updatable field set", () => {
     guidance: "",
   });
   assert.throws(() => discourse.validateRoomUpdatePayload({}), /must not be empty/);
-  assert.throws(
-    () =>
-      discourse.validateRoomUpdatePayload({
-        visibility: "private",
-      } as never),
-    /not updatable/,
-  );
+  for (const field of ["visibility", "host"]) {
+    assert.throws(
+      () => discourse.validateRoomUpdatePayload({ [field]: "x" } as never),
+      /not updatable/,
+    );
+  }
   assert.throws(
     () => discourse.validateRoomUpdatePayload({ topic: "  " }),
     /topic/,
@@ -655,4 +689,42 @@ test("type redefinition cannot change the kind", () => {
       }),
     /cannot change kind/,
   );
+});
+
+const discourseVectors = JSON.parse(
+  readFileSync(new URL("../../../docs/protocols/agent-discourse/1.0.vectors.json", import.meta.url), "utf8"),
+);
+
+test("discourse vectors: record hashes, chains, redaction, and head progression", () => {
+  const records = discourseVectors.records as discourse.ServerRecord[];
+  for (const record of records) {
+    assert.equal(serverRecordHash(record.room_id, record.seq, record.pre_hash, record.envelope.hash, record.accepted_at), record.hash);
+    validateDiscourseEnvelope(record.envelope);
+  }
+  verifyServerRecordChain(records);
+  verifyServerRecordChain(discourseVectors.redacted_records);
+  const manifest: discourse.ArchiveManifest = {
+    protocol: "agent-discourse/1.0", type: "room.archive", room_id: discourseVectors.room_id, url: `${HOST}/v1/rooms/${discourseVectors.room_id}`,
+    generated_at: 0, last_seq: discourseVectors.last_seq, last_hash: discourseVectors.last_hash,
+  };
+  assert.deepEqual(verifyArchiveRecords(manifest, records), []);
+  assert.deepEqual(verifyArchiveRecords(manifest, discourseVectors.redacted_records), [3]);
+  const registry = TypeRegistry.fromDeclarations(records[0].envelope.event.payload.types ?? [], packs);
+  let head = 0;
+  records.forEach((record, index) => {
+    if (discourse.eventAdvancesRoomHead(record.envelope.event.type, registry)) head = record.seq;
+    assert.equal(head, discourseVectors.head_seq_after[index]);
+  });
+});
+
+test("discourse vectors: freshness classes and portable patterns", () => {
+  const registry = TypeRegistry.fromDeclarations(discourseVectors.freshness.registry, packs);
+  for (const [type, cls] of Object.entries(discourseVectors.freshness.classes)) {
+    assert.equal(discourse.recordClass(type, registry), cls, type);
+    assert.equal(eventRequiresRoomHead(type, registry), discourseVectors.freshness.head_bound.includes(type), type);
+  }
+  for (const pattern of discourseVectors.patterns.valid) validatePortablePattern(pattern);
+  for (const pattern of discourseVectors.patterns.invalid) {
+    assert.throws(() => validatePortablePattern(pattern), /not portable/, pattern);
+  }
 });

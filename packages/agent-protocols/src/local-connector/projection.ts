@@ -1,20 +1,22 @@
 // Pure room-state projection: the ADP Section 5.1 rules that turn an accepted
-// ServerRecord into member, timeline, contract, and inbox changes on a
+// record into member, timeline, contract, and inbox changes on a
 // LocalRoomState, plus the local-chain validation that gates them and the
 // read-side predicates over room state. Every function is a plain transform
 // over borrowed state — no signing, no network — which is what makes the
 // connector's projection behaviour testable in isolation.
 
 import {
+  ArchiveRecord,
   RoleUpdatePayload,
   RoomJoinPayload,
   RoomJoinReviewPayload,
   RoomMemberRemovePayload,
   RoomUpdatePayload,
-  ServerRecord,
   TypeDeclaration,
-  builtinEventClass,
+  eventAdvancesRoomHead,
+  eventRequiresRoomHead,
   eventType,
+  isRedactedRecord,
   isTypeDef,
 } from "../discourse.js";
 import { AgentId } from "../identity.js";
@@ -28,28 +30,36 @@ import type {
   InboxKind,
   InboxPriority,
   RoomMemberStatus,
-  RoomMemberView,
   RoomsListMembership,
   TimelineItem,
 } from "./views.js";
 
-export function recordAdvancesRoomHead(
-  room: LocalRoomState,
-  record: ServerRecord,
-): boolean {
-  return eventTypeAdvancesRoomHead(room, record.envelope.event.type);
+/** Type of a record's event, including a redacted record's kept type. */
+export function recordType(record: ArchiveRecord): string {
+  return isRedactedRecord(record) ? record.envelope.type : record.envelope.event.type;
 }
 
-/** Lifecycle, `message`-, and `control`-kind records advance the room head;
- * `signal`-kind records — including the membership events — only anchor. */
+export function recordAdvancesRoomHead(
+  room: LocalRoomState,
+  record: ArchiveRecord,
+): boolean {
+  return eventTypeAdvancesRoomHead(room, recordType(record));
+}
+
+/** Every record class except `signal` advances the room head. */
 export function eventTypeAdvancesRoomHead(
   room: LocalRoomState,
   type: string,
 ): boolean {
-  const cls = builtinEventClass(type);
-  if (cls !== undefined) return cls !== "signal";
-  const def = room.room.types?.find((definition) => definition.type === type);
-  return def === undefined || def.kind !== "signal";
+  return eventAdvancesRoomHead(type, room.room.types ?? []);
+}
+
+/** Head-bound writes — `message.create` and `message`/`control` kinds — must match the head. */
+export function eventTypeRequiresRoomHead(
+  room: LocalRoomState,
+  type: string,
+): boolean {
+  return eventRequiresRoomHead(type, room.room.types ?? []);
 }
 
 export function materializeCreator(room: LocalRoomState): void {
@@ -71,7 +81,7 @@ export function materializeCreator(room: LocalRoomState): void {
 function applyRoomUpdate(
   room: LocalRoomState,
   payload: RoomUpdatePayload,
-  receivedAt: number,
+  acceptedAt: number,
 ): void {
   const response = room.room;
   if (payload.topic !== undefined) response.topic = payload.topic;
@@ -93,7 +103,7 @@ function applyRoomUpdate(
     response.start_time = payload.start_time;
     // A scheduled room whose new start_time is at or before acceptance becomes
     // active.
-    if (response.status === "scheduled" && payload.start_time <= receivedAt) {
+    if (response.status === "scheduled" && payload.start_time <= acceptedAt) {
       response.status = "active";
     }
   }
@@ -102,7 +112,7 @@ function applyRoomUpdate(
 
 export function isDuplicateRecord(
   room: LocalRoomState,
-  record: ServerRecord,
+  record: ArchiveRecord,
 ): boolean {
   return (
     record.seq <= room.syncedSeq &&
@@ -114,7 +124,7 @@ export function isDuplicateRecord(
 
 export function validateNextRecord(
   room: LocalRoomState,
-  record: ServerRecord,
+  record: ArchiveRecord,
 ): void {
   if (room.syncedSeq === 0) {
     if (record.seq !== 1 || record.pre_hash !== null) {
@@ -132,12 +142,21 @@ export function validateNextRecord(
   }
 }
 
+/**
+ * Section 5.1 base check against local state: head-bound records must name
+ * the current head; contract and signal records must name an earlier accepted
+ * record. A redacted record's base is not visible and is not checked.
+ */
 export function validateRecordBasePrecondition(
   room: LocalRoomState,
-  record: ServerRecord,
+  record: ArchiveRecord,
 ): void {
+  if (isRedactedRecord(record)) return;
   const event = record.envelope.event;
   if (event.type === eventType.ROOM_CREATE) return;
+  if (event.type === eventType.ROOM_JOIN_REQUEST) {
+    throw invalidPayload("a room.join.request is never a record");
+  }
   const baseSeq = event.base_seq;
   if (baseSeq === undefined) {
     throw invalidPayload("record event requires base_seq");
@@ -151,21 +170,28 @@ export function validateRecordBasePrecondition(
       "record base_seq must reference an earlier accepted record",
     );
   }
-  if (!recordAdvancesRoomHead(room, record)) return;
-  if (room.headSeq !== baseSeq || room.headHash !== baseHash) {
-    throw invalidPayload(
-      "record base_seq/base_hash must match current room head",
-    );
+  if (eventTypeRequiresRoomHead(room, event.type)) {
+    if (room.headSeq !== baseSeq || room.headHash !== baseHash) {
+      throw invalidPayload(
+        "record base_seq/base_hash must match current room head",
+      );
+    }
+    return;
+  }
+  const anchor = room.records.find((existing) => existing.seq === baseSeq);
+  if (anchor && anchor.hash !== baseHash) {
+    throw invalidPayload("record base_hash does not match the anchored record");
   }
 }
 
 export function applyRecordProjection(
   room: LocalRoomState,
-  record: ServerRecord,
+  record: ArchiveRecord,
   item: TimelineItem,
   activeAgent: AgentId,
   inbox: InboxItem[],
 ): void {
+  if (isRedactedRecord(record)) return;
   const event = record.envelope.event;
   switch (event.type) {
     case eventType.ROOM_JOIN: {
@@ -175,6 +201,7 @@ export function applyRecordProjection(
         role: payload.role,
         status: "active",
         is_creator: false,
+        perspective: payload.perspective,
         joined_seq: record.seq,
         last_event_seq: record.seq,
       });
@@ -211,7 +238,7 @@ export function applyRecordProjection(
     }
     case eventType.ROOM_UPDATE: {
       const payload = event.payload as RoomUpdatePayload;
-      applyRoomUpdate(room, payload, record.received_at);
+      applyRoomUpdate(room, payload, record.accepted_at);
       inbox.push(
         inboxFromItem(
           "room.state.changed",
@@ -291,33 +318,43 @@ export function applyRecordProjection(
           (existing) => existing.type !== declaration.type,
         );
         room.room.types.push(declaration);
-        inbox.push(
-          inboxFromItem(
-            "room.state.changed",
-            "normal",
-            item,
-            "type_registry_changed",
-            false,
-          ),
-        );
       }
+      inbox.push(
+        inboxFromItem(
+          "room.state.changed",
+          "normal",
+          item,
+          "type_registry_changed",
+          false,
+        ),
+      );
       break;
     }
     case eventType.ROOM_JOIN_REVIEW: {
       const payload = event.payload as RoomJoinReviewPayload;
-      if (
-        payload.request.applicant === activeAgent &&
-        payload.decision === "approve"
-      ) {
-        inbox.push(
-          inboxFromItem(
-            "room.join.approved",
-            "high",
-            item,
-            "join_approved",
-            true,
-          ),
-        );
+      const request = payload.request.event;
+      if (payload.decision === "approve" && payload.role !== undefined) {
+        // The review record is the approved applicant's membership event.
+        room.members.set(request.actor, {
+          agent_id: request.actor,
+          role: payload.role,
+          status: "active",
+          is_creator: false,
+          perspective: request.payload.perspective,
+          joined_seq: record.seq,
+          last_event_seq: record.seq,
+        });
+        if (request.actor === activeAgent) {
+          inbox.push(
+            inboxFromItem(
+              "room.join.approved",
+              "high",
+              item,
+              "join_approved",
+              false,
+            ),
+          );
+        }
       }
       break;
     }
@@ -373,19 +410,16 @@ function activeTurnFromItem(item: TimelineItem): ActiveTurn | undefined {
   const payload = item.payload;
   if (!isRecord(payload)) return undefined;
   const speaker = payload.speaker;
-  if (typeof speaker !== "string") return undefined;
-  const turnRaw = payload.turn_id;
-  if (turnRaw === undefined) return undefined;
-  const turnId = typeof turnRaw === "string" ? turnRaw : JSON.stringify(turnRaw);
-  const instructionRaw = payload.intent ?? payload.topic ?? payload.reason;
+  const turnId = payload.turn_id;
+  if (typeof speaker !== "string" || typeof turnId !== "number") return undefined;
   return {
     turn_id: turnId,
     speaker,
     assigned_seq: item.seq,
     expires_at:
       typeof payload.expires_at === "number" ? payload.expires_at : undefined,
-    instruction:
-      typeof instructionRaw === "string" ? instructionRaw : undefined,
+    intent: typeof payload.intent === "string" ? payload.intent : undefined,
+    topic: typeof payload.topic === "string" ? payload.topic : undefined,
     source_event_id: item.event_id,
   };
 }
@@ -412,7 +446,7 @@ function inboxFromItem(
     seq: item.seq,
     event_id: item.event_id,
     actor: item.actor,
-    created_at: item.received_at,
+    created_at: item.accepted_at,
     requires_response: requiresResponse,
     reason,
     suggested_tools: requiresResponse ? [TOOL_ROOM_SEND_MESSAGE] : [],
@@ -420,11 +454,13 @@ function inboxFromItem(
   };
 }
 
+/** Pending, due deferred, and claimed-but-expired entries are ready. */
 export function inboxEntryReady(entry: InboxEntry, nowMs: number): boolean {
   switch (entry.state.kind) {
     case "pending":
       return true;
     case "deferred":
+    case "claimed":
       return entry.state.until <= nowMs;
     default:
       return false;
@@ -435,18 +471,19 @@ export function membershipFilter(
   room: LocalRoomState,
   agentId: AgentId,
   membership: RoomsListMembership | undefined,
+  pending: boolean,
 ): boolean {
   switch (membership ?? "all") {
     case "all":
       return true;
     case "member":
-      return room.members.has(agentId);
+      return room.members.get(agentId)?.status === "active";
     case "creator":
       return room.members.get(agentId)?.is_creator ?? false;
     case "moderator":
       return room.members.get(agentId)?.role === "moderator";
     case "pending":
-      return false;
+      return pending;
     default:
       return true;
   }

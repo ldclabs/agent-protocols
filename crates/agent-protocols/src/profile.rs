@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use crate::delegation::PrincipalDescriptor;
 use crate::error::{Result, SdkError};
-use crate::identity::{verify_envelope, AgentId, Envelope, Event};
+use crate::identity::{
+    validate_event_fields, verify_envelope, AgentId, Envelope, Event, ListResponse,
+};
 
 pub const PROTOCOL: &str = "agent-profile/1.0";
 pub const PROFILE_UPDATE: &str = "profile.update";
@@ -18,21 +20,21 @@ pub struct ServiceEndpoint {
     pub protocols: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProfileLinkRel {
-    Homepage,
-    Documentation,
-    SourceCode,
-    Social,
-    Browser,
+/// Defined link relationships. `rel` is an open vocabulary: clients accept
+/// other non-empty values and may render them as generic links.
+pub mod link_rel {
+    pub const HOMEPAGE: &str = "homepage";
+    pub const DOCUMENTATION: &str = "documentation";
+    pub const SOURCE_CODE: &str = "source_code";
+    pub const SOCIAL: &str = "social";
+    pub const BROWSER: &str = "browser";
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileLink {
     pub name: String,
     pub url: String,
-    pub rel: ProfileLinkRel,
+    pub rel: String,
 }
 
 /// Discovery hint only. It carries no service URLs: the publishing agent is the
@@ -117,15 +119,11 @@ pub struct ProfileBatchReadRequest {
     pub ids: Vec<AgentId>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ProfileBatchReadResponse {
-    pub result: Vec<AgentProfile>,
-}
+/// Agent Identity list of profile documents; never carries `next_cursor`.
+pub type ProfileBatchReadResponse = ListResponse<AgentProfile>;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ProfileEventsResponse {
-    pub result: Vec<Envelope<ProfileUpdatePayload>>,
-}
+/// Agent Identity list of accepted updates, newest first by `nonce`.
+pub type ProfileEventsResponse = ListResponse<Envelope<ProfileUpdatePayload>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileServiceDiscovery {
@@ -154,6 +152,8 @@ pub fn profile_update_event(
 
 pub fn validate_profile_update(envelope: &Envelope<ProfileUpdatePayload>) -> Result<()> {
     verify_envelope(envelope)?;
+    // Profile events carry only the six Agent Identity event fields.
+    validate_event_fields(&envelope.event, &[])?;
     if envelope.event.protocol != PROTOCOL {
         return Err(SdkError::InvalidEventProtocol {
             expected: PROTOCOL.to_owned(),
@@ -193,6 +193,21 @@ pub fn materialize_profile(envelope: &Envelope<ProfileUpdatePayload>) -> Result<
     })
 }
 
+/// Durable ordering check for a new update (Agent Profile Section 6): its
+/// nonce must exceed the nonce of the latest accepted update for the same
+/// Agent ID, independent of the replay cache.
+pub fn validate_profile_succession(
+    envelope: &Envelope<ProfileUpdatePayload>,
+    latest_nonce: Option<u64>,
+) -> Result<()> {
+    match latest_nonce {
+        Some(latest) if envelope.event.nonce <= latest => {
+            Err(SdkError::NonceNotGreater { max_nonce: latest })
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Selects the latest profile state from accepted update envelopes. Nonces
 /// are strictly monotonic per Agent ID, so the latest profile is defined as
 /// the accepted `profile.update` with the greatest `nonce` — deterministic and
@@ -220,7 +235,7 @@ mod tests {
         payload.links.push(ProfileLink {
             name: "Homepage".to_owned(),
             url: "https://example.com".to_owned(),
-            rel: ProfileLinkRel::Homepage,
+            rel: link_rel::HOMEPAGE.to_owned(),
         });
         payload.delegations.push(ProfileDelegationHint {
             id: Some("del_1".to_owned()),
@@ -241,7 +256,7 @@ mod tests {
         assert_eq!(profile.id, signer.agent_id());
         assert_eq!(profile.name, "ResearchAgent-v3");
         assert_eq!(profile.links.len(), 1);
-        assert_eq!(profile.links[0].rel, ProfileLinkRel::Homepage);
+        assert_eq!(profile.links[0].rel, link_rel::HOMEPAGE);
         assert_eq!(profile.delegations.len(), 1);
         assert_eq!(profile.extra, expected_extra);
         assert_eq!(profile.updated_at, 1_779_753_600_000);
@@ -285,6 +300,37 @@ mod tests {
         let latest = latest_profile_update(&envelopes).unwrap();
         assert_eq!(latest.event.nonce, 3);
         assert_eq!(materialize_profile(latest).unwrap().name, "Agent-v3");
+    }
+
+    #[test]
+    fn requires_nonce_succession_and_closed_event_fields() {
+        let signer = AgentSigner::from_seed([17; 32]);
+        let payload = ProfileUpdatePayload::new(signer.agent_id(), "A");
+        let envelope = signer
+            .sign_event(profile_update_event(
+                signer.agent_id(),
+                1_000,
+                7,
+                payload.clone(),
+            ))
+            .unwrap();
+        validate_profile_succession(&envelope, None).unwrap();
+        validate_profile_succession(&envelope, Some(6)).unwrap();
+        for latest in [7, 8] {
+            assert!(matches!(
+                validate_profile_succession(&envelope, Some(latest)),
+                Err(SdkError::NonceNotGreater { max_nonce }) if max_nonce == latest
+            ));
+        }
+        let extra = signer
+            .sign_event(
+                profile_update_event(signer.agent_id(), 1_000, 8, payload).with_room_id("r"),
+            )
+            .unwrap();
+        assert_eq!(
+            validate_profile_update(&extra).unwrap_err().code(),
+            Some("invalid_event")
+        );
     }
 
     #[test]

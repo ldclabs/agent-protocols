@@ -294,7 +294,7 @@
                   style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:20px;line-height:1.2;margin:0 0 10px"
                   data-i18n="prob.q2">What can it do — and does that travel?</h3>
                 <p style="color:#5b6b5e;font-size:14px;line-height:1.6;margin:0 0 20px" data-i18n="prob.a2">Capabilities
-                  and reputation live inside one platform. Move the agent elsewhere and it starts again from zero.</p>
+                  and service endpoints live inside one platform. Move the agent elsewhere and it starts again from zero.</p>
                 <span
                   style="margin-top:auto;display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#5b6b5e"><span
                     style="width:8px;height:8px;border-radius:50%;background:#8aa08e"></span><span
@@ -870,8 +870,8 @@
             <h2
               style="font-family:'IBM Plex Serif',serif;font-weight:500;font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.02em;margin:14px 0 14px"
               data-i18n="ty.title">A small kernel, extended by types</h2>
-            <p style="color:#39473d;font-size:18px;margin:0" data-i18n="ty.sub">The kernel defines a handful of built-in
-              event kinds. Any other behavior — polls, citations, turn control, knowledge graphs, even WebRTC signaling
+            <p style="color:#39473d;font-size:18px;margin:0" data-i18n="ty.sub">The kernel defines twelve built-in
+              event types. Any other behavior — polls, citations, turn control, knowledge graphs, even WebRTC signaling
               — is declared per room as a typed, schema-validated event.</p>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:36px;align-items:start" data-tsgrid>
@@ -975,8 +975,8 @@
                   room.create</div>
                 <div
                   style="border-top:1px dashed rgba(16,29,23,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">prev <span
-                      style="color:#5b6b5e">— genesis</span></div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">pre_hash <span
+                      style="color:#5b6b5e">null</span></div>
                   <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">hash <span
                       style="color:#c13527;font-weight:500">a91f…b7</span></div>
                 </div>
@@ -1007,7 +1007,7 @@
                   room.join</div>
                 <div
                   style="border-top:1px dashed rgba(16,29,23,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">prev <span
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">pre_hash <span
                       style="color:#c13527;font-weight:500">a91f…b7</span></div>
                   <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">hash <span
                       style="color:#c13527;font-weight:500">4kQ2…th</span></div>
@@ -1038,7 +1038,7 @@
                   message</div>
                 <div
                   style="border-top:1px dashed rgba(16,29,23,.14);padding-top:9px;display:flex;flex-direction:column;gap:5px">
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">prev <span
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">pre_hash <span
                       style="color:#c13527;font-weight:500">4kQ2…th</span></div>
                   <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">hash <span
                       style="color:#c13527;font-weight:500">7mX1…qd</span></div>
@@ -1069,9 +1069,9 @@
                   archive</div>
                 <div
                   style="border-top:1px dashed #e7c4b6;padding-top:9px;display:flex;flex-direction:column;gap:5px">
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">prev <span
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">pre_hash <span
                       style="color:#c13527;font-weight:500">7mX1…qd</span></div>
-                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">root <span
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5b6b5e">last_hash <span
                       style="color:#a32a1f;font-weight:500">Xe2k…Q</span></div>
                 </div>
               </div>
@@ -1087,8 +1087,9 @@
               </span>
             </div>
             <p style="text-align:center;color:#5b6b5e;font-size:13.5px;max-width:600px;margin:20px auto 0;line-height:1.6"
-              data-i18n="chain.note">Each record signs the hash of the one before it. Change a single byte and every
-              later hash — and signature — breaks. The whole room verifies offline, no server required.</p>
+              data-i18n="chain.note">Each record links the hash of the one before it, and every event carries its author's
+              signature. Change a single byte and a signature or every later hash breaks. An archived room verifies
+              offline, no server required.</p>
           </div>
         </section>
 
@@ -1498,7 +1499,7 @@ profile  = materialize_profile(envelope)`,
       "prob.a1": "身份通常由托管服务器单方面声明，容易冒用，信任无法跨宿主传递。",
       "prob.s1": "由 Agent Identity 解决",
       "prob.q2": "它能做什么，能否跨平台迁移？",
-      "prob.a2": "能力与声誉沉淀在单一平台内，换个环境就得从零开始。",
+      "prob.a2": "能力与服务端点沉淀在单一平台内，换个环境就得从零开始。",
       "prob.s2": "由 Agent Profile 解决",
       "prob.q4": "它代表谁行动，凭什么证明？",
       "prob.a4": "智能体可以声称代表某人或某组织，但缺乏可跨系统验证、可随时撤销的标准化授权凭证。",
@@ -1540,15 +1541,15 @@ profile  = materialize_profile(envelope)`,
       "sdk.draft": "此处展示当前草案源码用法；已发布包可能尚未同步，请以 SDK README 为准。",
       "sdk.docs": "查看 SDK 文档", "copy": "复制",
       "ty.eyebrow": "05 — Discourse · 类型系统", "ty.title": "精简内核，按类型开放扩展",
-      "ty.sub": "协议核心仅定义少量内置事件。其余交互——投票、引用、轮换发言、知识图谱、WebRTC 媒体信令等——均由 Room 声明为包含 JSON Schema 校验的强类型事件。",
+      "ty.sub": "协议核心仅定义十二种内置事件类型。其余交互——投票、引用、轮换发言、知识图谱、WebRTC 媒体信令等——均由 Room 声明为包含 JSON Schema 校验的强类型事件。",
       "ty.k1t": "讨论内容（Message）", "ty.k1d": "研讨主体内容，由主持人和发言者发送，严格校验 Room Head（CAS 并发控制）。",
-      "ty.k2t": "轻量响应（Signal）", "ty.k2d": "Reaction、投票、加入申请与应答——面向全体成员开放，锚定历史记录，不阻塞发言。",
+      "ty.k2t": "轻量响应（Signal）", "ty.k2d": "Reaction、投票与确认——面向包括 observer 在内的全体成员开放，锚定历史记录，不阻塞发言。",
       "ty.k3t": "协调与综合（Control）", "ty.k3d": "发言轮换、知识图谱与产出归纳——由主持人发起，严格校验 Room Head。",
       "ty.packs": "官方注册类型包",
       "chain.title": "记录链接为不可篡改的哈希链",
       "chain.sub": "Room 为接受的事件分配单调递增的 <code style=\"font-family:'IBM Plex Mono',monospace\">seq</code> 序号，并通过哈希严格前向链接。重放链条即可离线核验全部签名。",
       "chain.badge": "哈希链可离线核验",
-      "chain.note": "每条记录均链接上一条记录的哈希。篡改任何字节都会导致后续哈希与签名失效。整场讨论记录可在无服务器环境下完全离线验证。",
+      "chain.note": "每条记录都链接上一条记录的哈希，每个事件都带有作者的签名。篡改任何字节，都会让签名或其后的所有哈希失效。归档后的讨论无需服务器即可完全离线验证。",
       "cta.title": "开始使用与实现协议", "cta.sub": "当前规范处于 Draft 草案阶段。测试向量、JSON Schema 与一致性测试套件将在 1.0 正式版发布前完善。欢迎提供反馈与建议。",
       "cta.b1": "阅读协议规范", "cta.b2": "参与社区贡献",
       "foot.tag": "面向自治智能体的可组合开放协议，提供中英文双语规范。",

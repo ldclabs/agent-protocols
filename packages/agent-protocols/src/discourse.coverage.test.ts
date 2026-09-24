@@ -5,7 +5,6 @@ import { AgentSigner } from "./identity.js";
 import {
   TypeDef,
   TypeRegistry,
-  archiveEventsDigest,
   buildServerRecord,
   canSubmitEvent,
   defaultKindRoles,
@@ -43,6 +42,7 @@ test("eventRequiresRoomId distinguishes room.create", () => {
 test("roomCreateEvent builds a room.create event and validateRoomPath accepts it", () => {
   const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(60));
   const event = roomCreateEvent(signer.agentId(), 100, 1, {
+    host: "https://api.example.com",
     topic: "Room",
     visibility: "public",
     start_time: 1000,
@@ -56,7 +56,7 @@ test("roomCreateEvent builds a room.create event and validateRoomPath accepts it
   assert.doesNotThrow(() => validateRoomPath(envelope, "room1"));
 
   const withRoomId = { ...envelope, event: { ...envelope.event, room_id: "room1" } };
-  assert.throws(() => validateRoomPath(withRoomId, "room1"), /must not include room_id/);
+  assert.throws(() => validateRoomPath(withRoomId, "room1"), /unknown event field: room_id/);
 });
 
 test("isPackImport and isTypeDef classify declarations", () => {
@@ -105,11 +105,11 @@ test("validateTypeDef rejects each malformed field", () => {
 test("validatePackImport covers each arm", () => {
   assert.doesNotThrow(() => validatePackImport({ use: packId.REACTIONS }));
   assert.doesNotThrow(() =>
-    validatePackImport({ pack: "https://example.com/p.json", digest: "sha256:abc" }),
+    validatePackImport({ pack: "https://example.com/p.json", digest: `sha3-256:${"A".repeat(43)}` }),
   );
   assert.throws(
     () => validatePackImport({ pack: "https://example.com/p.json", digest: "  " }),
-    /digest must not be empty/,
+    /digest must be/,
   );
   assert.throws(() => validatePackImport({}), /pack import requires/);
   assert.throws(
@@ -119,6 +119,10 @@ test("validatePackImport covers each arm", () => {
   assert.throws(
     () => validatePackImport({ use: packId.REACTIONS, types: [] }),
     /subset must not be empty/,
+  );
+  assert.throws(
+    () => validatePackImport({ use: packId.REACTIONS, types: ["a.b", "a.b"] }),
+    /duplicates/,
   );
 });
 
@@ -171,6 +175,8 @@ test("registry rejects unknown subset types and exposes definitions", () => {
       ),
     /not in pack/,
   );
+  const twice = { "adp:twice/1.0": { id: "adp:twice/1.0", title: "Twice", types: [findingDef, findingDef] } };
+  assert.throws(() => TypeRegistry.fromDeclarations([{ use: "adp:twice/1.0" }], twice), /defines review.finding twice/);
 
   const registry = new TypeRegistry();
   registry.define(findingDef);
@@ -292,9 +298,10 @@ test("verifyServerRecordChain rejects structural violations", () => {
   );
 });
 
-test("hash helpers reject values without a canonical form", () => {
-  assert.throws(() => archiveEventsDigest(undefined as never), /canonical JSON/);
-  assert.deepEqual(serverRecordHashPayload("room1", 1, undefined, "h", 10).pre_hash, null);
+test("hash helpers normalize a missing pre_hash to null", () => {
+  assert.deepEqual(serverRecordHashPayload("room1", 1, undefined, "h", 10), {
+    room_id: "room1", seq: 1, pre_hash: null, envelope_hash: "h", accepted_at: 10,
+  });
 });
 
 function discourseEventWithProtocol(

@@ -1,0 +1,645 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-protocols.dev/schemas/agent-delegation/1.0.schema.json",
+  "title": "Agent Delegation Protocol 1.0",
+  "description": "JSON Schema definitions for Agent Delegation 1.0: principal documents, Controller records, grant and revoke envelopes, accepted records, credentials, and query bodies. Cross-record rules — unique keys, supersedes ordering, timestamp ordering, ceilings, and ownership — remain normative in the specification.",
+  "$ref": "#/$defs/principalDocument",
+  "$defs": {
+    "agentId": {
+      "type": "string",
+      "pattern": "^did:agent:[A-Za-z0-9_-]{43}$"
+    },
+    "eventHash": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    },
+    "timestampMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "nonce": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "httpsOrigin": {
+      "type": "string",
+      "pattern": "^https://[^/?#@\\s]+$"
+    },
+    "extra": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "delegationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._~-]{1,128}$",
+      "not": {
+        "enum": [
+          ".",
+          ".."
+        ]
+      }
+    },
+    "httpsOriginList": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/httpsOrigin"
+      },
+      "uniqueItems": true
+    },
+    "scopeList": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          {
+            "not": {
+              "const": "*"
+            }
+          }
+        ]
+      },
+      "uniqueItems": true
+    },
+    "delegationPolicy": {
+      "type": "object",
+      "required": [
+        "scopes",
+        "audiences"
+      ],
+      "properties": {
+        "scopes": {
+          "$ref": "#/$defs/scopeList"
+        },
+        "audiences": {
+          "$ref": "#/$defs/httpsOriginList"
+        }
+      },
+      "additionalProperties": false
+    },
+    "controller": {
+      "type": "object",
+      "required": [
+        "id",
+        "source",
+        "valid_from"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/agentId"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "const": "local"
+            },
+            {
+              "$ref": "#/$defs/httpsOrigin"
+            }
+          ]
+        },
+        "valid_from": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "delegation": {
+          "anyOf": [
+            {
+              "const": "*"
+            },
+            {
+              "$ref": "#/$defs/delegationPolicy"
+            }
+          ]
+        },
+        "supersedes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agentId"
+          },
+          "uniqueItems": true
+        },
+        "retired_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "invalid_from": {
+          "$ref": "#/$defs/timestampMs"
+        }
+      },
+      "additionalProperties": false
+    },
+    "currentController": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/controller"
+        },
+        {
+          "properties": {
+            "retired_at": false,
+            "invalid_from": false
+          }
+        }
+      ]
+    },
+    "retiredController": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/controller"
+        },
+        {
+          "required": [
+            "retired_at"
+          ]
+        }
+      ]
+    },
+    "link": {
+      "type": "object",
+      "required": [
+        "name",
+        "url",
+        "rel"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "rel": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "additionalProperties": false
+    },
+    "principalDocument": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "id",
+        "controllers",
+        "updated_at"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "agent-delegation/1.0"
+        },
+        "id": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "type": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "avatar_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/httpsUrl"
+          },
+          "uniqueItems": true
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/link"
+          }
+        },
+        "controllers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/currentController"
+          }
+        },
+        "retired_controllers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/retiredController"
+          }
+        },
+        "delegation_query_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "extra": {
+          "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": true
+    },
+    "grantPayload": {
+      "type": "object",
+      "required": [
+        "id",
+        "principal_id",
+        "subject",
+        "audiences",
+        "scopes"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/delegationId"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "subject": {
+          "$ref": "#/$defs/agentId"
+        },
+        "relationship": {
+          "type": "string"
+        },
+        "scopes": {
+          "$ref": "#/$defs/scopeList"
+        },
+        "audiences": {
+          "$ref": "#/$defs/httpsOriginList"
+        },
+        "constraints": {
+          "type": "object"
+        },
+        "not_before": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
+        }
+      },
+      "additionalProperties": false
+    },
+    "revokePayload": {
+      "type": "object",
+      "required": [
+        "id",
+        "principal_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/delegationId"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "grantEvent": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "type",
+        "actor",
+        "created_at",
+        "nonce",
+        "payload"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "agent-delegation/1.0"
+        },
+        "type": {
+          "const": "delegation.grant"
+        },
+        "actor": {
+          "$ref": "#/$defs/agentId"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "nonce": {
+          "$ref": "#/$defs/nonce"
+        },
+        "payload": {
+          "$ref": "#/$defs/grantPayload"
+        }
+      },
+      "additionalProperties": false
+    },
+    "revokeEvent": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "type",
+        "actor",
+        "created_at",
+        "nonce",
+        "payload"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "agent-delegation/1.0"
+        },
+        "type": {
+          "const": "delegation.revoke"
+        },
+        "actor": {
+          "$ref": "#/$defs/agentId"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "nonce": {
+          "$ref": "#/$defs/nonce"
+        },
+        "payload": {
+          "$ref": "#/$defs/revokePayload"
+        }
+      },
+      "additionalProperties": false
+    },
+    "delegationEnvelope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "hash",
+            "event",
+            "signature"
+          ],
+          "properties": {
+            "hash": {
+              "$ref": "#/$defs/eventHash"
+            },
+            "event": {
+              "$ref": "#/$defs/grantEvent"
+            },
+            "signature": {
+              "$ref": "#/$defs/signature"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "hash",
+            "event",
+            "signature"
+          ],
+          "properties": {
+            "hash": {
+              "$ref": "#/$defs/eventHash"
+            },
+            "event": {
+              "$ref": "#/$defs/revokeEvent"
+            },
+            "signature": {
+              "$ref": "#/$defs/signature"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "acceptedRecord": {
+      "type": "object",
+      "required": [
+        "envelope",
+        "accepted_at"
+      ],
+      "properties": {
+        "envelope": {
+          "$ref": "#/$defs/delegationEnvelope"
+        },
+        "accepted_at": {
+          "$ref": "#/$defs/timestampMs"
+        }
+      },
+      "additionalProperties": false
+    },
+    "credential": {
+      "type": "object",
+      "required": [
+        "id",
+        "protocol",
+        "principal_id",
+        "subject",
+        "scopes",
+        "audiences",
+        "status",
+        "controller",
+        "owner_controller",
+        "grant_event_id",
+        "event_id",
+        "accepted_at",
+        "updated_at",
+        "checked_at"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/delegationId"
+        },
+        "protocol": {
+          "const": "agent-delegation/1.0"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "subject": {
+          "$ref": "#/$defs/agentId"
+        },
+        "relationship": {
+          "type": "string"
+        },
+        "scopes": {
+          "$ref": "#/$defs/scopeList"
+        },
+        "audiences": {
+          "$ref": "#/$defs/httpsOriginList"
+        },
+        "constraints": {
+          "type": "object"
+        },
+        "not_before": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "suspended",
+            "expired",
+            "revoked"
+          ]
+        },
+        "controller": {
+          "$ref": "#/$defs/agentId"
+        },
+        "owner_controller": {
+          "$ref": "#/$defs/agentId"
+        },
+        "grant_event_id": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "event_id": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "accepted_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "checked_at": {
+          "$ref": "#/$defs/timestampMs"
+        }
+      },
+      "additionalProperties": false
+    },
+    "queryRequest": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/agentId"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "id": {
+          "$ref": "#/$defs/delegationId"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "suspended",
+            "expired",
+            "revoked"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "subject"
+          ]
+        },
+        {
+          "required": [
+            "principal_id"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "queryResponse": {
+      "type": "object",
+      "required": [
+        "result"
+      ],
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/credential"
+          }
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "eventsResponse": {
+      "type": "object",
+      "required": [
+        "result"
+      ],
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/acceptedRecord"
+          }
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "discoveryDocument": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "service"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "agent-delegation/1.0"
+        },
+        "service": {
+          "$ref": "#/$defs/httpsOrigin"
+        },
+        "endpoints": {
+          "type": "object",
+          "properties": {
+            "delegations": {
+              "$ref": "#/$defs/httpsUrl"
+            },
+            "query": {
+              "$ref": "#/$defs/httpsUrl"
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/httpsUrl"
+          }
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

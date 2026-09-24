@@ -1,5 +1,5 @@
 //! Structured result types returned by the local connector, together with the
-//! pure projections that build them: a [`ServerRecord`] into a [`TimelineItem`]
+//! pure projections that build them: an [`ArchiveRecord`] into a [`TimelineItem`]
 //! and a [`RoomResponse`] into its display metadata. These are the shapes a
 //! caller reads back from [`super::LocalConnector`]; they carry no signing keys
 //! and no live network handles.
@@ -9,17 +9,27 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::discourse::{
-    event_type, MessageCreatePayload, Role, RoomCreatePayload, RoomResponse, RoomState, ServerRecord,
-    TypeDef, Visibility,
+    event_type, record_class, ArchiveRecord, RecordClass, Role, RoomCreatePayload, RoomResponse,
+    RoomState, TypeDef, Visibility,
 };
 use crate::identity::AgentId;
 
+pub use crate::delegation::DelegationVerdict;
+
+/// Connector sync marker for one room. `head_seq` / `head_hash` are the latest
+/// locally verified head-advancing record per ADP Section 5.1;
+/// `presented_seq` / `presented_hash` are the latest head the agent has been
+/// shown with every record before it, the default write base.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncState {
     pub host: String,
     pub room_id: String,
     pub head_seq: u64,
     pub head_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presented_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presented_hash: Option<String>,
     pub synced_seq: u64,
     pub remote_seq: u64,
     pub subscribed: bool,
@@ -89,10 +99,16 @@ pub struct TimelineItem {
     pub event_id: String,
     #[serde(rename = "type")]
     pub event_type: String,
-    pub kind: String,
-    pub actor: AgentId,
-    pub created_at: i64,
-    pub received_at: i64,
+    /// The record's ADP class: freshness class for built-ins, registry kind for custom types.
+    pub kind: RecordClass,
+    /// Absent on redacted records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<AgentId>,
+    /// Absent on redacted records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    pub accepted_at: i64,
+    /// Informative excerpt; its derivation is connector-defined.
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
@@ -102,38 +118,79 @@ pub struct TimelineItem {
     pub mentions: Vec<AgentId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
-    pub payload: Value,
+    /// Absent on redacted records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redacted: bool,
 }
 
 impl TimelineItem {
-    pub(crate) fn from_record(record: &ServerRecord) -> Self {
-        let event = &record.envelope.event;
-        let payload = event.payload.clone();
-        let mut content_type = None;
-        let mut content = None;
-        let mut references = Vec::new();
-        if event.kind == event_type::MESSAGE_CREATE {
-            if let Ok(message) = serde_json::from_value::<MessageCreatePayload>(payload.clone()) {
-                content_type = Some(message.content_type);
-                content = Some(message.content);
-                references = message.references;
+    /// Projects a record into a timeline item. `types` is the room's
+    /// materialized registry; a custom type missing from it is reported as `message`.
+    pub fn from_record(record: &ArchiveRecord, types: &[TypeDef]) -> Self {
+        let signed = match record {
+            ArchiveRecord::Redacted(redacted) => {
+                let event_type = redacted.envelope.kind.clone();
+                return Self {
+                    room_id: redacted.room_id.clone(),
+                    seq: redacted.seq,
+                    event_id: redacted.envelope.hash.clone(),
+                    kind: record_class(&event_type, types).unwrap_or(RecordClass::Message),
+                    event_type,
+                    actor: None,
+                    created_at: None,
+                    accepted_at: redacted.accepted_at,
+                    summary: "[redacted]".to_owned(),
+                    content_type: None,
+                    content: None,
+                    mentions: Vec::new(),
+                    references: Vec::new(),
+                    payload: None,
+                    redacted: true,
+                };
             }
-        }
+            ArchiveRecord::Signed(signed) => signed,
+        };
+        let event = &signed.envelope.event;
+        let payload = &event.payload;
+        let (content_type, content) = if event.kind == event_type::MESSAGE_CREATE {
+            match payload.get("content_type").and_then(Value::as_str) {
+                Some(content_type) => (
+                    Some(content_type.to_owned()),
+                    payload.get("content").cloned(),
+                ),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+        let references = payload
+            .get("references")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
-            room_id: record.room_id.clone(),
-            seq: record.seq,
-            event_id: record.envelope.hash.clone(),
+            room_id: signed.room_id.clone(),
+            seq: signed.seq,
+            event_id: signed.envelope.hash.clone(),
             event_type: event.kind.clone(),
-            kind: timeline_kind(&event.kind),
-            actor: event.actor.clone(),
-            created_at: event.created_at,
-            received_at: record.received_at,
-            summary: summarize_payload(&event.kind, &payload),
+            kind: record_class(&event.kind, types).unwrap_or(RecordClass::Message),
+            actor: Some(event.actor.clone()),
+            created_at: Some(event.created_at),
+            accepted_at: signed.accepted_at,
+            summary: summarize_payload(&event.kind, payload),
             content_type,
             content,
-            mentions: event.mentions.clone(),
+            mentions: event.mentions().to_vec(),
             references,
-            payload,
+            payload: Some(payload.clone()),
+            redacted: false,
         }
     }
 }
@@ -194,18 +251,13 @@ pub struct InboxItem {
     pub message: Option<Value>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HeadMismatchPolicy {
+    #[default]
     Hold,
     Reject,
     SendAnyway,
-}
-
-impl Default for HeadMismatchPolicy {
-    fn default() -> Self {
-        Self::Hold
-    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -219,9 +271,8 @@ pub enum HeldDraftKind {
 #[serde(rename_all = "snake_case")]
 pub enum DraftAction {
     Revise,
-    SendAsIs,
-    StaySilent,
-    SendAnyway,
+    Send,
+    Drop,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -241,15 +292,18 @@ pub struct HeldDraft {
     pub options: Vec<DraftAction>,
 }
 
+/// The latest accepted `turn.update`; fields are copied from its payload.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ActiveTurn {
-    pub turn_id: String,
+    pub turn_id: u64,
     pub speaker: AgentId,
     pub assigned_seq: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instruction: Option<String>,
+    pub intent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
     pub source_event_id: String,
 }
 
@@ -356,7 +410,7 @@ pub(crate) fn room_end_time(room: &RoomResponse) -> Option<i64> {
 pub(crate) fn room_tags(room: &RoomResponse) -> Vec<String> {
     if room.tags.is_empty() {
         room_create_payload(room)
-            .map(|payload| payload.tags.clone())
+            .and_then(|payload| payload.tags.clone())
             .unwrap_or_default()
     } else {
         room.tags.clone()
@@ -382,34 +436,44 @@ pub(crate) fn room_response_head(room: &RoomResponse) -> (u64, String) {
         .unwrap_or_else(|| (room.seq, room.hash.clone()))
 }
 
-fn summarize_payload(event_type: &str, payload: &Value) -> String {
-    if event_type == event_type::MESSAGE_CREATE {
-        if let Some(content) = payload.get("content") {
-            return match content {
-                Value::String(text) => text.chars().take(160).collect(),
-                other => other.to_string().chars().take(160).collect(),
-            };
+/// Maximum summary length in Unicode code points.
+pub const SUMMARY_MAX_CHARS: usize = 160;
+const SUMMARY_FIELDS: [&str; 7] = [
+    "summary",
+    "title",
+    "instruction",
+    "intent",
+    "question",
+    "reason",
+    "state",
+];
+
+/// Informative summary shared by the SDK connectors: a string message body, or
+/// the first non-empty summary-like payload field, truncated to 160 code points
+/// with a trailing ellipsis; otherwise the event type.
+pub fn summarize_payload(event_type: &str, payload: &Value) -> String {
+    if event_type == event_type::MESSAGE_CREATE
+        && payload.get("content_type").is_some_and(Value::is_string)
+    {
+        if let Some(content) = payload.get("content").and_then(Value::as_str) {
+            if !content.trim().is_empty() {
+                return truncate(content, SUMMARY_MAX_CHARS);
+            }
         }
     }
-    payload
-        .get("instruction")
-        .or_else(|| payload.get("intent"))
-        .or_else(|| payload.get("reason"))
-        .and_then(Value::as_str)
-        .map(|text| text.chars().take(160).collect())
+    SUMMARY_FIELDS
+        .iter()
+        .filter_map(|field| payload.get(*field).and_then(Value::as_str))
+        .find(|value| !value.trim().is_empty())
+        .map(|value| truncate(value, SUMMARY_MAX_CHARS))
         .unwrap_or_else(|| event_type.to_owned())
 }
 
-fn timeline_kind(event_type: &str) -> String {
-    if event_type == event_type::MESSAGE_CREATE {
-        "message".to_owned()
-    } else if event_type.starts_with("room.") {
-        "room".to_owned()
-    } else if event_type == "turn.update" || event_type.ends_with(".update") {
-        "control".to_owned()
-    } else if event_type.ends_with(".create") {
-        "signal".to_owned()
-    } else {
-        "event".to_owned()
+fn truncate(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_owned();
     }
+    let mut truncated: String = value.chars().take(max_chars - 1).collect();
+    truncated.push('…');
+    truncated
 }

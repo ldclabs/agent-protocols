@@ -1,7 +1,7 @@
 //! Agent Discourse Protocol 1.0: kernel types, the room type system, and
 //! verification helpers.
 //!
-//! The protocol defines eleven built-in event types. Every other event type is
+//! The protocol defines twelve built-in event types. Every other event type is
 //! declared per room as a schema-validated type definition, either inline or
 //! imported from a type pack. Hosts validate structure and permissions; they
 //! never need to understand application semantics.
@@ -16,15 +16,18 @@ use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 
 use crate::error::{Result, SdkError};
-use crate::identity::{verify_envelope, AgentId, Envelope, Event, MAX_SAFE_NONCE};
+use crate::identity::{
+    validate_event_fields, verify_envelope, AgentId, Envelope, Event, ListResponse, MAX_SAFE_NONCE,
+};
 
 pub const PROTOCOL: &str = "agent-discourse/1.0";
 
-/// The eleven built-in event types. All other types are room-defined.
+/// The twelve built-in event types. All other types are room-defined.
 pub mod event_type {
     pub const ROOM_CREATE: &str = "room.create";
     pub const ROOM_UPDATE: &str = "room.update";
     pub const ROOM_JOIN: &str = "room.join";
+    pub const ROOM_JOIN_REQUEST: &str = "room.join.request";
     pub const ROOM_JOIN_REVIEW: &str = "room.join.review";
     pub const ROOM_LEAVE: &str = "room.leave";
     pub const ROOM_MEMBER_ROLE_UPDATE: &str = "room.member.role.update";
@@ -35,10 +38,11 @@ pub mod event_type {
     pub const MESSAGE_CREATE: &str = "message.create";
 }
 
-pub const BUILTIN_EVENT_TYPES: [&str; 11] = [
+pub const BUILTIN_EVENT_TYPES: [&str; 12] = [
     event_type::ROOM_CREATE,
     event_type::ROOM_UPDATE,
     event_type::ROOM_JOIN,
+    event_type::ROOM_JOIN_REQUEST,
     event_type::ROOM_JOIN_REVIEW,
     event_type::ROOM_LEAVE,
     event_type::ROOM_MEMBER_ROLE_UPDATE,
@@ -49,8 +53,8 @@ pub const BUILTIN_EVENT_TYPES: [&str; 11] = [
     event_type::MESSAGE_CREATE,
 ];
 
-/// Built-in membership events. They carry the `signal` class: they anchor to
-/// an accepted record but never contend for or advance the room head, so busy
+/// Built-in membership events. They are `signal`-class: they anchor to an
+/// accepted record but never contend for or advance the room head, so busy
 /// rooms cannot starve joins, reviews, or other membership writes.
 pub const MEMBERSHIP_EVENT_TYPES: [&str; 5] = [
     event_type::ROOM_JOIN,
@@ -60,35 +64,36 @@ pub const MEMBERSHIP_EVENT_TYPES: [&str; 5] = [
     event_type::ROOM_MEMBER_REMOVE,
 ];
 
-/// Standard ADP error codes from the Section 20 table.
-pub const DISCOURSE_ERROR_CODES: [&str; 29] = [
-    "invalid_event",
-    "invalid_event_hash",
-    "invalid_signature",
-    "invalid_actor",
-    "timestamp_out_of_window",
-    "nonce_not_greater",
+/// Contract writes (Section 5.1): anchored like signals, so discussion traffic
+/// cannot starve them, but head-advancing, so replies composed against the old
+/// contract are rejected and re-read.
+pub const CONTRACT_EVENT_TYPES: [&str; 4] = [
+    event_type::ROOM_UPDATE,
+    event_type::ROOM_CLOSE,
+    event_type::ROOM_CANCEL,
+    event_type::TYPE_DEFINE,
+];
+
+/// ADP-specific error codes (Section 19); shared codes come from Agent Identity.
+pub const DISCOURSE_ERROR_CODES: [&str; 20] = [
     "room_not_found",
     "room_not_active",
     "room_ended",
-    "permission_denied",
+    "host_mismatch",
     "approval_required",
     "join_request_not_found",
-    "join_request_not_approved",
-    "join_request_role_mismatch",
-    "join_request_expired",
+    "join_request_not_pending",
     "member_banned",
     "role_not_allowed",
     "max_speakers_exceeded",
     "membership_required",
-    "invalid_token",
     "room_head_mismatch",
     "base_record_mismatch",
     "agent_status_not_found",
-    "rate_limited",
-    "payload_too_large",
     "type_not_defined",
     "type_disabled",
+    "type_conflict",
+    "invalid_type_schema",
     "payload_schema_violation",
     "pack_unavailable",
 ];
@@ -152,48 +157,85 @@ pub enum TypeStatus {
     Disabled,
 }
 
-/// Class of a built-in type per the Section 13.2 table.
+/// Class of an accepted record: its freshness class for built-in types
+/// (Section 5.1) and its registry `kind` for custom types. `message` and
+/// `control` records are head-bound.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum BuiltinEventClass {
-    Lifecycle,
+pub enum RecordClass {
+    Genesis,
+    Contract,
+    Message,
     Signal,
     Control,
-    Message,
 }
 
-/// Section 13.2 class of a built-in type; `None` for room-defined types.
-pub fn builtin_event_class(event_type: &str) -> Option<BuiltinEventClass> {
+/// Class of a built-in type per the Section 12.2 table; `None` for
+/// room-defined types and for `room.join.request`, which never becomes a record.
+pub fn builtin_event_class(event_type: &str) -> Option<RecordClass> {
     match event_type {
-        event_type::ROOM_CREATE
-        | event_type::ROOM_UPDATE
+        event_type::ROOM_CREATE => Some(RecordClass::Genesis),
+        event_type::ROOM_UPDATE
         | event_type::ROOM_CLOSE
-        | event_type::ROOM_CANCEL => Some(BuiltinEventClass::Lifecycle),
+        | event_type::ROOM_CANCEL
+        | event_type::TYPE_DEFINE => Some(RecordClass::Contract),
         event_type::ROOM_JOIN
         | event_type::ROOM_JOIN_REVIEW
         | event_type::ROOM_LEAVE
         | event_type::ROOM_MEMBER_ROLE_UPDATE
-        | event_type::ROOM_MEMBER_REMOVE => Some(BuiltinEventClass::Signal),
-        event_type::TYPE_DEFINE => Some(BuiltinEventClass::Control),
-        event_type::MESSAGE_CREATE => Some(BuiltinEventClass::Message),
+        | event_type::ROOM_MEMBER_REMOVE => Some(RecordClass::Signal),
+        event_type::MESSAGE_CREATE => Some(RecordClass::Message),
         _ => None,
     }
 }
 
-/// Whether an accepted record of this type advances the room head and must
-/// therefore match the current head when written (Section 5.1). Room
-/// lifecycle, `message`-kind, and `control`-kind records advance the head;
-/// `signal`-kind records — including the built-in membership events — only
-/// anchor to an accepted record. Unknown custom types default to
+fn kind_class(kind: TypeKind) -> RecordClass {
+    match kind {
+        TypeKind::Message => RecordClass::Message,
+        TypeKind::Signal => RecordClass::Signal,
+        TypeKind::Control => RecordClass::Control,
+    }
+}
+
+/// Record class of an event type; `None` for `room.join.request` and for
+/// custom types absent from `types`.
+pub fn record_class(event_type: &str, types: &[TypeDef]) -> Option<RecordClass> {
+    if let Some(class) = builtin_event_class(event_type) {
+        return Some(class);
+    }
+    if is_builtin_event_type(event_type) {
+        return None;
+    }
+    types
+        .iter()
+        .find(|def| def.name == event_type)
+        .map(|def| kind_class(def.kind))
+}
+
+/// Whether an accepted record of this type advances the room head (Section
+/// 5.1): every class except `signal`. Unknown custom types default to
 /// head-advancing.
 pub fn event_advances_room_head(event_type: &str, registry: &TypeRegistry) -> bool {
-    if let Some(class) = builtin_event_class(event_type) {
-        return class != BuiltinEventClass::Signal;
+    event_type_advances_head(
+        event_type,
+        &registry.definitions().cloned().collect::<Vec<_>>(),
+    )
+}
+
+/// [`event_advances_room_head`] over a materialized type list.
+pub fn event_type_advances_head(event_type: &str, types: &[TypeDef]) -> bool {
+    record_class(event_type, types) != Some(RecordClass::Signal)
+}
+
+/// Whether a write of this type must match the current room head (Section
+/// 5.1): `message.create` and custom `message`/`control` kinds. Contract and
+/// signal writes only anchor. Unknown custom types default to head-bound.
+pub fn event_requires_room_head(event_type: &str, types: &[TypeDef]) -> bool {
+    match record_class(event_type, types) {
+        Some(RecordClass::Message | RecordClass::Control) => true,
+        Some(_) => false,
+        None => !is_builtin_event_type(event_type),
     }
-    registry
-        .get(event_type)
-        .map(|def| def.kind != TypeKind::Signal)
-        .unwrap_or(true)
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -214,6 +256,8 @@ pub enum JoinDecision {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RoomCreatePayload {
+    /// Origin of the host API the room is created on; binds the event to one host.
+    pub host: String,
     pub topic: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agenda: Option<String>,
@@ -222,51 +266,58 @@ pub struct RoomCreatePayload {
     pub visibility: Visibility,
     pub start_time: i64,
     pub end_time: i64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<RoomPolicy>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub types: Vec<TypeDeclaration>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub types: Option<Vec<TypeDeclaration>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 impl RoomCreatePayload {
     pub fn new(
+        host: impl Into<String>,
         topic: impl Into<String>,
         visibility: Visibility,
         start_time: i64,
         end_time: i64,
     ) -> Self {
         Self {
+            host: host.into(),
             topic: topic.into(),
             agenda: None,
             guidance: None,
             visibility,
             start_time,
             end_time,
-            tags: Vec::new(),
+            tags: None,
             language: None,
             policy: None,
-            types: Vec::new(),
-            extra: BTreeMap::new(),
+            types: None,
+            extra: None,
         }
     }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RoomPolicy {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub moderator_agent_ids: Vec<AgentId>,
+    /// Agent IDs pre-approved for direct `room.join` with exactly this role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invites: Option<BTreeMap<AgentId, Role>>,
+    /// Roles anyone may take by direct `room.join` in a public room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_roles: Option<Vec<Role>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_speakers: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observer_allowed: Option<bool>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 impl RoomPolicy {
@@ -277,10 +328,9 @@ impl RoomPolicy {
 
 /// Payload of `room.update`: a partial contract revision. A present field
 /// replaces the current value entirely; an empty value clears an optional
-/// field. `visibility` is not updatable, and the type registry evolves only
-/// through `type.define`. The field set is closed: `deny_unknown_fields`
-/// rejects non-updatable fields (e.g. `visibility`) so all three SDKs agree,
-/// matching the explicit key check in the TypeScript and Python validators.
+/// field. `host` and `visibility` are not updatable, and the type registry
+/// evolves only through `type.define`. The field set is closed:
+/// `deny_unknown_fields` rejects non-updatable fields so all three SDKs agree.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RoomUpdatePayload {
@@ -324,10 +374,10 @@ pub struct RoomMemberRemovePayload {
     pub ban: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 impl RoomMemberRemovePayload {
@@ -336,8 +386,8 @@ impl RoomMemberRemovePayload {
             member,
             ban: None,
             reason: None,
-            references: Vec::new(),
-            extra: BTreeMap::new(),
+            references: None,
+            extra: None,
         }
     }
 
@@ -355,7 +405,7 @@ pub struct TypeDef {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Self-contained JSON Schema (draft 2020-12) for the event payload.
+    /// JSON Schema for the event payload, following the type schema profile.
     pub schema: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roles: Option<Vec<Role>>,
@@ -453,9 +503,103 @@ pub struct ServerRecord<P = Value> {
     #[serde(default)]
     pub pre_hash: Option<String>,
     pub hash: String,
-    pub received_at: i64,
+    pub accepted_at: i64,
     pub envelope: Envelope<P>,
 }
+
+/// Envelope of a redacted record (Section 14.1): its event ID and type only.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RedactedEnvelope {
+    pub hash: String,
+    pub redacted: bool,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+/// A redacted server record.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RedactedServerRecord {
+    pub room_id: String,
+    pub seq: u64,
+    #[serde(default)]
+    pub pre_hash: Option<String>,
+    pub hash: String,
+    pub accepted_at: i64,
+    pub envelope: RedactedEnvelope,
+}
+
+/// A record as it appears in history or an archive: signed or redacted.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
+pub enum ArchiveRecord {
+    Redacted(RedactedServerRecord),
+    Signed(ServerRecord),
+}
+
+impl ArchiveRecord {
+    pub fn room_id(&self) -> &str {
+        match self {
+            Self::Signed(r) => &r.room_id,
+            Self::Redacted(r) => &r.room_id,
+        }
+    }
+    pub fn seq(&self) -> u64 {
+        match self {
+            Self::Signed(r) => r.seq,
+            Self::Redacted(r) => r.seq,
+        }
+    }
+    pub fn pre_hash(&self) -> Option<&str> {
+        match self {
+            Self::Signed(r) => r.pre_hash.as_deref(),
+            Self::Redacted(r) => r.pre_hash.as_deref(),
+        }
+    }
+    pub fn hash(&self) -> &str {
+        match self {
+            Self::Signed(r) => &r.hash,
+            Self::Redacted(r) => &r.hash,
+        }
+    }
+    pub fn accepted_at(&self) -> i64 {
+        match self {
+            Self::Signed(r) => r.accepted_at,
+            Self::Redacted(r) => r.accepted_at,
+        }
+    }
+    pub fn envelope_hash(&self) -> &str {
+        match self {
+            Self::Signed(r) => &r.envelope.hash,
+            Self::Redacted(r) => &r.envelope.hash,
+        }
+    }
+    /// The event type, kept even when the record is redacted.
+    pub fn event_type(&self) -> &str {
+        match self {
+            Self::Signed(r) => &r.envelope.event.kind,
+            Self::Redacted(r) => &r.envelope.kind,
+        }
+    }
+    pub fn is_redacted(&self) -> bool {
+        matches!(self, Self::Redacted(_))
+    }
+}
+
+impl From<ServerRecord> for ArchiveRecord {
+    fn from(record: ServerRecord) -> Self {
+        Self::Signed(record)
+    }
+}
+
+impl From<RedactedServerRecord> for ArchiveRecord {
+    fn from(record: RedactedServerRecord) -> Self {
+        Self::Redacted(record)
+    }
+}
+
+pub type RoomEventsResponse = ListResponse<ArchiveRecord>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerRecordHashPayload {
@@ -463,7 +607,7 @@ pub struct ServerRecordHashPayload {
     pub seq: u64,
     pub pre_hash: Option<String>,
     pub envelope_hash: String,
-    pub received_at: i64,
+    pub accepted_at: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -500,7 +644,7 @@ pub struct RoomResponse {
     #[serde(default)]
     pub pre_hash: Option<String>,
     pub hash: String,
-    pub received_at: i64,
+    pub accepted_at: i64,
     /// Latest accepted head-advancing record. Falls back to `seq`/`hash` on older hosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<RoomHead>,
@@ -514,65 +658,53 @@ pub struct RoomHead {
     pub hash: String,
 }
 
+/// Payload of a direct `room.join` (Section 9.2).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RoomJoinPayload {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
     pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perspective: Option<String>,
 }
 
+/// Payload of a signed `room.join.request` (Section 10).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct RoomJoinRequestInput {
+#[serde(deny_unknown_fields)]
+pub struct RoomJoinRequestPayload {
     pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perspective: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
-impl RoomJoinRequestInput {
+impl RoomJoinRequestPayload {
     pub fn new(role: Role) -> Self {
         Self {
             role,
             perspective: None,
             reason: None,
-            extra: BTreeMap::new(),
+            extra: None,
         }
     }
 }
 
+/// The join request resource: the signed request plus review state.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RoomJoinRequest {
+    /// Event ID of the signed request.
     pub id: String,
-    pub room_id: String,
-    pub applicant: AgentId,
-    pub role: Role,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub perspective: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    pub created_at: i64,
-    pub expires_at: i64,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct RoomJoinRequestStatus {
-    pub request: RoomJoinRequest,
+    pub request: Envelope<RoomJoinRequestPayload>,
     pub status: JoinRequestStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approved_role: Option<Role>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_reason: Option<String>,
+    pub expires_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_by: Option<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_event_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -636,26 +768,21 @@ pub struct AgentStatus {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct AgentStatusListResponse {
-    pub statuses: Vec<AgentStatus>,
-}
+pub type AgentStatusListResponse = ListResponse<AgentStatus>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct AgentStatusGetResponse {
-    pub status: AgentStatus,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RoomJoinReviewPayload {
-    pub request: RoomJoinRequest,
+    /// The applicant's signed `room.join.request` envelope.
+    pub request: Envelope<RoomJoinRequestPayload>,
     pub decision: JoinDecision,
+    /// Required when approving.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -664,8 +791,8 @@ pub struct RoleUpdatePayload {
     pub role: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 /// Shared payload of `room.leave`, `room.close`, and `room.cancel`.
@@ -673,10 +800,10 @@ pub struct RoleUpdatePayload {
 pub struct ReasonPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 pub type RoomLeavePayload = ReasonPayload;
@@ -686,11 +813,12 @@ pub type RoomCancelPayload = ReasonPayload;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MessageCreatePayload {
     pub content_type: String,
+    /// A JSON string, or a JSON object for a JSON media type.
     pub content: Value,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<BTreeMap<String, Value>>,
 }
 
 impl MessageCreatePayload {
@@ -698,8 +826,8 @@ impl MessageCreatePayload {
         Self {
             content_type: content_type.into(),
             content,
-            references: Vec::new(),
-            extra: BTreeMap::new(),
+            references: None,
+            extra: None,
         }
     }
 
@@ -724,7 +852,7 @@ pub struct ProfileResolverMetadata {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscourseProtocolDiscovery {
     pub protocol: String,
-    pub host: String,
+    pub service: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -740,16 +868,12 @@ pub struct ArchiveManifest {
     pub protocol: String,
     #[serde(rename = "type")]
     pub kind: String,
-    pub host: String,
     pub room_id: String,
     pub url: String,
     pub generated_at: i64,
-    pub event_count: u64,
-    pub first_seq: u64,
     pub last_seq: u64,
+    /// Hash of the record at `last_seq`: the archive's commitment to every record.
     pub last_hash: String,
-    pub events_sha3_256: String,
-    pub archive_root: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub formats: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -770,6 +894,26 @@ pub fn room_create_event(
         nonce,
         payload,
     )
+}
+
+/// A `room.join.request` carries `room_id` but no base: its author may not be
+/// able to read the room.
+pub fn room_join_request_event(
+    actor: AgentId,
+    created_at: i64,
+    nonce: u64,
+    room_id: impl Into<String>,
+    payload: RoomJoinRequestPayload,
+) -> Event<RoomJoinRequestPayload> {
+    Event::new(
+        PROTOCOL,
+        event_type::ROOM_JOIN_REQUEST,
+        actor,
+        created_at,
+        nonce,
+        payload,
+    )
+    .with_room_id(room_id)
 }
 
 pub fn type_define_event(
@@ -793,6 +937,7 @@ pub fn type_define_event(
     .with_room_head(base_seq, base_hash)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn discourse_event<P>(
     kind: impl Into<String>,
     actor: AgentId,
@@ -816,61 +961,64 @@ pub fn event_requires_room_id(event_type: &str) -> bool {
     event_type != event_type::ROOM_CREATE
 }
 
+/// Whether events of this type carry `base_seq` / `base_hash`.
+pub fn event_requires_base(event_type: &str) -> bool {
+    event_type != event_type::ROOM_CREATE && event_type != event_type::ROOM_JOIN_REQUEST
+}
+
+/// Room IDs are host-assigned and URL-safe (Section 6.1).
+pub fn validate_room_id(room_id: &str) -> Result<()> {
+    let valid = (1..=64).contains(&room_id.len())
+        && room_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid_event("room_id must match [A-Za-z0-9_-]{1,64}"))
+    }
+}
+
+fn invalid_event(message: impl Into<String>) -> SdkError {
+    SdkError::protocol("invalid_event", message)
+}
+
 pub fn validate_discourse_envelope<P>(envelope: &Envelope<P>) -> Result<()>
 where
     P: Serialize,
 {
     verify_envelope(envelope)?;
-    let protocol = envelope.event.protocol.as_str();
-    if protocol != PROTOCOL {
+    validate_discourse_event_fields(&envelope.event)
+}
+
+/// Section 5 event-shape rules: closed fields, room ID, base, and mentions.
+pub fn validate_discourse_event_fields<P>(event: &Event<P>) -> Result<()> {
+    if event.protocol != PROTOCOL {
         return Err(SdkError::InvalidEventProtocol {
             expected: PROTOCOL.to_owned(),
-            actual: envelope.event.protocol.clone(),
+            actual: event.protocol.clone(),
         });
     }
-    if envelope.event.kind == event_type::ROOM_CREATE {
-        if envelope.event.room_id.is_some() {
-            return Err(SdkError::InvalidPayload(
-                "room.create must not include room_id".to_owned(),
-            ));
+    match event.kind.as_str() {
+        event_type::ROOM_CREATE => validate_event_fields(event, &[]),
+        event_type::ROOM_JOIN_REQUEST => {
+            validate_event_fields(event, &["room_id"])?;
+            validate_room_id(event.room_id.as_deref().ok_or(SdkError::MissingRoomId)?)
         }
-        if envelope.event.base_seq.is_some()
-            || envelope.event.base_hash.is_some()
-            || !envelope.event.mentions.is_empty()
-        {
-            return Err(SdkError::InvalidPayload(
-                "room.create must not include base_seq, base_hash, or mentions".to_owned(),
-            ));
+        _ => {
+            validate_event_fields(event, &["room_id", "base_seq", "base_hash", "mentions"])?;
+            validate_room_id(event.room_id.as_deref().ok_or(SdkError::MissingRoomId)?)?;
+            validate_room_head_precondition(event)?;
+            validate_mentions(event.mentions())
         }
-    } else {
-        if envelope.event.room_id.is_none() {
-            return Err(SdkError::MissingRoomId);
-        }
-        validate_room_head_precondition(&envelope.event)?;
-        validate_mentions(&envelope.event.mentions)?;
     }
-    Ok(())
 }
 
 pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Result<()> {
+    validate_discourse_event_fields(&envelope.event)?;
     if envelope.event.kind == event_type::ROOM_CREATE {
-        if envelope.event.room_id.is_some() {
-            return Err(SdkError::InvalidPayload(
-                "room.create must not include room_id".to_owned(),
-            ));
-        }
-        if envelope.event.base_seq.is_some()
-            || envelope.event.base_hash.is_some()
-            || !envelope.event.mentions.is_empty()
-        {
-            return Err(SdkError::InvalidPayload(
-                "room.create must not include base_seq, base_hash, or mentions".to_owned(),
-            ));
-        }
         return Ok(());
     }
-    validate_room_head_precondition(&envelope.event)?;
-    validate_mentions(&envelope.event.mentions)?;
     match envelope.event.room_id.as_deref() {
         Some(actual) if actual == path_room_id => Ok(()),
         Some(actual) => Err(SdkError::RoomIdMismatch {
@@ -886,32 +1034,28 @@ fn validate_room_head_precondition<P>(event: &Event<P>) -> Result<()> {
         (Some(seq), Some(hash)) if seq > 0 && seq <= MAX_SAFE_NONCE && !hash.trim().is_empty() => {
             Ok(())
         }
-        (Some(0), _) => Err(SdkError::InvalidPayload(
-            "base_seq must be a positive safe JSON integer".to_owned(),
+        (Some(0), _) => Err(invalid_event(
+            "base_seq must be a positive safe JSON integer",
         )),
-        (Some(_), Some(hash)) if hash.trim().is_empty() => Err(SdkError::InvalidPayload(
-            "base_hash must not be empty".to_owned(),
-        )),
-        (Some(seq), _) if seq > MAX_SAFE_NONCE => Err(SdkError::InvalidPayload(
-            "base_seq must be a safe JSON integer".to_owned(),
-        )),
-        _ => Err(SdkError::InvalidPayload(
-            "room event requires base_seq and base_hash".to_owned(),
-        )),
+        (Some(_), Some(hash)) if hash.trim().is_empty() => {
+            Err(invalid_event("base_hash must not be empty"))
+        }
+        (Some(seq), _) if seq > MAX_SAFE_NONCE => {
+            Err(invalid_event("base_seq must be a safe JSON integer"))
+        }
+        _ => Err(invalid_event("room event requires base_seq and base_hash")),
     }
 }
 
 fn validate_mentions(mentions: &[AgentId]) -> Result<()> {
     if mentions.len() > MAX_MENTIONS {
-        return Err(SdkError::InvalidPayload(format!(
+        return Err(invalid_event(format!(
             "mentions must not exceed {MAX_MENTIONS} entries"
         )));
     }
     let unique: BTreeSet<&AgentId> = mentions.iter().collect();
     if unique.len() != mentions.len() {
-        return Err(SdkError::InvalidPayload(
-            "mentions must be unique".to_owned(),
-        ));
+        return Err(invalid_event("mentions must be unique"));
     }
     Ok(())
 }
@@ -926,22 +1070,16 @@ pub fn validate_custom_event_type_name(name: &str) -> Result<()> {
             && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
     });
     if !valid_shape {
-        return Err(SdkError::InvalidPayload(format!(
-            "invalid event type name: {name}"
-        )));
+        return Err(invalid_event(format!("invalid event type name: {name}")));
     }
     if is_builtin_event_type(name) {
-        return Err(SdkError::InvalidPayload(format!(
-            "{name} is a built-in event type"
-        )));
+        return Err(invalid_event(format!("{name} is a built-in event type")));
     }
     if RESERVED_TYPE_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
     {
-        return Err(SdkError::InvalidPayload(format!(
-            "{name} uses a reserved type prefix"
-        )));
+        return Err(invalid_event(format!("{name} uses a reserved type prefix")));
     }
     Ok(())
 }
@@ -949,55 +1087,72 @@ pub fn validate_custom_event_type_name(name: &str) -> Result<()> {
 pub fn validate_type_def(def: &TypeDef) -> Result<()> {
     validate_custom_event_type_name(&def.name)?;
     if def.title.trim().is_empty() {
-        return Err(SdkError::InvalidPayload(
-            "type definition title must not be empty".to_owned(),
-        ));
+        return Err(invalid_event("type definition title must not be empty"));
     }
     if !def.schema.is_object() {
-        return Err(SdkError::InvalidPayload(
-            "type definition schema must be a JSON Schema object".to_owned(),
+        return Err(SdkError::protocol(
+            "invalid_type_schema",
+            "type definition schema must be a JSON Schema object",
         ));
     }
+    validate_type_schema_profile(&def.schema)?;
     compile_schema(&def.schema)?;
     if matches!(&def.roles, Some(roles) if roles.is_empty()) {
-        return Err(SdkError::InvalidPayload(
-            "type definition roles must not be empty".to_owned(),
-        ));
+        return Err(invalid_event("type definition roles must not be empty"));
     }
     if matches!(def.rate_hint, Some(0)) || matches!(def.max_payload_hint, Some(0)) {
-        return Err(SdkError::InvalidPayload(
-            "type definition hints must be positive".to_owned(),
-        ));
+        return Err(invalid_event("type definition hints must be positive"));
     }
     Ok(())
+}
+
+/// `<algorithm>:<base64url-digest>` content digests (Section 12.5).
+pub fn validate_content_digest(digest: &str) -> Result<()> {
+    let valid = digest.split_once(':').is_some_and(|(algorithm, value)| {
+        matches!(algorithm, "sha256" | "sha3-256")
+            && value.len() == 43
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid_event(
+            "external pack digest must be <sha256|sha3-256>:<base64url-digest>",
+        ))
+    }
 }
 
 pub fn validate_pack_import(import: &PackImport) -> Result<()> {
     match (&import.use_pack, &import.pack, &import.digest) {
         (Some(id), None, None) => {
             if !is_registered_pack_id(id) {
-                return Err(SdkError::InvalidPayload(format!(
-                    "invalid registered pack id: {id}"
-                )));
+                return Err(invalid_event(format!("invalid registered pack id: {id}")));
             }
         }
-        (None, Some(_), Some(digest)) => {
-            if digest.trim().is_empty() {
-                return Err(SdkError::InvalidPayload(
-                    "external pack digest must not be empty".to_owned(),
-                ));
+        (None, Some(pack), Some(digest)) => {
+            if !pack.starts_with("https://") {
+                return Err(invalid_event("external pack must be an HTTPS URL"));
             }
+            validate_content_digest(digest)?;
         }
         _ => {
-            return Err(SdkError::InvalidPayload(
-                "pack import requires either use, or pack with digest".to_owned(),
+            return Err(invalid_event(
+                "pack import requires either use, or pack with digest",
             ));
         }
     }
-    if matches!(&import.types, Some(types) if types.is_empty()) {
-        return Err(SdkError::InvalidPayload(
-            "pack import types subset must not be empty".to_owned(),
-        ));
+    if let Some(types) = &import.types {
+        if types.is_empty() {
+            return Err(invalid_event("pack import types subset must not be empty"));
+        }
+        if types.iter().collect::<BTreeSet<_>>().len() != types.len() {
+            return Err(SdkError::protocol(
+                "type_conflict",
+                "pack import types subset has duplicates",
+            ));
+        }
     }
     Ok(())
 }
@@ -1026,49 +1181,381 @@ fn is_registered_pack_id(id: &str) -> bool {
             .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
 }
 
-pub fn validate_room_create_payload(payload: &RoomCreatePayload) -> Result<()> {
-    if payload.topic.trim().is_empty() {
-        return Err(SdkError::InvalidPayload(
-            "room topic must not be empty".to_owned(),
-        ));
+// ── Type schema profile (Section 12.3.1).
+
+const FORBIDDEN_SCHEMA_KEYWORDS: [&str; 5] = [
+    "$dynamicRef",
+    "$dynamicAnchor",
+    "$recursiveRef",
+    "$recursiveAnchor",
+    "$vocabulary",
+];
+const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+const SUBSCHEMA_KEYWORDS: [&str; 11] = [
+    "items",
+    "additionalProperties",
+    "not",
+    "if",
+    "then",
+    "else",
+    "contains",
+    "propertyNames",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+    "additionalItems",
+];
+const SUBSCHEMA_ARRAY_KEYWORDS: [&str; 4] = ["allOf", "anyOf", "oneOf", "prefixItems"];
+const SUBSCHEMA_MAP_KEYWORDS: [&str; 5] = [
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+];
+
+fn walk_schema(
+    schema: &Value,
+    visit: &mut dyn FnMut(&serde_json::Map<String, Value>) -> Result<()>,
+) -> Result<()> {
+    let Some(node) = schema.as_object() else {
+        return Ok(());
+    };
+    visit(node)?;
+    for key in SUBSCHEMA_KEYWORDS {
+        if let Some(child) = node.get(key) {
+            walk_schema(child, visit)?;
+        }
     }
-    if payload.start_time >= payload.end_time {
-        return Err(SdkError::InvalidPayload(
-            "start_time must be before end_time".to_owned(),
-        ));
+    for key in SUBSCHEMA_ARRAY_KEYWORDS {
+        if let Some(Value::Array(items)) = node.get(key) {
+            for item in items {
+                walk_schema(item, visit)?;
+            }
+        }
     }
-    if let Some(policy) = &payload.policy {
-        if matches!(policy.max_speakers, Some(0)) {
-            return Err(SdkError::InvalidPayload(
-                "max_speakers must be a positive integer".to_owned(),
+    for key in SUBSCHEMA_MAP_KEYWORDS {
+        if let Some(Value::Object(map)) = node.get(key) {
+            for value in map.values() {
+                walk_schema(value, visit)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn invalid_schema(message: impl Into<String>) -> SdkError {
+    SdkError::protocol("invalid_type_schema", message)
+}
+
+/// Enforces the type schema profile (Section 12.3.1): fragment-only `$ref`,
+/// no dynamic or recursive references, the 2020-12 dialect, and portable
+/// regular expressions.
+pub fn validate_type_schema_profile(schema: &Value) -> Result<()> {
+    walk_schema(schema, &mut |node| {
+        for keyword in FORBIDDEN_SCHEMA_KEYWORDS {
+            if node.contains_key(keyword) {
+                return Err(invalid_schema(format!("{keyword} is not allowed")));
+            }
+        }
+        if let Some(dialect) = node.get("$schema") {
+            if dialect.as_str() != Some(SCHEMA_DIALECT) {
+                return Err(invalid_schema("$schema must be the draft 2020-12 dialect"));
+            }
+        }
+        if let Some(reference) = node.get("$ref") {
+            if !reference.as_str().is_some_and(|r| r.starts_with('#')) {
+                return Err(invalid_schema("$ref must be a fragment inside the schema"));
+            }
+        }
+        if let Some(pattern) = node.get("pattern") {
+            let pattern = pattern
+                .as_str()
+                .ok_or_else(|| invalid_schema("pattern must be a string"))?;
+            validate_portable_pattern(pattern)?;
+        }
+        if let Some(Value::Object(properties)) = node.get("patternProperties") {
+            for pattern in properties.keys() {
+                validate_portable_pattern(pattern)?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Checks that a pattern is an I-Regexp (RFC 9485) without `\p{…}`/`\P{…}`
+/// and without `.` outside a character class, optionally anchored with a
+/// leading `^` and a trailing `$` (Section 12.3.1).
+pub fn validate_portable_pattern(pattern: &str) -> Result<()> {
+    let reject =
+        |reason: &str| invalid_schema(format!("pattern {pattern:?} is not portable: {reason}"));
+    let mut body = pattern.strip_prefix('^').unwrap_or(pattern);
+    if body.ends_with('$') && !body.ends_with("\\$") {
+        body = &body[..body.len() - 1];
+    }
+    let chars: Vec<char> = body.chars().collect();
+    const SINGLE_ESCAPES: &str = "()*+-.?[\\]^{|}nrt";
+    let mut i = 0;
+    let mut depth = 0usize;
+    let mut can_quantify = false;
+    let read_escape = |i: &mut usize| -> Result<()> {
+        match chars.get(*i + 1) {
+            None => Err(reject("dangling escape")),
+            Some(next) if !SINGLE_ESCAPES.contains(*next) => {
+                Err(reject(&format!("escape \\{next}")))
+            }
+            Some(_) => {
+                *i += 2;
+                Ok(())
+            }
+        }
+    };
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                read_escape(&mut i)?;
+                can_quantify = true;
+            }
+            '[' => {
+                i += 1;
+                if chars.get(i) == Some(&'^') {
+                    i += 1;
+                }
+                // A leading `]` is literal in some engines and an empty class in others.
+                if chars.get(i) == Some(&']') {
+                    return Err(reject("empty character class"));
+                }
+                while i < chars.len() && chars[i] != ']' {
+                    match chars[i] {
+                        '\\' => read_escape(&mut i)?,
+                        '[' => return Err(reject("nested character class")),
+                        _ => i += 1,
+                    }
+                }
+                if chars.get(i) != Some(&']') {
+                    return Err(reject("unterminated character class"));
+                }
+                i += 1;
+                can_quantify = true;
+            }
+            '(' => {
+                if chars.get(i + 1) == Some(&'?') {
+                    return Err(reject("group modifiers"));
+                }
+                depth += 1;
+                i += 1;
+                can_quantify = false;
+            }
+            ')' => {
+                if depth == 0 {
+                    return Err(reject("unbalanced parenthesis"));
+                }
+                depth -= 1;
+                i += 1;
+                can_quantify = true;
+            }
+            '|' => {
+                i += 1;
+                can_quantify = false;
+            }
+            '*' | '+' | '?' => {
+                if !can_quantify {
+                    return Err(reject("quantifier without operand"));
+                }
+                i += 1;
+                if matches!(chars.get(i), Some('?' | '+')) {
+                    return Err(reject("lazy or possessive quantifier"));
+                }
+                can_quantify = false;
+            }
+            '{' => {
+                if !can_quantify {
+                    return Err(reject("quantifier without operand"));
+                }
+                let mut j = i + 1;
+                let start = j;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j == start {
+                    return Err(reject("malformed quantifier"));
+                }
+                if chars.get(j) == Some(&',') {
+                    j += 1;
+                    while j < chars.len() && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                }
+                if chars.get(j) != Some(&'}') {
+                    return Err(reject("malformed quantifier"));
+                }
+                i = j + 1;
+                if matches!(chars.get(i), Some('?' | '+')) {
+                    return Err(reject("lazy or possessive quantifier"));
+                }
+                can_quantify = false;
+            }
+            '.' => return Err(reject("'.' outside a character class")),
+            '^' | '$' => return Err(reject("anchor inside the pattern")),
+            '}' | ']' => return Err(reject(&format!("unescaped {}", chars[i]))),
+            _ => {
+                i += 1;
+                can_quantify = true;
+            }
+        }
+    }
+    if depth != 0 {
+        return Err(reject("unbalanced parenthesis"));
+    }
+    Ok(())
+}
+
+const ROLE_ORDER: [Role; 3] = [Role::Moderator, Role::Speaker, Role::Observer];
+
+/// Section 8.3 rules for a room policy.
+pub fn validate_room_policy(policy: Option<&RoomPolicy>) -> Result<()> {
+    let Some(policy) = policy else {
+        return Ok(());
+    };
+    if matches!(policy.max_speakers, Some(0)) {
+        return Err(invalid_event("max_speakers must be a positive integer"));
+    }
+    let observer_allowed = policy.observer_allowed.unwrap_or(true);
+    for role in policy.invites.iter().flat_map(|invites| invites.values()) {
+        if *role == Role::Observer && !observer_allowed {
+            return Err(SdkError::protocol(
+                "role_not_allowed",
+                "observers are not allowed",
             ));
         }
     }
-    for declaration in &payload.types {
+    if let Some(open_roles) = &policy.open_roles {
+        if open_roles.iter().collect::<BTreeSet<_>>().len() != open_roles.len() {
+            return Err(invalid_event("open_roles must be a list of unique roles"));
+        }
+        for role in open_roles {
+            match role {
+                Role::Moderator => {
+                    return Err(invalid_event("open_roles cannot contain moderator"))
+                }
+                Role::Observer if !observer_allowed => {
+                    return Err(SdkError::protocol(
+                        "role_not_allowed",
+                        "observers are not allowed",
+                    ))
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The roles anyone may take by direct `room.join` in a public room.
+pub fn effective_open_roles(policy: Option<&RoomPolicy>) -> Vec<Role> {
+    if let Some(open_roles) = policy.and_then(|p| p.open_roles.clone()) {
+        return open_roles;
+    }
+    if policy.and_then(|p| p.observer_allowed) == Some(false) {
+        vec![Role::Speaker]
+    } else {
+        vec![Role::Speaker, Role::Observer]
+    }
+}
+
+/// Section 9.2 direct-join eligibility: the actor is invited with exactly
+/// `role`, or the room is public and `role` is open. Bans and quotas are
+/// separate host checks.
+pub fn can_join_directly(
+    visibility: Visibility,
+    policy: Option<&RoomPolicy>,
+    actor: &AgentId,
+    role: Role,
+) -> bool {
+    if policy
+        .and_then(|p| p.invites.as_ref())
+        .and_then(|invites| invites.get(actor))
+        == Some(&role)
+    {
+        return true;
+    }
+    visibility == Visibility::Public && effective_open_roles(policy).contains(&role)
+}
+
+pub fn validate_room_create_payload(payload: &RoomCreatePayload) -> Result<()> {
+    let host_ok = payload
+        .host
+        .strip_prefix("https://")
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains(['/', '?', '#', '@', ' ']));
+    if !host_ok {
+        return Err(invalid_event("room.create host must be an HTTPS origin"));
+    }
+    if payload.topic.trim().is_empty() {
+        return Err(invalid_event("room topic must not be empty"));
+    }
+    if payload.start_time >= payload.end_time {
+        return Err(invalid_event("start_time must be before end_time"));
+    }
+    validate_room_policy(payload.policy.as_ref())?;
+    for declaration in payload.types.iter().flatten() {
         validate_type_declaration(declaration)?;
     }
     Ok(())
 }
 
+/// Host binding check (Section 8.1): `host` must be the receiving host's API origin.
+pub fn validate_room_create_host(payload: &RoomCreatePayload, host_origin: &str) -> Result<()> {
+    if payload.host == host_origin {
+        Ok(())
+    } else {
+        Err(SdkError::protocol(
+            "host_mismatch",
+            format!("room.create names {}, not {host_origin}", payload.host),
+        ))
+    }
+}
+
 pub fn validate_message_create_payload(payload: &MessageCreatePayload) -> Result<()> {
     if payload.content_type.trim().is_empty() {
-        return Err(SdkError::InvalidPayload(
-            "content_type must not be empty".to_owned(),
-        ));
+        return Err(invalid_event("content_type must not be empty"));
+    }
+    if !payload.content.is_string() && !payload.content.is_object() {
+        return Err(invalid_event("content must be a string or an object"));
     }
     Ok(())
 }
 
-pub fn validate_room_join_payload(payload: &RoomJoinPayload) -> Result<()> {
-    if matches!(&payload.request_id, Some(request_id) if request_id.trim().is_empty()) {
-        return Err(SdkError::InvalidPayload(
-            "request_id must not be empty".to_owned(),
+/// Verifies a signed `room.join.request` envelope for embedding or review:
+/// hash, signature, and shape — historical verification, without the live
+/// time window or nonce check.
+pub fn validate_join_request_envelope(
+    envelope: &Envelope<RoomJoinRequestPayload>,
+    room_id: Option<&str>,
+) -> Result<()> {
+    validate_discourse_envelope(envelope)?;
+    if envelope.event.kind != event_type::ROOM_JOIN_REQUEST {
+        return Err(invalid_event(
+            "embedded request must be a room.join.request",
         ));
     }
-    if payload.request_id.is_some() && payload.perspective.is_some() {
-        return Err(SdkError::InvalidPayload(
-            "room.join payload cannot include both request_id and perspective".to_owned(),
-        ));
+    if let Some(room_id) = room_id {
+        if envelope.event.room_id.as_deref() != Some(room_id) {
+            return Err(SdkError::RoomIdMismatch {
+                expected: room_id.to_owned(),
+                actual: envelope.event.room_id.clone().unwrap_or_default(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Shape checks for `room.join.review`, including the embedded signed request.
+pub fn validate_room_join_review_payload(
+    payload: &RoomJoinReviewPayload,
+    room_id: Option<&str>,
+) -> Result<()> {
+    validate_join_request_envelope(&payload.request, room_id)?;
+    if payload.decision == JoinDecision::Approve && payload.role.is_none() {
+        return Err(invalid_event("an approving review requires a role"));
     }
     Ok(())
 }
@@ -1078,30 +1565,17 @@ pub fn validate_room_join_payload(payload: &RoomJoinPayload) -> Result<()> {
 /// host-side.
 pub fn validate_room_update_payload(payload: &RoomUpdatePayload) -> Result<()> {
     if payload.is_empty() {
-        return Err(SdkError::InvalidPayload(
-            "room.update payload must not be empty".to_owned(),
-        ));
+        return Err(invalid_event("room.update payload must not be empty"));
     }
     if matches!(&payload.topic, Some(topic) if topic.trim().is_empty()) {
-        return Err(SdkError::InvalidPayload(
-            "room topic must not be empty".to_owned(),
-        ));
+        return Err(invalid_event("room topic must not be empty"));
     }
     if let (Some(start_time), Some(end_time)) = (payload.start_time, payload.end_time) {
         if start_time >= end_time {
-            return Err(SdkError::InvalidPayload(
-                "start_time must be before end_time".to_owned(),
-            ));
+            return Err(invalid_event("start_time must be before end_time"));
         }
     }
-    if let Some(policy) = &payload.policy {
-        if matches!(policy.max_speakers, Some(0)) {
-            return Err(SdkError::InvalidPayload(
-                "max_speakers must be a positive integer".to_owned(),
-            ));
-        }
-    }
-    Ok(())
+    validate_room_policy(payload.policy.as_ref())
 }
 
 /// Shape checks for a `room.member.remove` payload. Creator, self, and
@@ -1122,28 +1596,41 @@ impl TypeRegistry {
         Self::default()
     }
 
-    /// Materializes a registry from declarations, resolving pack imports from
-    /// `packs`, keyed by registered pack id or external pack URI.
+    /// Materializes a registry from the `room.create` declarations, resolving
+    /// pack imports from `packs`, keyed by registered pack id or external pack
+    /// URI. A type name may appear only once across these declarations.
     pub fn from_declarations(
         declarations: &[TypeDeclaration],
         packs: &BTreeMap<String, Pack>,
     ) -> Result<Self> {
         let mut registry = Self::new();
+        let mut declared = BTreeSet::new();
         for declaration in declarations {
-            registry.apply(declaration, packs)?;
+            for name in registry.apply(declaration, packs)? {
+                if !declared.insert(name.clone()) {
+                    return Err(SdkError::protocol(
+                        "type_conflict",
+                        format!("type {name} is declared twice"),
+                    ));
+                }
+            }
         }
         Ok(registry)
     }
 
-    /// Applies one declaration: an inline definition or a pack import.
-    /// Redefining an existing type replaces it; the latest definition wins.
+    /// Applies one declaration — an inline definition or a pack import — and
+    /// returns the type names it declared. Declaring an existing type is a
+    /// redefinition: it must keep the type's kind, and the latest definition wins.
     pub fn apply(
         &mut self,
         declaration: &TypeDeclaration,
         packs: &BTreeMap<String, Pack>,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         match declaration {
-            TypeDeclaration::Def(def) => self.define(def.clone()),
+            TypeDeclaration::Def(def) => {
+                self.define(def.clone())?;
+                Ok(vec![def.name.clone()])
+            }
             TypeDeclaration::Import(import) => self.import(import, packs),
         }
     }
@@ -1152,17 +1639,21 @@ impl TypeRegistry {
         validate_type_def(&def)?;
         if let Some(existing) = self.types.get(&def.name) {
             if existing.kind != def.kind {
-                return Err(SdkError::InvalidPayload(format!(
-                    "type {} cannot change kind on redefinition",
-                    def.name
-                )));
+                return Err(SdkError::protocol(
+                    "type_conflict",
+                    format!("type {} cannot change kind on redefinition", def.name),
+                ));
             }
         }
         self.types.insert(def.name.clone(), def);
         Ok(())
     }
 
-    fn import(&mut self, import: &PackImport, packs: &BTreeMap<String, Pack>) -> Result<()> {
+    fn import(
+        &mut self,
+        import: &PackImport,
+        packs: &BTreeMap<String, Pack>,
+    ) -> Result<Vec<String>> {
         validate_pack_import(import)?;
         let reference = import
             .use_pack
@@ -1172,13 +1663,22 @@ impl TypeRegistry {
         let pack = packs
             .get(reference)
             .ok_or_else(|| SdkError::PackUnavailable(reference.to_owned()))?;
-        let available: BTreeSet<&str> = pack.types.iter().map(|def| def.name.as_str()).collect();
+        let mut available = BTreeSet::new();
+        for def in &pack.types {
+            if !available.insert(def.name.as_str()) {
+                return Err(SdkError::protocol(
+                    "type_conflict",
+                    format!("pack {reference} defines {} twice", def.name),
+                ));
+            }
+        }
         if let Some(subset) = &import.types {
             for name in subset {
                 if !available.contains(name.as_str()) {
-                    return Err(SdkError::PackUnavailable(format!(
-                        "type {name} is not in pack {reference}"
-                    )));
+                    return Err(SdkError::protocol(
+                        "type_conflict",
+                        format!("type {name} is not in pack {reference}"),
+                    ));
                 }
             }
         }
@@ -1189,11 +1689,13 @@ impl TypeRegistry {
                 .map(|subset| subset.contains(name))
                 .unwrap_or_else(|| available.contains(name.as_str()));
             if !imported {
-                return Err(SdkError::InvalidPayload(format!(
-                    "override target {name} is not imported from pack {reference}"
-                )));
+                return Err(SdkError::protocol(
+                    "type_conflict",
+                    format!("override target {name} is not imported from pack {reference}"),
+                ));
             }
         }
+        let mut declared = Vec::new();
         for def in &pack.types {
             if let Some(subset) = &import.types {
                 if !subset.contains(&def.name) {
@@ -1218,9 +1720,10 @@ impl TypeRegistry {
                     def.max_payload_hint = Some(max_payload_hint);
                 }
             }
+            declared.push(def.name.clone());
             self.define(def)?;
         }
-        Ok(())
+        Ok(declared)
     }
 
     pub fn get(&self, event_type: &str) -> Option<&TypeDef> {
@@ -1275,26 +1778,23 @@ pub fn validate_event_against_registry(
 }
 
 fn compile_schema(schema: &Value) -> Result<jsonschema::Validator> {
+    // Annotation keywords such as `format` are never asserted (Section 12.3.1).
     jsonschema::options()
         .with_draft(jsonschema::Draft::Draft202012)
+        .should_validate_formats(false)
         .build(schema)
-        .map_err(|err| SdkError::InvalidPayload(format!("invalid type schema: {err}")))
+        .map_err(|err| invalid_schema(format!("invalid type schema: {err}")))
 }
 
 /// Verifies a `<algorithm>:<base64url-digest>` content digest over raw bytes.
 /// Supports `sha256` and `sha3-256`.
 pub fn verify_pack_digest(bytes: &[u8], digest: &str) -> Result<()> {
-    let (algorithm, expected) = digest
-        .split_once(':')
-        .ok_or_else(|| SdkError::PackUnavailable(format!("invalid digest format: {digest}")))?;
+    validate_content_digest(digest)
+        .map_err(|_| SdkError::PackUnavailable(format!("invalid digest format: {digest}")))?;
+    let (algorithm, expected) = digest.split_once(':').expect("validated digest");
     let actual = match algorithm {
         "sha256" => URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)),
-        "sha3-256" => URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes)),
-        _ => {
-            return Err(SdkError::PackUnavailable(format!(
-                "unsupported digest algorithm: {algorithm}"
-            )));
-        }
+        _ => URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes)),
     };
     if actual == expected {
         Ok(())
@@ -1308,14 +1808,14 @@ pub fn server_record_hash_payload(
     seq: u64,
     pre_hash: Option<&str>,
     envelope_hash: &str,
-    received_at: i64,
+    accepted_at: i64,
 ) -> ServerRecordHashPayload {
     ServerRecordHashPayload {
         room_id: room_id.to_owned(),
         seq,
         pre_hash: pre_hash.map(str::to_owned),
         envelope_hash: envelope_hash.to_owned(),
-        received_at,
+        accepted_at,
     }
 }
 
@@ -1324,14 +1824,14 @@ pub fn server_record_hash(
     seq: u64,
     pre_hash: Option<&str>,
     envelope_hash: &str,
-    received_at: i64,
+    accepted_at: i64,
 ) -> Result<String> {
     hash_canonical_json(&server_record_hash_payload(
         room_id,
         seq,
         pre_hash,
         envelope_hash,
-        received_at,
+        accepted_at,
     ))
 }
 
@@ -1339,7 +1839,7 @@ pub fn build_server_record<P>(
     room_id: impl Into<String>,
     seq: u64,
     pre_hash: Option<String>,
-    received_at: i64,
+    accepted_at: i64,
     envelope: Envelope<P>,
 ) -> Result<ServerRecord<P>> {
     let room_id = room_id.into();
@@ -1348,7 +1848,7 @@ pub fn build_server_record<P>(
         seq,
         pre_hash.as_deref(),
         &envelope.hash,
-        received_at,
+        accepted_at,
     )
     .expect("server record hash payload is always serializable");
     Ok(ServerRecord {
@@ -1356,8 +1856,29 @@ pub fn build_server_record<P>(
         seq,
         pre_hash,
         hash,
-        received_at,
+        accepted_at,
         envelope,
+    })
+}
+
+/// Replaces a record's envelope with its redacted form (Section 14.1). Only
+/// `message.create` and custom-type records may be redacted.
+pub fn redact_server_record(record: &ServerRecord) -> Result<RedactedServerRecord> {
+    let kind = record.envelope.event.kind.clone();
+    if is_builtin_event_type(&kind) && kind != event_type::MESSAGE_CREATE {
+        return Err(invalid_event(format!("{kind} records cannot be redacted")));
+    }
+    Ok(RedactedServerRecord {
+        room_id: record.room_id.clone(),
+        seq: record.seq,
+        pre_hash: record.pre_hash.clone(),
+        hash: record.hash.clone(),
+        accepted_at: record.accepted_at,
+        envelope: RedactedEnvelope {
+            hash: record.envelope.hash.clone(),
+            redacted: true,
+            kind,
+        },
     })
 }
 
@@ -1365,22 +1886,58 @@ pub fn verify_server_record<P>(record: &ServerRecord<P>) -> Result<()>
 where
     P: Serialize,
 {
-    let expected = server_record_hash(
+    verify_record_hash(
         &record.room_id,
         record.seq,
         record.pre_hash.as_deref(),
         &record.envelope.hash,
-        record.received_at,
+        record.accepted_at,
+        &record.hash,
     )
-    .expect("server record hash payload is always serializable");
-    if record.hash == expected {
+}
+
+fn verify_record_hash(
+    room_id: &str,
+    seq: u64,
+    pre_hash: Option<&str>,
+    envelope_hash: &str,
+    accepted_at: i64,
+    hash: &str,
+) -> Result<()> {
+    let expected = server_record_hash(room_id, seq, pre_hash, envelope_hash, accepted_at)
+        .expect("server record hash payload is always serializable");
+    if hash == expected {
         Ok(())
     } else {
         Err(SdkError::InvalidEventHash {
             expected,
-            actual: record.hash.clone(),
+            actual: hash.to_owned(),
         })
     }
+}
+
+/// Verifies one signed or redacted record's hash; a redacted record must be
+/// of a redactable type.
+pub fn verify_archive_record(record: &ArchiveRecord) -> Result<()> {
+    verify_record_hash(
+        record.room_id(),
+        record.seq(),
+        record.pre_hash(),
+        record.envelope_hash(),
+        record.accepted_at(),
+        record.hash(),
+    )?;
+    if let ArchiveRecord::Redacted(redacted) = record {
+        let kind = redacted.envelope.kind.as_str();
+        if !redacted.envelope.redacted
+            || (is_builtin_event_type(kind) && kind != event_type::MESSAGE_CREATE)
+        {
+            return Err(SdkError::InvalidPayload(format!(
+                "{kind} records cannot be redacted"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn verify_server_record_chain<P>(records: &[ServerRecord<P>]) -> Result<()>
@@ -1390,32 +1947,86 @@ where
     let mut previous: Option<&ServerRecord<P>> = None;
     for record in records {
         verify_server_record(record)?;
-        if let Some(previous) = previous {
-            if record.seq != previous.seq + 1 {
-                return Err(SdkError::InvalidPayload(
-                    "seq must increase by 1".to_owned(),
-                ));
-            }
-            if record.pre_hash.as_deref() != Some(previous.hash.as_str()) {
-                return Err(SdkError::InvalidPayload("pre_hash mismatch".to_owned()));
-            }
-        } else if record.seq != 1 {
-            return Err(SdkError::InvalidPayload("first seq must be 1".to_owned()));
-        } else if record.pre_hash.is_some() {
-            return Err(SdkError::InvalidPayload(
-                "first pre_hash must be null".to_owned(),
-            ));
-        }
+        check_link(
+            record.seq,
+            record.pre_hash.as_deref(),
+            previous.map(|p| (p.seq, p.hash.as_str())),
+        )?;
         previous = Some(record);
     }
     Ok(())
 }
 
-pub fn archive_events_digest<P>(records: &[ServerRecord<P>]) -> Result<String>
-where
-    P: Serialize,
-{
-    hash_canonical_json(records)
+fn check_link(seq: u64, pre_hash: Option<&str>, previous: Option<(u64, &str)>) -> Result<()> {
+    match previous {
+        Some((previous_seq, previous_hash)) => {
+            if seq != previous_seq + 1 {
+                return Err(SdkError::InvalidPayload(
+                    "seq must increase by 1".to_owned(),
+                ));
+            }
+            if pre_hash != Some(previous_hash) {
+                return Err(SdkError::InvalidPayload("pre_hash mismatch".to_owned()));
+            }
+        }
+        None if seq != 1 => {
+            return Err(SdkError::InvalidPayload("first seq must be 1".to_owned()));
+        }
+        None if pre_hash.is_some() => {
+            return Err(SdkError::InvalidPayload(
+                "first pre_hash must be null".to_owned(),
+            ));
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+/// [`verify_server_record_chain`] over signed and redacted records.
+pub fn verify_archive_chain(records: &[ArchiveRecord]) -> Result<()> {
+    let mut previous: Option<&ArchiveRecord> = None;
+    for record in records {
+        verify_archive_record(record)?;
+        check_link(
+            record.seq(),
+            record.pre_hash(),
+            previous.map(|p| (p.seq(), p.hash())),
+        )?;
+        previous = Some(record);
+    }
+    Ok(())
+}
+
+/// Archive verification steps 1–3 (Section 18): a gap-free chain from seq 1
+/// to `last_seq` ending in `last_hash`, and a valid signature on every record
+/// that is not redacted. Returns the sequence numbers of redacted records,
+/// which verifiers must report. State replay (step 4) is the caller's.
+pub fn verify_archive_records(
+    manifest: &ArchiveManifest,
+    records: &[ArchiveRecord],
+) -> Result<Vec<u64>> {
+    verify_archive_chain(records)?;
+    match records.last() {
+        Some(last) if last.seq() == manifest.last_seq && last.hash() == manifest.last_hash => {}
+        _ => {
+            return Err(SdkError::InvalidPayload(
+                "archive does not end at last_seq / last_hash".to_owned(),
+            ))
+        }
+    }
+    let mut redacted = Vec::new();
+    for record in records {
+        if record.room_id() != manifest.room_id {
+            return Err(SdkError::InvalidPayload(
+                "record belongs to another room".to_owned(),
+            ));
+        }
+        match record {
+            ArchiveRecord::Redacted(r) => redacted.push(r.seq),
+            ArchiveRecord::Signed(r) => validate_discourse_envelope(&r.envelope)?,
+        }
+    }
+    Ok(redacted)
 }
 
 /// Permission inputs for one actor in one room.
@@ -1423,8 +2034,8 @@ where
 pub struct PermissionContext {
     pub role: Option<Role>,
     pub is_creator: bool,
-    pub public_join_allowed: bool,
-    pub join_request_approved: bool,
+    /// The actor may take the requested role by direct `room.join` (see [`can_join_directly`]).
+    pub direct_join_allowed: bool,
 }
 
 impl PermissionContext {
@@ -1448,7 +2059,7 @@ impl PermissionContext {
 pub fn default_kind_roles(kind: TypeKind) -> &'static [Role] {
     match kind {
         TypeKind::Message => &[Role::Moderator, Role::Speaker],
-        TypeKind::Signal => &[Role::Moderator, Role::Speaker, Role::Observer],
+        TypeKind::Signal => &ROLE_ORDER,
         TypeKind::Control => &[Role::Moderator],
     }
 }
@@ -1462,8 +2073,12 @@ pub fn can_submit_event(
 ) -> bool {
     match event_type {
         event_type::ROOM_CREATE => true,
-        event_type::ROOM_JOIN => context.public_join_allowed || context.join_request_approved,
-        event_type::ROOM_LEAVE => context.is_creator || context.role.is_some(),
+        event_type::ROOM_JOIN => {
+            context.direct_join_allowed && !context.is_creator && context.role.is_none()
+        }
+        event_type::ROOM_JOIN_REQUEST => !context.is_creator && context.role.is_none(),
+        // The creator is a member until the room ends and cannot leave.
+        event_type::ROOM_LEAVE => !context.is_creator && context.role.is_some(),
         event_type::ROOM_UPDATE
         | event_type::ROOM_JOIN_REVIEW
         | event_type::ROOM_MEMBER_ROLE_UPDATE
@@ -1500,7 +2115,8 @@ pub fn can_write_in_state(event_type: &str, state: RoomState) -> bool {
     match state {
         RoomState::Scheduled => matches!(
             event_type,
-            event_type::ROOM_JOIN
+            event_type::ROOM_JOIN_REQUEST
+                | event_type::ROOM_JOIN
                 | event_type::ROOM_JOIN_REVIEW
                 | event_type::ROOM_MEMBER_ROLE_UPDATE
                 | event_type::ROOM_MEMBER_REMOVE
@@ -1551,1426 +2167,729 @@ where
 mod tests {
     use super::*;
     use crate::identity::AgentSigner;
-    use serde::ser;
     use serde_json::json;
 
-    struct FailingPayload;
+    const HOST: &str = "https://api.example.com";
 
-    impl Serialize for FailingPayload {
-        fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            Err(ser::Error::custom("payload cannot be serialized"))
-        }
+    fn signer(byte: u8) -> AgentSigner {
+        AgentSigner::from_seed([byte; 32])
     }
 
-    fn registered_packs() -> BTreeMap<String, Pack> {
-        let raw = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/protocols/agent-discourse/1.0.packs.json"
+    fn packs() -> BTreeMap<String, Pack> {
+        let document: PackDocument = serde_json::from_str(include_str!(
+            "../../../docs/protocols/agent-discourse/1.0.packs.json"
         ))
-        .expect("read registered packs");
-        let document: PackDocument = serde_json::from_str(&raw).expect("parse registered packs");
-        assert_eq!(document.protocol, PROTOCOL);
+        .unwrap();
         pack_map(&document)
     }
 
+    fn vectors() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../docs/protocols/agent-discourse/1.0.vectors.json"
+        ))
+        .unwrap()
+    }
+
     fn finding_def() -> TypeDef {
-        TypeDef {
-            name: "review.finding".to_owned(),
-            kind: TypeKind::Message,
-            title: "Review finding".to_owned(),
-            description: None,
-            schema: json!({
+        serde_json::from_value(json!({
+            "type": "review.finding",
+            "kind": "message",
+            "title": "Review finding",
+            "schema": {
                 "type": "object",
                 "required": ["severity", "summary"],
                 "properties": {
-                    "severity": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "summary": {"type": "string", "minLength": 1}
+                    "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+                    "summary": { "type": "string", "minLength": 1 }
                 },
                 "additionalProperties": false
-            }),
-            roles: None,
-            instructions: None,
-            version: None,
-            status: None,
-            rate_hint: None,
-            max_payload_hint: None,
-            extra: BTreeMap::new(),
+            }
+        }))
+        .unwrap()
+    }
+
+    fn room_payload() -> RoomCreatePayload {
+        RoomCreatePayload::new(HOST, "Research room", Visibility::Public, 1000, 2000)
+    }
+
+    fn message(
+        author: &AgentSigner,
+        room: &str,
+        base_seq: u64,
+        base_hash: &str,
+        nonce: u64,
+    ) -> Envelope<Value> {
+        author
+            .sign_event(discourse_event(
+                event_type::MESSAGE_CREATE,
+                author.agent_id(),
+                100,
+                nonce,
+                room,
+                base_seq,
+                base_hash,
+                json!({ "content_type": "text/plain", "content": "hi" }),
+            ))
+            .unwrap()
+    }
+
+    #[test]
+    fn kernel_defines_twelve_builtins_and_freshness_classes() {
+        assert_eq!(BUILTIN_EVENT_TYPES.len(), 12);
+        assert!(is_builtin_event_type(event_type::ROOM_JOIN_REQUEST));
+        for kind in MEMBERSHIP_EVENT_TYPES {
+            assert_eq!(builtin_event_class(kind), Some(RecordClass::Signal));
+            assert!(!event_type_advances_head(kind, &[]));
+            assert!(!event_requires_room_head(kind, &[]));
+        }
+        for kind in CONTRACT_EVENT_TYPES {
+            assert_eq!(builtin_event_class(kind), Some(RecordClass::Contract));
+            assert!(event_type_advances_head(kind, &[]));
+            assert!(!event_requires_room_head(kind, &[]));
+        }
+        assert_eq!(
+            builtin_event_class(event_type::ROOM_CREATE),
+            Some(RecordClass::Genesis)
+        );
+        assert_eq!(record_class(event_type::ROOM_JOIN_REQUEST, &[]), None);
+        assert!(event_requires_room_head(event_type::MESSAGE_CREATE, &[]));
+        assert!(event_requires_room_head("unknown.custom", &[]));
+        for code in [
+            "host_mismatch",
+            "type_conflict",
+            "invalid_type_schema",
+            "join_request_not_pending",
+        ] {
+            assert!(DISCOURSE_ERROR_CODES.contains(&code));
         }
     }
 
-    fn join_review_payload(applicant: AgentId) -> RoomJoinReviewPayload {
-        RoomJoinReviewPayload {
-            request: RoomJoinRequest {
-                id: "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q".to_owned(),
-                room_id: "room1".to_owned(),
-                applicant,
-                role: Role::Speaker,
-                perspective: None,
-                reason: None,
-                created_at: 100,
-                expires_at: 200,
-                extra: BTreeMap::new(),
-            },
+    #[test]
+    fn discourse_vectors_reproduce_chains_redaction_and_heads() {
+        let vectors = vectors();
+        let records: Vec<ServerRecord> =
+            serde_json::from_value(vectors["records"].clone()).unwrap();
+        for record in &records {
+            verify_server_record(record).unwrap();
+            validate_discourse_envelope(&record.envelope).unwrap();
+        }
+        verify_server_record_chain(&records).unwrap();
+        let redacted: Vec<ArchiveRecord> =
+            serde_json::from_value(vectors["redacted_records"].clone()).unwrap();
+        assert!(redacted[2].is_redacted());
+        verify_archive_chain(&redacted).unwrap();
+        let manifest = ArchiveManifest {
+            protocol: PROTOCOL.into(),
+            kind: "room.archive".into(),
+            room_id: vectors["room_id"].as_str().unwrap().into(),
+            url: format!("{HOST}/v1/rooms/x"),
+            generated_at: 0,
+            last_seq: vectors["last_seq"].as_u64().unwrap(),
+            last_hash: vectors["last_hash"].as_str().unwrap().into(),
+            formats: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        };
+        let signed: Vec<ArchiveRecord> =
+            records.iter().cloned().map(ArchiveRecord::Signed).collect();
+        assert_eq!(
+            verify_archive_records(&manifest, &signed).unwrap(),
+            Vec::<u64>::new()
+        );
+        assert_eq!(
+            verify_archive_records(&manifest, &redacted).unwrap(),
+            vec![3]
+        );
+        let mut short = manifest.clone();
+        short.last_hash = records[0].hash.clone();
+        assert!(verify_archive_records(&short, &signed).is_err());
+
+        let create: RoomCreatePayload =
+            serde_json::from_value(records[0].envelope.event.payload.clone()).unwrap();
+        let registry =
+            TypeRegistry::from_declarations(create.types.as_deref().unwrap(), &packs()).unwrap();
+        let mut head = 0;
+        for (record, expected) in records
+            .iter()
+            .zip(vectors["head_seq_after"].as_array().unwrap())
+        {
+            if event_advances_room_head(&record.envelope.event.kind, &registry) {
+                head = record.seq;
+            }
+            assert_eq!(head, expected.as_u64().unwrap());
+        }
+    }
+
+    #[test]
+    fn discourse_vectors_classes_and_patterns() {
+        let vectors = vectors();
+        let declarations: Vec<TypeDeclaration> =
+            serde_json::from_value(vectors["freshness"]["registry"].clone()).unwrap();
+        let registry = TypeRegistry::from_declarations(&declarations, &packs()).unwrap();
+        let types: Vec<TypeDef> = registry.definitions().cloned().collect();
+        let head_bound: Vec<&str> = vectors["freshness"]["head_bound"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        for (kind, class) in vectors["freshness"]["classes"].as_object().unwrap() {
+            let expected: RecordClass = serde_json::from_value(class.clone()).unwrap();
+            assert_eq!(record_class(kind, &types), Some(expected), "{kind}");
+            assert_eq!(
+                event_requires_room_head(kind, &types),
+                head_bound.contains(&kind.as_str()),
+                "{kind}"
+            );
+        }
+        for pattern in vectors["patterns"]["valid"].as_array().unwrap() {
+            validate_portable_pattern(pattern.as_str().unwrap()).unwrap();
+        }
+        for pattern in vectors["patterns"]["invalid"].as_array().unwrap() {
+            let pattern = pattern.as_str().unwrap();
+            assert!(validate_portable_pattern(pattern).is_err(), "{pattern}");
+        }
+    }
+
+    #[test]
+    fn registered_packs_follow_the_profile() {
+        let packs = packs();
+        assert_eq!(packs.len(), 5);
+        for pack in packs.values() {
+            for def in &pack.types {
+                validate_type_def(def).unwrap();
+            }
+        }
+        assert!(packs[pack_id::MODERATION]
+            .types
+            .iter()
+            .any(|d| d.name == "claim.update"));
+        assert!(!packs[pack_id::REALTIME]
+            .types
+            .iter()
+            .any(|d| d.name == "session.candidate"));
+    }
+
+    #[test]
+    fn room_create_is_host_bound_and_closed() {
+        let creator = signer(14);
+        let envelope = creator
+            .sign_event(room_create_event(
+                creator.agent_id(),
+                100,
+                1,
+                room_payload(),
+            ))
+            .unwrap();
+        validate_discourse_envelope(&envelope).unwrap();
+        validate_room_path(&envelope, "d8ftedhpqhsusbg001tg").unwrap();
+        validate_room_create_host(&envelope.event.payload, HOST).unwrap();
+        assert_eq!(
+            validate_room_create_host(&envelope.event.payload, "https://other.example")
+                .unwrap_err()
+                .code(),
+            Some("host_mismatch")
+        );
+        let mut path_host = room_payload();
+        path_host.host = format!("{HOST}/v1");
+        assert!(validate_room_create_payload(&path_host).is_err());
+        let with_room = creator
+            .sign_event(
+                room_create_event(creator.agent_id(), 100, 2, room_payload()).with_room_id("r1"),
+            )
+            .unwrap();
+        assert!(validate_discourse_envelope(&with_room).is_err());
+        let mut extra = room_create_event(creator.agent_id(), 100, 3, room_payload());
+        extra.extra.insert("audience".into(), json!("x"));
+        let extra = creator.sign_event(extra).unwrap();
+        assert_eq!(
+            validate_discourse_envelope(&extra).unwrap_err().code(),
+            Some("invalid_event")
+        );
+    }
+
+    #[test]
+    fn room_events_require_valid_room_ids_and_bases() {
+        let author = signer(15);
+        let no_room = author
+            .sign_event(Event::new(
+                PROTOCOL,
+                event_type::MESSAGE_CREATE,
+                author.agent_id(),
+                1,
+                1,
+                json!({}),
+            ))
+            .unwrap();
+        assert!(matches!(
+            validate_discourse_envelope(&no_room),
+            Err(SdkError::MissingRoomId)
+        ));
+        assert!(validate_discourse_envelope(&message(&author, "room/../x", 1, "h", 2)).is_err());
+        validate_room_path(&message(&author, "room1", 1, "h", 3), "room1").unwrap();
+        assert!(matches!(
+            validate_room_path(&message(&author, "room1", 1, "h", 4), "room2"),
+            Err(SdkError::RoomIdMismatch { .. })
+        ));
+        let mentions: Vec<AgentId> = (0..33).map(|i| signer(100 + i).agent_id()).collect();
+        let many = author
+            .sign_event(
+                discourse_event(
+                    event_type::MESSAGE_CREATE,
+                    author.agent_id(),
+                    1,
+                    5,
+                    "room1",
+                    1,
+                    "h",
+                    json!({}),
+                )
+                .with_mentions(mentions.clone()),
+            )
+            .unwrap();
+        assert!(validate_discourse_envelope(&many).is_err());
+        let ok = author
+            .sign_event(
+                discourse_event(
+                    event_type::MESSAGE_CREATE,
+                    author.agent_id(),
+                    1,
+                    6,
+                    "room1",
+                    1,
+                    "h",
+                    json!({}),
+                )
+                .with_mentions(mentions[..32].to_vec()),
+            )
+            .unwrap();
+        validate_discourse_envelope(&ok).unwrap();
+    }
+
+    #[test]
+    fn join_requests_are_signed_unanchored_and_embedded_by_reviews() {
+        let moderator = signer(21);
+        let applicant = signer(22);
+        let room = "d8ftedhpqhsusbg001tg";
+        let mut payload = RoomJoinRequestPayload::new(Role::Speaker);
+        payload.perspective = Some("reviewer".into());
+        let request = applicant
+            .sign_event(room_join_request_event(
+                applicant.agent_id(),
+                1,
+                1,
+                room,
+                payload,
+            ))
+            .unwrap();
+        validate_discourse_envelope(&request).unwrap();
+        let anchored = applicant
+            .sign_event(
+                room_join_request_event(
+                    applicant.agent_id(),
+                    1,
+                    2,
+                    room,
+                    RoomJoinRequestPayload::new(Role::Speaker),
+                )
+                .with_room_head(1, "h"),
+            )
+            .unwrap();
+        assert!(validate_discourse_envelope(&anchored).is_err());
+
+        let review = RoomJoinReviewPayload {
+            request: request.clone(),
             decision: JoinDecision::Approve,
             role: Some(Role::Speaker),
             reason: None,
-            extra: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn kernel_defines_eleven_builtins_with_membership_signals() {
-        assert_eq!(BUILTIN_EVENT_TYPES.len(), 11);
-        assert!(is_builtin_event_type(event_type::ROOM_UPDATE));
-        assert!(is_builtin_event_type(event_type::ROOM_MEMBER_REMOVE));
-
-        let registry = TypeRegistry::new();
-        for membership in MEMBERSHIP_EVENT_TYPES {
-            assert_eq!(
-                builtin_event_class(membership),
-                Some(BuiltinEventClass::Signal)
-            );
-            assert!(!event_advances_room_head(membership, &registry));
-        }
-        for advancing in [
-            event_type::ROOM_CREATE,
-            event_type::ROOM_UPDATE,
-            event_type::ROOM_CLOSE,
-            event_type::ROOM_CANCEL,
-            event_type::TYPE_DEFINE,
-            event_type::MESSAGE_CREATE,
-        ] {
-            assert!(event_advances_room_head(advancing, &registry));
-        }
-        assert_eq!(builtin_event_class("review.finding"), None);
-        // Unknown custom types default to head-advancing.
-        assert!(event_advances_room_head("unknown.type", &registry));
-
-        let mut registry = TypeRegistry::new();
-        let mut signal_def = finding_def();
-        signal_def.name = "reaction.create".to_owned();
-        signal_def.kind = TypeKind::Signal;
-        registry.define(signal_def).unwrap();
-        assert!(!event_advances_room_head("reaction.create", &registry));
-
-        assert!(DISCOURSE_ERROR_CODES.contains(&"member_banned"));
-        assert!(DISCOURSE_ERROR_CODES.contains(&"role_not_allowed"));
-        assert!(DISCOURSE_ERROR_CODES.contains(&"max_speakers_exceeded"));
-    }
-
-    #[test]
-    fn room_update_and_member_remove_follow_moderator_rules() {
-        let registry = TypeRegistry::new();
-        let moderator = PermissionContext::for_role(Role::Moderator);
-        let speaker = PermissionContext::for_role(Role::Speaker);
-        let creator = PermissionContext::creator(None);
-        for builtin in [event_type::ROOM_UPDATE, event_type::ROOM_MEMBER_REMOVE] {
-            assert!(can_submit_event(builtin, &moderator, &registry));
-            assert!(can_submit_event(builtin, &creator, &registry));
-            assert!(!can_submit_event(builtin, &speaker, &registry));
-            assert!(can_write_in_state(builtin, RoomState::Scheduled));
-            assert!(can_write_in_state(builtin, RoomState::Active));
-            assert!(!can_write_in_state(builtin, RoomState::Ended));
-            assert!(!can_write_in_state(builtin, RoomState::Cancelled));
-        }
-    }
-
-    #[test]
-    fn validates_room_update_payloads() {
-        let valid = RoomUpdatePayload {
-            topic: Some("New topic".to_owned()),
-            guidance: Some(String::new()),
-            end_time: Some(2000),
-            ..RoomUpdatePayload::default()
+            extra: None,
         };
-        validate_room_update_payload(&valid).unwrap();
-
-        assert!(validate_room_update_payload(&RoomUpdatePayload::default()).is_err());
-        assert!(validate_room_update_payload(&RoomUpdatePayload {
-            topic: Some("  ".to_owned()),
-            ..RoomUpdatePayload::default()
-        })
-        .is_err());
-        assert!(validate_room_update_payload(&RoomUpdatePayload {
-            start_time: Some(5),
-            end_time: Some(5),
-            ..RoomUpdatePayload::default()
-        })
-        .is_err());
-        assert!(validate_room_update_payload(&RoomUpdatePayload {
-            policy: Some(RoomPolicy {
-                max_speakers: Some(0),
-                ..RoomPolicy::default()
-            }),
-            ..RoomUpdatePayload::default()
-        })
-        .is_err());
-
-        // The field set is closed: a non-updatable field (e.g. `visibility`)
-        // is rejected at deserialization, matching the TS/Python validators.
-        serde_json::from_value::<RoomUpdatePayload>(json!({"topic": "New topic"})).unwrap();
-        assert!(serde_json::from_value::<RoomUpdatePayload>(
-            json!({"topic": "New topic", "visibility": "private"})
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn validates_room_member_remove_payloads() {
-        let member = AgentSigner::from_seed([41; 32]).agent_id();
-        let mut payload = RoomMemberRemovePayload::new(member);
-        validate_room_member_remove_payload(&payload).unwrap();
-        assert!(!payload.banning());
-        payload.ban = Some(true);
-        assert!(payload.banning());
-        validate_room_member_remove_payload(&payload).unwrap();
-    }
-
-    #[test]
-    fn mentions_are_capped_at_32_unique_agent_ids() {
-        let signer = AgentSigner::from_seed([42; 32]);
-        let mentions: Vec<AgentId> = (0..33)
-            .map(|index| AgentSigner::from_seed([100 + index as u8; 32]).agent_id())
-            .collect();
-        let event = |mentions: Vec<AgentId>| {
-            discourse_event(
-                event_type::MESSAGE_CREATE,
-                signer.agent_id(),
-                100,
-                1,
-                "room1",
-                1,
-                "room-create-head",
-                MessageCreatePayload::text("hi"),
-            )
-            .with_mentions(mentions)
-        };
-
-        let ok = signer.sign_event(event(mentions[..32].to_vec())).unwrap();
-        validate_discourse_envelope(&ok).unwrap();
-
-        let too_many = signer.sign_event(event(mentions.clone())).unwrap();
-        assert!(validate_discourse_envelope(&too_many).is_err());
-
-        let duplicated = signer
-            .sign_event(event(vec![mentions[0].clone(), mentions[0].clone()]))
-            .unwrap();
-        assert!(validate_discourse_envelope(&duplicated).is_err());
-        assert!(validate_room_path(&duplicated, "room1").is_err());
-    }
-
-    #[test]
-    fn type_redefinition_cannot_change_kind() {
-        let mut registry = TypeRegistry::new();
-        registry.define(finding_def()).unwrap();
-        let mut retitled = finding_def();
-        retitled.title = "Finding v2".to_owned();
-        registry.define(retitled).unwrap();
-        assert_eq!(registry.get("review.finding").unwrap().title, "Finding v2");
-
-        let mut flipped = finding_def();
-        flipped.kind = TypeKind::Signal;
-        assert!(registry.define(flipped).is_err());
-    }
-
-    #[test]
-    fn validates_room_create_without_room_id() {
-        let signer = AgentSigner::from_seed([14; 32]);
-        let payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
-        let envelope = signer
-            .sign_event(room_create_event(signer.agent_id(), 100, 1, payload))
-            .unwrap();
-
-        validate_discourse_envelope(&envelope).unwrap();
-        validate_room_path(&envelope, "d8ftedhpqhsusbg001tg").unwrap();
-    }
-
-    #[test]
-    fn rejects_room_create_with_room_id() {
-        let signer = AgentSigner::from_seed([14; 32]);
-        let payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
-        let event = room_create_event(signer.agent_id(), 100, 1, payload)
-            .with_room_id("d8ftedhpqhsusbg001tg");
-        let envelope = signer.sign_event(event).unwrap();
-
-        assert!(validate_discourse_envelope(&envelope).is_err());
-        assert!(validate_room_path(&envelope, "d8ftedhpqhsusbg001tg").is_err());
-    }
-
-    #[test]
-    fn rejects_room_event_without_room_id() {
-        let signer = AgentSigner::from_seed([15; 32]);
-        let event = Event::new(
-            PROTOCOL,
-            event_type::MESSAGE_CREATE,
-            signer.agent_id(),
-            100,
-            1,
-            MessageCreatePayload::text("hello"),
-        );
-        let envelope = signer.sign_event(event).unwrap();
-
-        assert!(validate_discourse_envelope(&envelope).is_err());
-    }
-
-    #[test]
-    fn rejects_invalid_discourse_envelope_signature() {
-        let signer = AgentSigner::from_seed([16; 32]);
-        let event = discourse_event(
-            event_type::MESSAGE_CREATE,
-            signer.agent_id(),
-            100,
-            1,
-            "room1",
-            1,
-            "room-head-hash",
-            MessageCreatePayload::text("hello"),
-        );
-        let mut envelope = signer.sign_event(event).unwrap();
-        envelope.signature = "invalid".to_owned();
-
-        assert!(validate_discourse_envelope(&envelope).is_err());
-    }
-
-    #[test]
-    fn validates_join_review_canonical_request() {
-        let moderator = AgentSigner::from_seed([21; 32]);
-        let applicant = AgentSigner::from_seed([22; 32]);
-        let payload = RoomJoinReviewPayload {
-            request: RoomJoinRequest {
-                id: "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q".to_owned(),
-                room_id: "d8ftedhpqhsusbg001tg".to_owned(),
-                applicant: applicant.agent_id(),
-                role: Role::Speaker,
-                perspective: Some("distributed-systems reviewer".to_owned()),
-                reason: Some("I can cover replication and failure-mode tradeoffs.".to_owned()),
-                created_at: 1_779_757_210_000,
-                expires_at: 1_779_760_810_000,
-                extra: BTreeMap::new(),
-            },
-            decision: JoinDecision::Approve,
-            role: Some(Role::Speaker),
-            reason: Some("relevant expertise".to_owned()),
-            extra: BTreeMap::new(),
-        };
-        let envelope = moderator
+        let signed = moderator
             .sign_event(discourse_event(
                 event_type::ROOM_JOIN_REVIEW,
                 moderator.agent_id(),
-                1_779_757_250_000,
+                2,
                 1,
-                "d8ftedhpqhsusbg001tg",
+                room,
                 1,
-                "room-head-hash",
-                payload.clone(),
+                "h",
+                review.clone(),
             ))
             .unwrap();
-
-        validate_discourse_envelope(&envelope).unwrap();
-        let value = serde_json::to_value(payload).unwrap();
-        assert!(value.get("member").is_none());
-        assert_eq!(
-            value["request"]["applicant"],
-            json!(applicant.agent_id().to_string())
-        );
-        assert_eq!(value["request"]["role"], json!("speaker"));
+        validate_discourse_envelope(&signed).unwrap();
+        validate_room_join_review_payload(&review, Some(room)).unwrap();
+        assert!(validate_room_join_review_payload(
+            &RoomJoinReviewPayload {
+                role: None,
+                ..review.clone()
+            },
+            Some(room)
+        )
+        .is_err());
+        assert!(validate_room_join_review_payload(&review, Some("other")).is_err());
+        let mut tampered = review;
+        tampered.request.event.payload.role = Role::Moderator;
+        assert!(validate_room_join_review_payload(&tampered, Some(room)).is_err());
     }
 
     #[test]
-    fn role_serde_matches_spec() {
+    fn direct_join_follows_invites_and_open_roles() {
+        let invited = signer(23).agent_id();
+        let stranger = signer(24).agent_id();
+        let policy = RoomPolicy {
+            invites: Some(BTreeMap::from([(invited.clone(), Role::Moderator)])),
+            open_roles: Some(vec![Role::Observer]),
+            ..RoomPolicy::default()
+        };
+        assert!(can_join_directly(
+            Visibility::Private,
+            Some(&policy),
+            &invited,
+            Role::Moderator
+        ));
+        assert!(!can_join_directly(
+            Visibility::Private,
+            Some(&policy),
+            &invited,
+            Role::Speaker
+        ));
+        assert!(!can_join_directly(
+            Visibility::Private,
+            Some(&policy),
+            &stranger,
+            Role::Observer
+        ));
+        assert!(can_join_directly(
+            Visibility::Public,
+            Some(&policy),
+            &stranger,
+            Role::Observer
+        ));
+        assert!(!can_join_directly(
+            Visibility::Public,
+            Some(&policy),
+            &stranger,
+            Role::Speaker
+        ));
         assert_eq!(
-            serde_json::to_string(&Role::Speaker).unwrap(),
-            "\"speaker\""
+            effective_open_roles(None),
+            vec![Role::Speaker, Role::Observer]
         );
-        assert!(serde_json::from_str::<Role>("\"expert\"").is_err());
-        assert!(serde_json::from_str::<Role>("\"participant\"").is_err());
+        let no_observers = RoomPolicy {
+            observer_allowed: Some(false),
+            ..RoomPolicy::default()
+        };
+        assert_eq!(
+            effective_open_roles(Some(&no_observers)),
+            vec![Role::Speaker]
+        );
+        let bad = RoomPolicy {
+            open_roles: Some(vec![Role::Moderator]),
+            ..RoomPolicy::default()
+        };
+        assert!(validate_room_policy(Some(&bad)).is_err());
+        let conflicting = RoomPolicy {
+            observer_allowed: Some(false),
+            open_roles: Some(vec![Role::Observer]),
+            ..RoomPolicy::default()
+        };
+        assert!(validate_room_policy(Some(&conflicting)).is_err());
+        assert!(
+            serde_json::from_value::<RoomPolicy>(json!({ "moderator_agent_ids": [] })).is_err()
+        );
     }
 
     #[test]
-    fn room_response_retains_room_metadata_fields() {
-        let room: RoomResponse = serde_json::from_value(json!({
-            "id": "room1",
-            "status": "active",
-            "url": "https://api.example.test/v1/rooms/room1",
-            "topic": "Room",
-            "agenda": "Review the proposal",
-            "guidance": "Stay concise",
-            "visibility": "public",
-            "start_time": 1,
-            "end_time": 2,
-            "tags": ["review"],
-            "language": "en",
-            "seq": 7,
-            "pre_hash": "previous",
-            "hash": "current",
-            "received_at": 3
+    fn type_schemas_follow_the_portable_profile() {
+        validate_type_schema_profile(&json!({
+            "type": "object",
+            "properties": { "a": { "$ref": "#/$defs/x" } },
+            "$defs": { "x": { "type": "string", "pattern": "^a$" } }
         }))
         .unwrap();
-
-        assert_eq!(room.agenda.as_deref(), Some("Review the proposal"));
-        assert_eq!(room.tags, vec!["review"]);
-        assert_eq!(room.language.as_deref(), Some("en"));
-        assert_eq!(
-            serde_json::to_value(&room).unwrap()["agenda"],
-            json!("Review the proposal")
-        );
-    }
-
-    #[test]
-    fn validates_custom_event_type_names() {
-        validate_custom_event_type_name("review.finding").unwrap();
-        validate_custom_event_type_name("poll.vote").unwrap();
-        assert!(validate_custom_event_type_name("freeform").is_err());
-        assert!(validate_custom_event_type_name("room.custom").is_err());
-        assert!(validate_custom_event_type_name("type.new").is_err());
-        assert!(validate_custom_event_type_name("message.create").is_err());
-        assert!(validate_custom_event_type_name("Bad.Name").is_err());
-        assert!(validate_custom_event_type_name(".finding").is_err());
-        assert!(validate_custom_event_type_name("review.").is_err());
-        assert!(validate_custom_event_type_name("review.finding!").is_err());
-    }
-
-    #[test]
-    fn materializes_registry_from_packs_and_inline_defs() {
-        let packs = registered_packs();
-        let declarations = vec![
-            TypeDeclaration::Import(PackImport {
-                use_pack: Some(pack_id::REACTIONS.to_owned()),
-                ..PackImport::default()
-            }),
-            TypeDeclaration::Import(PackImport {
-                use_pack: Some(pack_id::DELIBERATION.to_owned()),
-                overrides: BTreeMap::from([(
-                    "poll.vote".to_owned(),
-                    TypeOverride {
-                        roles: Some(vec![Role::Moderator, Role::Speaker, Role::Observer]),
-                        ..TypeOverride::default()
-                    },
-                )]),
-                ..PackImport::default()
-            }),
-            TypeDeclaration::Def(finding_def()),
-        ];
-        let registry = TypeRegistry::from_declarations(&declarations, &packs).unwrap();
-
-        assert_eq!(registry.len(), 6);
-        assert!(registry.contains("reaction.create"));
-        assert!(registry.contains("poll.create"));
-        assert!(registry.contains("review.finding"));
-        let vote = registry.get("poll.vote").unwrap();
-        assert_eq!(
-            vote.roles.as_deref(),
-            Some([Role::Moderator, Role::Speaker, Role::Observer].as_slice())
-        );
-
-        let subset = TypeDeclaration::Import(PackImport {
-            use_pack: Some(pack_id::DELIBERATION.to_owned()),
-            types: Some(vec!["poll.create".to_owned(), "poll.vote".to_owned()]),
-            ..PackImport::default()
-        });
-        let registry = TypeRegistry::from_declarations(&[subset], &packs).unwrap();
-        assert_eq!(registry.len(), 2);
-        assert!(!registry.contains("question.create"));
-    }
-
-    #[test]
-    fn rejects_bad_pack_imports() {
-        let packs = registered_packs();
-        let unknown = TypeDeclaration::Import(PackImport {
-            use_pack: Some("adp:unknown/1.0".to_owned()),
-            ..PackImport::default()
-        });
-        assert!(TypeRegistry::from_declarations(&[unknown], &packs).is_err());
-
-        let bad_override = TypeDeclaration::Import(PackImport {
-            use_pack: Some(pack_id::REACTIONS.to_owned()),
-            overrides: BTreeMap::from([("poll.vote".to_owned(), TypeOverride::default())]),
-            ..PackImport::default()
-        });
-        assert!(TypeRegistry::from_declarations(&[bad_override], &packs).is_err());
-
-        let both = PackImport {
-            use_pack: Some(pack_id::REACTIONS.to_owned()),
-            pack: Some("https://example.com/p.json".to_owned()),
-            digest: Some("sha256:abc".to_owned()),
-            ..PackImport::default()
-        };
-        assert!(validate_pack_import(&both).is_err());
-    }
-
-    #[test]
-    fn latest_type_definition_wins() {
-        let mut registry = TypeRegistry::new();
-        registry.define(finding_def()).unwrap();
-        let mut redefined = finding_def();
-        redefined.status = Some(TypeStatus::Disabled);
-        registry.define(redefined).unwrap();
-        assert_eq!(
-            registry.get("review.finding").unwrap().status(),
-            TypeStatus::Disabled
-        );
-    }
-
-    #[test]
-    fn validates_custom_payloads_against_pack_schemas() {
-        let packs = registered_packs();
+        for schema in [
+            json!({ "$ref": "https://example.com/schema.json" }),
+            json!({ "$dynamicRef": "#x" }),
+            json!({ "$schema": "http://json-schema.org/draft-07/schema#" }),
+            json!({ "properties": { "a": { "pattern": "\\w" } } }),
+            json!({ "patternProperties": { "\\d": {} } }),
+            json!({ "allOf": [{ "items": { "pattern": "." } }] }),
+        ] {
+            assert_eq!(
+                validate_type_schema_profile(&schema).unwrap_err().code(),
+                Some("invalid_type_schema")
+            );
+        }
+        let mut def = finding_def();
+        def.schema = json!({ "type": "string", "pattern": "\\s" });
+        assert!(TypeRegistry::new().define(def).is_err());
+        // `format` is an annotation: a non-URI string is not a schema violation.
         let registry = TypeRegistry::from_declarations(
             &[TypeDeclaration::Import(PackImport {
-                use_pack: Some(pack_id::DELIBERATION.to_owned()),
+                use_pack: Some(pack_id::CURATION.into()),
                 ..PackImport::default()
             })],
-            &packs,
+            &packs(),
         )
         .unwrap();
-
-        let hash = "GDt8oHZQfQ3jl5ZUfyNxKZu07yAJdDYuaw_jf_JjLYs";
         registry
             .validate_payload(
-                "poll.vote",
-                &json!({"poll_event_id": hash, "option_ids": ["a"]}),
+                "resource.add",
+                &json!({ "resource_type": "web", "uri": "not a uri" }),
             )
             .unwrap();
-        assert!(registry
-            .validate_payload("poll.vote", &json!({"poll_event_id": hash}))
-            .is_err());
-        assert!(registry
-            .validate_payload("turn.update", &json!({}))
-            .is_err());
-
-        let mut disabled = TypeRegistry::new();
-        let mut def = finding_def();
-        def.status = Some(TypeStatus::Disabled);
-        disabled.define(def).unwrap();
-        assert!(disabled
-            .validate_payload(
-                "review.finding",
-                &json!({"severity": "high", "summary": "s"})
-            )
-            .is_err());
     }
 
     #[test]
-    fn applies_kind_based_permissions() {
-        let packs = registered_packs();
+    fn registry_imports_packs_and_rejects_conflicts() {
+        let packs = packs();
+        let import = |id: &str| {
+            TypeDeclaration::Import(PackImport {
+                use_pack: Some(id.into()),
+                ..PackImport::default()
+            })
+        };
+        let mut deliberation = PackImport {
+            use_pack: Some(pack_id::DELIBERATION.into()),
+            ..PackImport::default()
+        };
+        deliberation.overrides.insert(
+            "poll.vote".into(),
+            TypeOverride {
+                roles: Some(vec![Role::Moderator, Role::Speaker, Role::Observer]),
+                ..TypeOverride::default()
+            },
+        );
         let registry = TypeRegistry::from_declarations(
             &[
-                TypeDeclaration::Import(PackImport {
-                    use_pack: Some(pack_id::REACTIONS.to_owned()),
-                    ..PackImport::default()
-                }),
-                TypeDeclaration::Import(PackImport {
-                    use_pack: Some(pack_id::DELIBERATION.to_owned()),
-                    overrides: BTreeMap::from([(
-                        "poll.vote".to_owned(),
-                        TypeOverride {
-                            roles: Some(vec![Role::Moderator, Role::Speaker, Role::Observer]),
-                            ..TypeOverride::default()
-                        },
-                    )]),
-                    ..PackImport::default()
-                }),
-                TypeDeclaration::Import(PackImport {
-                    use_pack: Some(pack_id::CURATION.to_owned()),
-                    ..PackImport::default()
-                }),
+                import(pack_id::REACTIONS),
+                TypeDeclaration::Import(deliberation),
+                TypeDeclaration::Def(finding_def()),
             ],
             &packs,
         )
         .unwrap();
-
-        let observer = PermissionContext::for_role(Role::Observer);
-        let speaker = PermissionContext::for_role(Role::Speaker);
-        let moderator = PermissionContext::for_role(Role::Moderator);
-        let creator = PermissionContext::creator(Some(Role::Observer));
-
-        // signal kind: all members, including observers
-        assert!(can_submit_event("reaction.create", &observer, &registry));
-        // poll.vote default excludes observers, but this room overrode roles
-        assert!(can_submit_event("poll.vote", &observer, &registry));
-        // message kind: speakers and moderators only
-        assert!(can_submit_event("resource.add", &speaker, &registry));
-        assert!(!can_submit_event("resource.add", &observer, &registry));
-        // control kind: moderators only
-        assert!(can_submit_event("graph.update", &moderator, &registry));
-        assert!(!can_submit_event("graph.update", &speaker, &registry));
-        // creator passes every role check regardless of current role
-        assert!(can_submit_event("graph.update", &creator, &registry));
+        assert_eq!(registry.len(), 6);
         assert!(can_submit_event(
-            event_type::ROOM_CREATE,
-            &PermissionContext::default(),
+            "poll.vote",
+            &PermissionContext::for_role(Role::Observer),
             &registry
         ));
-        assert!(can_submit_event(
-            event_type::MESSAGE_CREATE,
-            &creator,
-            &registry
-        ));
-        // undefined types are rejected
-        assert!(!can_submit_event("session.offer", &speaker, &registry));
-
-        // built-in lifecycle rules
-        assert!(can_submit_event(
-            event_type::ROOM_JOIN_REVIEW,
-            &moderator,
-            &registry
-        ));
-        assert!(!can_submit_event(
-            event_type::ROOM_JOIN_REVIEW,
-            &speaker,
-            &registry
-        ));
-        assert!(can_submit_event(
-            event_type::ROOM_MEMBER_ROLE_UPDATE,
-            &moderator,
-            &registry
-        ));
-        assert!(can_submit_event(
-            event_type::ROOM_CANCEL,
-            &moderator,
-            &registry
-        ));
-        assert!(can_submit_event(
-            event_type::TYPE_DEFINE,
-            &moderator,
-            &registry
-        ));
-        assert!(!can_submit_event(
-            event_type::TYPE_DEFINE,
-            &speaker,
-            &registry
-        ));
-        assert!(can_submit_event(
-            event_type::MESSAGE_CREATE,
-            &speaker,
-            &registry
-        ));
-        assert!(!can_submit_event(
-            event_type::MESSAGE_CREATE,
-            &observer,
-            &registry
-        ));
-        assert!(can_submit_event(
-            event_type::ROOM_LEAVE,
-            &observer,
-            &registry
-        ));
-        assert!(!can_submit_event(
-            event_type::ROOM_JOIN,
-            &observer,
-            &registry
-        ));
-        let approved = PermissionContext {
-            join_request_approved: true,
-            ..PermissionContext::default()
+        let twice = TypeRegistry::from_declarations(
+            &[
+                TypeDeclaration::Def(finding_def()),
+                TypeDeclaration::Def(finding_def()),
+            ],
+            &packs,
+        );
+        assert_eq!(twice.unwrap_err().code(), Some("type_conflict"));
+        assert!(TypeRegistry::from_declarations(
+            &[import(pack_id::REACTIONS), import(pack_id::REACTIONS)],
+            &packs
+        )
+        .is_err());
+        assert!(TypeRegistry::from_declarations(&[import("adp:unknown/1.0")], &packs).is_err());
+        let mut subset = PackImport {
+            use_pack: Some(pack_id::DELIBERATION.into()),
+            types: Some(vec!["poll.vote".into(), "poll.vote".into()]),
+            ..PackImport::default()
         };
-        assert!(can_submit_event(
-            event_type::ROOM_JOIN,
-            &approved,
-            &registry
-        ));
-    }
-
-    #[test]
-    fn applies_state_restrictions() {
-        let registry = TypeRegistry::new();
-        let speaker = PermissionContext::for_role(Role::Speaker);
-        let moderator = PermissionContext::for_role(Role::Moderator);
-
-        assert!(can_accept_room_write(
-            event_type::MESSAGE_CREATE,
-            RoomState::Active,
-            &speaker,
-            &registry
-        ));
-        assert!(!can_accept_room_write(
-            event_type::MESSAGE_CREATE,
-            RoomState::Scheduled,
-            &speaker,
-            &registry
-        ));
-        // scheduled allows pre-start setup: reviews, role updates, leave, type.define
-        assert!(can_write_in_state(
-            event_type::ROOM_JOIN_REVIEW,
-            RoomState::Scheduled
-        ));
-        assert!(can_write_in_state(
-            event_type::ROOM_MEMBER_ROLE_UPDATE,
-            RoomState::Scheduled
-        ));
-        assert!(can_write_in_state(
-            event_type::ROOM_LEAVE,
-            RoomState::Scheduled
-        ));
-        assert!(can_write_in_state(
-            event_type::TYPE_DEFINE,
-            RoomState::Scheduled
-        ));
-        assert!(can_write_in_state(
-            event_type::ROOM_CANCEL,
-            RoomState::Scheduled
-        ));
-        assert!(!can_write_in_state(
-            event_type::ROOM_CLOSE,
-            RoomState::Scheduled
-        ));
-        assert!(can_accept_room_write(
-            event_type::TYPE_DEFINE,
-            RoomState::Scheduled,
-            &moderator,
-            &registry
-        ));
-        // ended rooms are strictly read-only
-        assert!(!can_write_in_state("reaction.create", RoomState::Ended));
-        assert!(!can_write_in_state(
-            event_type::ROOM_LEAVE,
-            RoomState::Ended
-        ));
-        assert!(!can_write_in_state(
-            event_type::ROOM_JOIN,
-            RoomState::Cancelled
-        ));
-        // cancel only while scheduled, close only while active
-        assert!(can_write_in_state(
-            event_type::ROOM_CLOSE,
-            RoomState::Active
-        ));
-        assert!(!can_write_in_state(
-            event_type::ROOM_CANCEL,
-            RoomState::Active
-        ));
-    }
-
-    #[test]
-    fn validates_room_creation_payloads() {
-        let mut payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
-        payload.policy = Some(RoomPolicy {
-            max_speakers: Some(2),
-            ..RoomPolicy::default()
-        });
-        payload.guidance = Some("Cite sources.".to_owned());
-        payload.types = vec![
-            TypeDeclaration::Import(PackImport {
-                use_pack: Some(pack_id::REACTIONS.to_owned()),
-                ..PackImport::default()
-            }),
-            TypeDeclaration::Def(finding_def()),
-        ];
-        validate_room_create_payload(&payload).unwrap();
-
-        let empty_topic = RoomCreatePayload::new(" ", Visibility::Public, 1000, 2000);
-        assert!(validate_room_create_payload(&empty_topic).is_err());
-
-        let invalid_time = RoomCreatePayload::new("Research room", Visibility::Public, 2000, 1000);
-        assert!(validate_room_create_payload(&invalid_time).is_err());
-
-        let mut zero_speakers =
-            RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
-        zero_speakers.policy = Some(RoomPolicy {
-            max_speakers: Some(0),
-            ..RoomPolicy::default()
-        });
-        assert!(validate_room_create_payload(&zero_speakers).is_err());
-
-        let mut reserved = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
-        let mut bad_def = finding_def();
-        bad_def.name = "room.custom".to_owned();
-        reserved.types = vec![TypeDeclaration::Def(bad_def)];
-        assert!(validate_room_create_payload(&reserved).is_err());
+        assert!(validate_pack_import(&subset).is_err());
+        subset.types = Some(vec!["does.not.exist".into()]);
+        assert!(
+            TypeRegistry::from_declarations(&[TypeDeclaration::Import(subset)], &packs).is_err()
+        );
+        let mut registry = TypeRegistry::new();
+        registry.define(finding_def()).unwrap();
+        let mut signal = finding_def();
+        signal.kind = TypeKind::Signal;
+        assert_eq!(
+            registry.define(signal).unwrap_err().code(),
+            Some("type_conflict")
+        );
+        let external = PackImport {
+            pack: Some("http://example.com/p.json".into()),
+            digest: Some(format!("sha256:{}", "A".repeat(43))),
+            ..PackImport::default()
+        };
+        assert!(validate_pack_import(&external).is_err());
+        let digest = PackImport {
+            pack: Some("https://example.com/p.json".into()),
+            digest: Some("sha256:abc".into()),
+            ..PackImport::default()
+        };
+        assert!(validate_pack_import(&digest).is_err());
     }
 
     #[test]
     fn verifies_pack_digests() {
         let bytes = b"pack document bytes";
-        let digest = format!("sha256:{}", URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)));
-        verify_pack_digest(bytes, &digest).unwrap();
-        let digest = format!(
+        let sha256 = format!("sha256:{}", URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)));
+        let sha3 = format!(
             "sha3-256:{}",
             URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes))
         );
-        verify_pack_digest(bytes, &digest).unwrap();
-        assert!(verify_pack_digest(b"tampered", &digest).is_err());
+        verify_pack_digest(bytes, &sha256).unwrap();
+        verify_pack_digest(bytes, &sha3).unwrap();
+        assert!(verify_pack_digest(b"tampered", &sha256).is_err());
         assert!(verify_pack_digest(bytes, "md5:abc").is_err());
-        assert!(verify_pack_digest(bytes, "not-a-digest").is_err());
     }
 
     #[test]
-    fn hash_canonical_json_rejects_unserializable_values() {
-        assert!(hash_canonical_json(&FailingPayload).is_err());
-    }
-
-    #[test]
-    fn builds_and_verifies_server_record_chains() {
-        let signer = AgentSigner::from_seed([18; 32]);
-        let envelope1 = signer
-            .sign_event(Event::new(
-                PROTOCOL,
-                event_type::ROOM_CREATE,
-                signer.agent_id(),
-                100,
-                1,
-                json!({
-                    "topic": "Research room",
-                    "visibility": "public",
-                    "start_time": 1000,
-                    "end_time": 2000
+    fn permissions_follow_kinds_and_builtin_rules() {
+        let registry = TypeRegistry::from_declarations(
+            &[
+                TypeDeclaration::Import(PackImport {
+                    use_pack: Some(pack_id::REACTIONS.into()),
+                    ..PackImport::default()
                 }),
-            ))
-            .unwrap();
-        let record1 = build_server_record("room123", 1, None, 110, envelope1).unwrap();
-
-        let envelope2 = signer
-            .sign_event(discourse_event(
-                event_type::MESSAGE_CREATE,
-                signer.agent_id(),
-                120,
-                2,
-                "room123",
-                1,
-                record1.hash.clone(),
-                json!({"content_type": "text/plain", "content": "hello"}),
-            ))
-            .unwrap();
-        let record2 =
-            build_server_record("room123", 2, Some(record1.hash.clone()), 130, envelope2).unwrap();
-
-        assert_eq!(
-            record1.hash,
-            server_record_hash("room123", 1, None, &record1.envelope.hash, 110).unwrap()
-        );
-        verify_server_record(&record1).unwrap();
-        verify_server_record_chain(&[record1.clone(), record2.clone()]).unwrap();
-        assert_eq!(
-            archive_events_digest(&[record1.clone(), record2.clone()])
-                .unwrap()
-                .len(),
-            43
-        );
-        assert!(verify_server_record_chain(&[record2]).is_err());
-
-        let broken = ServerRecord {
-            pre_hash: Some("bad".to_owned()),
-            ..record1
-        };
-        assert!(verify_server_record_chain(&[broken]).is_err());
-    }
-
-    #[test]
-    fn type_declaration_serde_round_trips() {
-        let inline: TypeDeclaration = serde_json::from_value(json!({
-            "type": "review.finding",
-            "kind": "message",
-            "title": "Review finding",
-            "schema": {"type": "object"}
-        }))
-        .unwrap();
-        assert_eq!(
-            serde_json::to_value(&inline).unwrap()["type"],
-            json!("review.finding")
-        );
-
-        let import: TypeDeclaration = serde_json::from_value(json!({
-            "use": "adp:reactions/1.0",
-            "overrides": {"reaction.create": {"status": "deprecated"}}
-        }))
-        .unwrap();
-        assert_eq!(
-            serde_json::to_value(&import).unwrap()["use"],
-            json!("adp:reactions/1.0")
-        );
-        validate_type_declaration(&import).unwrap();
-    }
-
-    #[test]
-    fn constructors_and_helpers() {
-        assert_eq!(RoomPolicy::new(), RoomPolicy::default());
-
-        let input = RoomJoinRequestInput::new(Role::Observer);
-        assert_eq!(input.role, Role::Observer);
-        assert!(input.perspective.is_none());
-
-        assert_eq!(
-            MessageCreatePayload::markdown("# title").content_type,
-            "text/markdown"
-        );
-        assert_eq!(
-            MessageCreatePayload::text("hi").content,
-            Value::String("hi".to_owned())
-        );
-
-        assert!(event_requires_room_id(event_type::MESSAGE_CREATE));
-        assert!(!event_requires_room_id(event_type::ROOM_CREATE));
-
-        let signer = AgentSigner::from_seed([40; 32]);
-        let event = type_define_event(
-            signer.agent_id(),
-            1,
-            1,
-            "room1",
-            1,
-            "room-head-hash",
-            TypeDeclaration::Def(finding_def()),
-        );
-        assert_eq!(event.protocol, PROTOCOL);
-        assert_eq!(event.kind, event_type::TYPE_DEFINE);
-        assert_eq!(event.room_id.as_deref(), Some("room1"));
-    }
-
-    #[test]
-    fn validate_discourse_envelope_checks_protocol() {
-        let signer = AgentSigner::from_seed([41; 32]);
-        let event = Event::new(
-            "wrong-protocol/1.0",
-            event_type::MESSAGE_CREATE,
-            signer.agent_id(),
-            100,
-            1,
-            MessageCreatePayload::text("hi"),
-        )
-        .with_room_id("room1");
-        let envelope = signer.sign_event(event).unwrap();
-        assert!(validate_discourse_envelope(&envelope).is_err());
-    }
-
-    #[test]
-    fn validate_discourse_envelope_covers_payload_instantiations() {
-        let signer = AgentSigner::from_seed([44; 32]);
-        let room_payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
-
-        let mut invalid_room_create = signer
-            .sign_event(room_create_event(
-                signer.agent_id(),
-                100,
-                1,
-                room_payload.clone(),
-            ))
-            .unwrap();
-        invalid_room_create.signature = "invalid".to_owned();
-        assert!(validate_discourse_envelope(&invalid_room_create).is_err());
-
-        let wrong_room_protocol = signer
-            .sign_event(Event::new(
-                "wrong-protocol/1.0",
-                event_type::ROOM_CREATE,
-                signer.agent_id(),
-                100,
-                2,
-                room_payload.clone(),
-            ))
-            .unwrap();
-        assert!(validate_discourse_envelope(&wrong_room_protocol).is_err());
-
-        let missing_room_id = signer
-            .sign_event(Event::new(
-                PROTOCOL,
-                event_type::MESSAGE_CREATE,
-                signer.agent_id(),
-                100,
-                3,
-                room_payload.clone(),
-            ))
-            .unwrap();
-        assert!(validate_discourse_envelope(&missing_room_id).is_err());
-
-        let room_payload_as_message = signer
-            .sign_event(
-                Event::new(
-                    PROTOCOL,
-                    event_type::MESSAGE_CREATE,
-                    signer.agent_id(),
-                    100,
-                    4,
-                    room_payload,
-                )
-                .with_room_id("room1")
-                .with_room_head(1, "room-head-hash"),
-            )
-            .unwrap();
-        validate_discourse_envelope(&room_payload_as_message).unwrap();
-
-        let message_payload_as_room = signer
-            .sign_event(Event::new(
-                PROTOCOL,
-                event_type::ROOM_CREATE,
-                signer.agent_id(),
-                100,
-                5,
-                MessageCreatePayload::text("hi"),
-            ))
-            .unwrap();
-        validate_discourse_envelope(&message_payload_as_room).unwrap();
-        let message_payload_with_room = signer
-            .sign_event(
-                Event::new(
-                    PROTOCOL,
-                    event_type::ROOM_CREATE,
-                    signer.agent_id(),
-                    100,
-                    6,
-                    MessageCreatePayload::text("hi"),
-                )
-                .with_room_id("room1"),
-            )
-            .unwrap();
-        assert!(validate_discourse_envelope(&message_payload_with_room).is_err());
-
-        let review_payload = join_review_payload(signer.agent_id());
-        let mut invalid_review = signer
-            .sign_event(discourse_event(
-                event_type::ROOM_JOIN_REVIEW,
-                signer.agent_id(),
-                100,
-                7,
-                "room1",
-                1,
-                "room-head-hash",
-                review_payload.clone(),
-            ))
-            .unwrap();
-        invalid_review.signature = "invalid".to_owned();
-        assert!(validate_discourse_envelope(&invalid_review).is_err());
-
-        let wrong_review_protocol = signer
-            .sign_event(
-                Event::new(
-                    "wrong-protocol/1.0",
-                    event_type::ROOM_JOIN_REVIEW,
-                    signer.agent_id(),
-                    100,
-                    8,
-                    review_payload.clone(),
-                )
-                .with_room_id("room1"),
-            )
-            .unwrap();
-        assert!(validate_discourse_envelope(&wrong_review_protocol).is_err());
-
-        let missing_review_room = signer
-            .sign_event(Event::new(
-                PROTOCOL,
-                event_type::ROOM_JOIN_REVIEW,
-                signer.agent_id(),
-                100,
-                9,
-                review_payload.clone(),
-            ))
-            .unwrap();
-        assert!(validate_discourse_envelope(&missing_review_room).is_err());
-
-        let review_payload_as_room = signer
-            .sign_event(Event::new(
-                PROTOCOL,
-                event_type::ROOM_CREATE,
-                signer.agent_id(),
-                100,
-                10,
-                review_payload,
-            ))
-            .unwrap();
-        validate_discourse_envelope(&review_payload_as_room).unwrap();
-    }
-
-    #[test]
-    fn validate_room_path_matches_and_rejects() {
-        let signer = AgentSigner::from_seed([42; 32]);
-        let in_room = signer
-            .sign_event(discourse_event(
-                event_type::MESSAGE_CREATE,
-                signer.agent_id(),
-                100,
-                1,
-                "room1",
-                1,
-                "room-head-hash",
-                MessageCreatePayload::text("hi"),
-            ))
-            .unwrap();
-        validate_room_path(&in_room, "room1").unwrap();
-        assert!(validate_room_path(&in_room, "room2").is_err());
-
-        let no_room = signer
-            .sign_event(Event::new(
-                PROTOCOL,
-                event_type::MESSAGE_CREATE,
-                signer.agent_id(),
-                100,
-                1,
-                MessageCreatePayload::text("hi"),
-            ))
-            .unwrap();
-        assert!(validate_room_path(&no_room, "room1").is_err());
-    }
-
-    #[test]
-    fn validate_room_path_covers_payload_instantiations() {
-        let signer = AgentSigner::from_seed([45; 32]);
-        let room_payload = RoomCreatePayload::new("Research room", Visibility::Public, 1000, 2000);
-        let in_room = signer
-            .sign_event(
-                Event::new(
-                    PROTOCOL,
-                    event_type::MESSAGE_CREATE,
-                    signer.agent_id(),
-                    100,
-                    1,
-                    room_payload.clone(),
-                )
-                .with_room_id("room1")
-                .with_room_head(1, "room-head-hash"),
-            )
-            .unwrap();
-        validate_room_path(&in_room, "room1").unwrap();
-        assert!(validate_room_path(&in_room, "room2").is_err());
-
-        let missing_room = signer
-            .sign_event(Event::new(
-                PROTOCOL,
-                event_type::MESSAGE_CREATE,
-                signer.agent_id(),
-                100,
-                2,
-                room_payload,
-            ))
-            .unwrap();
-        assert!(validate_room_path(&missing_room, "room1").is_err());
-
-        let message_room_create = signer
-            .sign_event(Event::new(
-                PROTOCOL,
-                event_type::ROOM_CREATE,
-                signer.agent_id(),
-                100,
-                3,
-                MessageCreatePayload::text("hi"),
-            ))
-            .unwrap();
-        validate_room_path(&message_room_create, "room1").unwrap();
-
-        let message_room_create_with_room = signer
-            .sign_event(
-                Event::new(
-                    PROTOCOL,
-                    event_type::ROOM_CREATE,
-                    signer.agent_id(),
-                    100,
-                    4,
-                    MessageCreatePayload::text("hi"),
-                )
-                .with_room_id("room1"),
-            )
-            .unwrap();
-        assert!(validate_room_path(&message_room_create_with_room, "room1").is_err());
-    }
-
-    #[test]
-    fn validate_type_def_rejects_bad_shapes() {
-        let mut empty_title = finding_def();
-        empty_title.title = "  ".to_owned();
-        assert!(validate_type_def(&empty_title).is_err());
-        assert!(TypeRegistry::new().define(empty_title).is_err());
-
-        let mut not_object = finding_def();
-        not_object.schema = json!("nope");
-        assert!(validate_type_def(&not_object).is_err());
-
-        let mut invalid_schema = finding_def();
-        invalid_schema.schema = json!({"type": 123});
-        assert!(validate_type_def(&invalid_schema).is_err());
-
-        let mut empty_roles = finding_def();
-        empty_roles.roles = Some(vec![]);
-        assert!(validate_type_def(&empty_roles).is_err());
-
-        let mut zero_rate = finding_def();
-        zero_rate.rate_hint = Some(0);
-        assert!(validate_type_def(&zero_rate).is_err());
-
-        let mut zero_payload = finding_def();
-        zero_payload.max_payload_hint = Some(0);
-        assert!(validate_type_def(&zero_payload).is_err());
-    }
-
-    #[test]
-    fn validate_pack_import_covers_each_arm() {
-        validate_pack_import(&PackImport {
-            use_pack: Some(pack_id::REACTIONS.to_owned()),
-            ..PackImport::default()
-        })
-        .unwrap();
-
-        validate_pack_import(&PackImport {
-            pack: Some("https://example.com/p.json".to_owned()),
-            digest: Some("sha256:abc".to_owned()),
-            ..PackImport::default()
-        })
-        .unwrap();
-
-        assert!(validate_pack_import(&PackImport {
-            pack: Some("https://example.com/p.json".to_owned()),
-            digest: Some("   ".to_owned()),
-            ..PackImport::default()
-        })
-        .is_err());
-
-        assert!(validate_pack_import(&PackImport::default()).is_err());
-
-        assert!(validate_pack_import(&PackImport {
-            use_pack: Some(pack_id::REACTIONS.to_owned()),
-            types: Some(vec![]),
-            ..PackImport::default()
-        })
-        .is_err());
-
-        let invalid = TypeDeclaration::Import(PackImport {
-            use_pack: Some(pack_id::REACTIONS.to_owned()),
-            pack: Some("https://example.com/p.json".to_owned()),
-            digest: Some("sha256:abc".to_owned()),
-            ..PackImport::default()
-        });
-        assert!(TypeRegistry::from_declarations(&[invalid], &registered_packs()).is_err());
-    }
-
-    #[test]
-    fn registered_pack_id_shape() {
-        assert!(validate_pack_import(&PackImport {
-            use_pack: Some("not-prefixed".to_owned()),
-            ..PackImport::default()
-        })
-        .is_err());
-        assert!(validate_pack_import(&PackImport {
-            use_pack: Some("adp:no-slash".to_owned()),
-            ..PackImport::default()
-        })
-        .is_err());
-        assert!(validate_pack_import(&PackImport {
-            use_pack: Some("adp:bad_name/1.0".to_owned()),
-            ..PackImport::default()
-        })
-        .is_err());
-        assert!(validate_pack_import(&PackImport {
-            use_pack: Some("adp:bad/1.x".to_owned()),
-            ..PackImport::default()
-        })
-        .is_err());
-        assert!(validate_pack_import(&PackImport {
-            use_pack: Some("adp:bad/1.2.3".to_owned()),
-            ..PackImport::default()
-        })
-        .is_err());
-    }
-
-    #[test]
-    fn validate_message_create_payload_checks_content_type() {
-        validate_message_create_payload(&MessageCreatePayload::text("hi")).unwrap();
-        let mut empty = MessageCreatePayload::text("hi");
-        empty.content_type = " ".to_owned();
-        assert!(validate_message_create_payload(&empty).is_err());
-    }
-
-    #[test]
-    fn import_rejects_unknown_subset_and_applies_all_overrides() {
-        let packs = registered_packs();
-        let missing_subset = TypeDeclaration::Import(PackImport {
-            use_pack: Some(pack_id::REACTIONS.to_owned()),
-            types: Some(vec!["does.not.exist".to_owned()]),
-            ..PackImport::default()
-        });
-        assert!(TypeRegistry::from_declarations(&[missing_subset], &packs).is_err());
-
-        let missing_pack = TypeDeclaration::Import(PackImport {
-            use_pack: Some("adp:missing/1.0".to_owned()),
-            ..PackImport::default()
-        });
-        assert!(TypeRegistry::from_declarations(&[missing_pack], &packs).is_err());
-
-        let hidden_override = TypeDeclaration::Import(PackImport {
-            use_pack: Some(pack_id::DELIBERATION.to_owned()),
-            types: Some(vec!["poll.create".to_owned()]),
-            overrides: BTreeMap::from([("poll.vote".to_owned(), TypeOverride::default())]),
-            ..PackImport::default()
-        });
-        assert!(TypeRegistry::from_declarations(&[hidden_override], &packs).is_err());
-
-        let empty_pack = BTreeMap::from([(
-            "adp:empty/1.0".to_owned(),
-            Pack {
-                id: "adp:empty/1.0".to_owned(),
-                title: "Empty pack".to_owned(),
-                description: None,
-                types: Vec::new(),
-                extra: BTreeMap::new(),
-            },
-        )]);
-        let empty_import = TypeDeclaration::Import(PackImport {
-            use_pack: Some("adp:empty/1.0".to_owned()),
-            ..PackImport::default()
-        });
-        assert!(
-            TypeRegistry::from_declarations(&[empty_import], &empty_pack)
-                .unwrap()
-                .is_empty()
-        );
-
-        let overridden = TypeDeclaration::Import(PackImport {
-            use_pack: Some(pack_id::REACTIONS.to_owned()),
-            overrides: BTreeMap::from([(
-                "reaction.create".to_owned(),
-                TypeOverride {
-                    roles: Some(vec![Role::Moderator]),
-                    instructions: Some("be concise".to_owned()),
-                    status: Some(TypeStatus::Deprecated),
-                    rate_hint: Some(5),
-                    max_payload_hint: Some(2048),
-                },
-            )]),
-            ..PackImport::default()
-        });
-        let registry = TypeRegistry::from_declarations(&[overridden], &packs).unwrap();
-        let def = registry.get("reaction.create").unwrap();
-        assert_eq!(def.instructions.as_deref(), Some("be concise"));
-        assert_eq!(def.status(), TypeStatus::Deprecated);
-        assert_eq!(def.rate_hint, Some(5));
-        assert_eq!(def.max_payload_hint, Some(2048));
-        assert_eq!(def.roles.as_deref(), Some([Role::Moderator].as_slice()));
-
-        let no_roles_override = TypeDeclaration::Import(PackImport {
-            use_pack: Some(pack_id::REACTIONS.to_owned()),
-            overrides: BTreeMap::from([(
-                "reaction.create".to_owned(),
-                TypeOverride {
-                    instructions: Some("no role override".to_owned()),
-                    ..TypeOverride::default()
-                },
-            )]),
-            ..PackImport::default()
-        });
-        let registry = TypeRegistry::from_declarations(&[no_roles_override], &packs).unwrap();
-        let def = registry.get("reaction.create").unwrap();
-        assert_eq!(def.instructions.as_deref(), Some("no role override"));
-        assert!(def.roles.is_none());
-
-        let mut invalid_def = finding_def();
-        invalid_def.title = String::new();
-        let invalid_pack = BTreeMap::from([(
-            "adp:invalid/1.0".to_owned(),
-            Pack {
-                id: "adp:invalid/1.0".to_owned(),
-                title: "Invalid pack".to_owned(),
-                description: None,
-                types: vec![invalid_def],
-                extra: BTreeMap::new(),
-            },
-        )]);
-        let invalid_import = TypeDeclaration::Import(PackImport {
-            use_pack: Some("adp:invalid/1.0".to_owned()),
-            ..PackImport::default()
-        });
-        assert!(TypeRegistry::from_declarations(&[invalid_import], &invalid_pack).is_err());
-    }
-
-    #[test]
-    fn registry_introspection_and_registry_validation() {
-        let mut registry = TypeRegistry::new();
-        assert!(registry.is_empty());
-        registry.define(finding_def()).unwrap();
-        assert!(!registry.is_empty());
-        assert_eq!(registry.definitions().count(), 1);
-
-        // built-in payloads bypass the registry
-        validate_event_against_registry(
-            event_type::MESSAGE_CREATE,
-            &json!({"anything": true}),
-            &registry,
+                TypeDeclaration::Import(PackImport {
+                    use_pack: Some(pack_id::CURATION.into()),
+                    ..PackImport::default()
+                }),
+            ],
+            &packs(),
         )
         .unwrap();
-        validate_event_against_registry(
-            "review.finding",
-            &json!({"severity": "high", "summary": "s"}),
-            &registry,
-        )
-        .unwrap();
-        assert!(validate_event_against_registry("review.finding", &json!({}), &registry).is_err());
-
-        let mut invalid_schema = finding_def();
-        invalid_schema.schema = json!({"type": 123});
-        registry
-            .types
-            .insert(invalid_schema.name.clone(), invalid_schema);
-        assert!(registry
-            .validate_payload(
-                "review.finding",
-                &json!({"severity": "high", "summary": "s"})
-            )
-            .is_err());
-    }
-
-    #[test]
-    fn custom_permission_edges_and_room_write() {
-        let mut registry = TypeRegistry::new();
-        registry.define(finding_def()).unwrap();
-        let mut disabled = finding_def();
-        disabled.name = "review.disabled".to_owned();
-        disabled.status = Some(TypeStatus::Disabled);
-        registry.define(disabled).unwrap();
-
-        // disabled custom type is never submittable
-        assert!(!can_submit_event(
-            "review.disabled",
-            &PermissionContext::creator(None),
+        let observer = PermissionContext::for_role(Role::Observer);
+        let speaker = PermissionContext::for_role(Role::Speaker);
+        let moderator = PermissionContext::for_role(Role::Moderator);
+        let creator = PermissionContext::creator(Some(Role::Observer));
+        assert!(can_submit_event("reaction.create", &observer, &registry));
+        assert!(can_submit_event("resource.add", &speaker, &registry));
+        assert!(!can_submit_event("resource.add", &observer, &registry));
+        assert!(can_submit_event("graph.update", &moderator, &registry));
+        assert!(!can_submit_event("graph.update", &speaker, &registry));
+        assert!(can_submit_event("graph.update", &creator, &registry));
+        assert!(!can_submit_event("session.offer", &speaker, &registry));
+        assert!(can_submit_event(
+            event_type::ROOM_LEAVE,
+            &observer,
             &registry
         ));
-        // a member with no role cannot submit a custom type
         assert!(!can_submit_event(
-            "review.finding",
+            event_type::ROOM_LEAVE,
+            &PermissionContext::creator(Some(Role::Moderator)),
+            &registry
+        ));
+        assert!(!can_submit_event(
+            event_type::ROOM_JOIN,
             &PermissionContext::default(),
             &registry
         ));
-
+        assert!(can_submit_event(
+            event_type::ROOM_JOIN,
+            &PermissionContext {
+                direct_join_allowed: true,
+                ..PermissionContext::default()
+            },
+            &registry
+        ));
+        assert!(can_submit_event(
+            event_type::ROOM_JOIN_REQUEST,
+            &PermissionContext::default(),
+            &registry
+        ));
+        assert!(!can_submit_event(
+            event_type::ROOM_JOIN_REQUEST,
+            &speaker,
+            &registry
+        ));
+        assert!(can_write_in_state(
+            event_type::ROOM_JOIN_REQUEST,
+            RoomState::Scheduled
+        ));
+        assert!(!can_write_in_state(
+            event_type::ROOM_JOIN_REQUEST,
+            RoomState::Ended
+        ));
+        assert!(!can_write_in_state(
+            event_type::ROOM_CLOSE,
+            RoomState::Scheduled
+        ));
+        assert!(!can_write_in_state(
+            event_type::ROOM_CANCEL,
+            RoomState::Active
+        ));
         validate_room_write(
             event_type::MESSAGE_CREATE,
             RoomState::Active,
-            &PermissionContext::for_role(Role::Speaker),
+            &speaker,
             &registry,
         )
         .unwrap();
         assert!(validate_room_write(
             event_type::MESSAGE_CREATE,
             RoomState::Ended,
-            &PermissionContext::for_role(Role::Speaker),
-            &registry,
+            &speaker,
+            &registry
         )
         .is_err());
     }
 
     #[test]
-    fn server_record_chain_violations() {
-        let signer = AgentSigner::from_seed([43; 32]);
-        let make = |seq: u64, nonce: u64, pre_hash: Option<String>| {
-            let envelope = signer
-                .sign_event(discourse_event(
-                    event_type::MESSAGE_CREATE,
-                    signer.agent_id(),
-                    100,
-                    nonce,
-                    "room1",
-                    1,
-                    "room-head-hash",
-                    json!({"content_type": "text/plain", "content": "hi"}),
-                ))
-                .unwrap();
-            build_server_record("room1", seq, pre_hash, 100 + seq as i64, envelope).unwrap()
+    fn validates_payload_shapes() {
+        validate_message_create_payload(&MessageCreatePayload::text("hi")).unwrap();
+        validate_message_create_payload(&MessageCreatePayload::new(
+            "application/json",
+            json!({ "a": 1 }),
+        ))
+        .unwrap();
+        for content in [json!(1), json!([]), json!(null)] {
+            assert!(validate_message_create_payload(&MessageCreatePayload::new(
+                "application/json",
+                content
+            ))
+            .is_err());
+        }
+        assert!(validate_room_update_payload(&RoomUpdatePayload::default()).is_err());
+        assert!(serde_json::from_value::<RoomUpdatePayload>(json!({ "host": "x" })).is_err());
+        assert!(
+            serde_json::from_value::<RoomUpdatePayload>(json!({ "visibility": "private" }))
+                .is_err()
+        );
+        let update = RoomUpdatePayload {
+            start_time: Some(5),
+            end_time: Some(5),
+            ..RoomUpdatePayload::default()
         };
+        assert!(validate_room_update_payload(&update).is_err());
+        assert!(serde_json::from_value::<RoomJoinPayload>(
+            json!({ "role": "speaker", "request_id": "jr" })
+        )
+        .is_err());
+        let member = signer(41).agent_id();
+        validate_room_member_remove_payload(&RoomMemberRemovePayload::new(member)).unwrap();
+        let mut bad_create = room_payload();
+        bad_create.topic = " ".into();
+        assert!(validate_room_create_payload(&bad_create).is_err());
+    }
 
-        let first = make(1, 1, None);
-        let gap = make(3, 2, Some(first.hash.clone()));
-        assert!(verify_server_record_chain(&[first.clone(), gap]).is_err());
-
-        let wrong_pre = make(2, 3, Some("not-the-previous-hash".to_owned()));
-        assert!(verify_server_record_chain(&[first.clone(), wrong_pre]).is_err());
-
-        let first_with_pre = make(1, 4, Some("unexpected".to_owned()));
-        assert!(verify_server_record_chain(&[first_with_pre]).is_err());
+    #[test]
+    fn builds_redacts_and_verifies_record_chains() {
+        let author = signer(18);
+        let create = author
+            .sign_event(room_create_event(author.agent_id(), 100, 1, room_payload()))
+            .unwrap();
+        let first = build_server_record("room123", 1, None, 110, create).unwrap();
+        let second = build_server_record(
+            "room123",
+            2,
+            Some(first.hash.clone()),
+            130,
+            message(&author, "room123", 1, &first.hash, 2),
+        )
+        .unwrap();
+        let first_value: ServerRecord =
+            serde_json::from_value(serde_json::to_value(&first).unwrap()).unwrap();
+        verify_server_record_chain(&[first_value.clone(), second.clone()]).unwrap();
+        assert!(verify_server_record_chain(std::slice::from_ref(&second)).is_err());
+        let redacted = redact_server_record(&second).unwrap();
+        assert_eq!(redacted.envelope.kind, event_type::MESSAGE_CREATE);
+        verify_archive_chain(&[
+            ArchiveRecord::Signed(first_value.clone()),
+            ArchiveRecord::Redacted(redacted),
+        ])
+        .unwrap();
+        assert!(redact_server_record(&first_value).is_err());
     }
 }

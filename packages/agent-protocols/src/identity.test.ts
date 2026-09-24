@@ -502,3 +502,109 @@ test("nonce_not_greater errors carry the effective maximum for Max-Seen-Nonce", 
     assert.deepEqual(protocolFailure.data, { max_nonce: 7 });
   }
 });
+
+const identityVectors = JSON.parse(
+  (await import("node:fs")).readFileSync(
+    new URL("../../../docs/protocols/agent-identity/1.0.vectors.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+test("identity vectors: keys, JCS bytes, hashes, and signatures are reproduced", async () => {
+  const identity = await import("./identity.js");
+  for (const key of identityVectors.keys) {
+    const signer = AgentSigner.fromSeed(new Uint8Array(Buffer.from(key.seed, "hex")));
+    assert.equal(signer.agentId(), key.agent_id);
+    assert.equal(Buffer.from(signer.publicKey()).toString("base64url"), key.public_key);
+  }
+  for (const vector of identityVectors.events) {
+    const signer = AgentSigner.fromSeed(new Uint8Array(Buffer.from(vector.seed, "hex")));
+    assert.equal(new TextDecoder().decode(canonicalEventBytes(vector.event)), vector.jcs, vector.name);
+    const envelope = signer.signEvent(vector.event);
+    assert.equal(envelope.hash, vector.hash, vector.name);
+    assert.equal(envelope.signature, vector.signature, vector.name);
+    verifyEnvelope(envelope);
+    // The text of the vector parses strictly and round-trips.
+    assert.deepEqual(identity.parseStrictJson(vector.jcs), vector.event);
+  }
+});
+
+test("identity vectors: only strictly valid Ed25519 signatures verify", () => {
+  for (const vector of identityVectors.signatures) {
+    const publicKey = new Uint8Array(Buffer.from(vector.public_key, "base64url"));
+    const message = new Uint8Array(Buffer.from(vector.message, "base64url"));
+    const check = () => verifyEventHashSignature(publicKey, message, vector.signature);
+    if (vector.valid) check();
+    else assert.throws(check, /signature verification failed/, vector.name);
+  }
+});
+
+test("identity vectors: malformed Agent IDs are rejected", () => {
+  for (const agentId of identityVectors.agent_ids.valid) validateAgentId(agentId);
+  for (const vector of identityVectors.agent_ids.invalid) {
+    assert.throws(() => validateAgentId(vector.value), undefined, vector.name);
+  }
+});
+
+test("identity vectors: signed JSON is parsed strictly", async () => {
+  const { parseStrictJson, parseEnvelopeJson } = await import("./identity.js");
+  for (const vector of identityVectors.json.valid) parseStrictJson(vector.text);
+  for (const vector of identityVectors.json.invalid) {
+    assert.throws(() => parseStrictJson(vector.text), /invalid JSON/, vector.name);
+    // JSON.parse accepts every one of them silently.
+    JSON.parse(vector.text);
+  }
+  const envelope = AgentSigner.fromSeed(new Uint8Array(32).fill(7)).signEvent(identityVectors.events[0].event);
+  assert.deepEqual(parseEnvelopeJson(JSON.stringify(envelope)), envelope);
+  assert.throws(() => parseEnvelopeJson(JSON.stringify({ ...envelope, extra: 1 })), /unknown envelope field/);
+  assert.throws(() => parseEnvelopeJson("[]"), /hash, event, and signature/);
+});
+
+test("identity vectors: the event object is closed", async () => {
+  const { validateEventFields } = await import("./identity.js");
+  validateEventFields(identityVectors.events[0].event);
+  validateEventFields(identityVectors.events[1].event, ["room_id", "base_seq", "base_hash", "mentions"]);
+  assert.throws(() => validateEventFields(identityVectors.events[1].event), /unknown event field/);
+  for (const vector of identityVectors.events_closed_shape.invalid) {
+    assert.throws(() => validateEventFields(vector.event), /event/, vector.name);
+  }
+});
+
+test("identity vectors: Max-Seen-Nonce jumps are bounded", () => {
+  for (const vector of identityVectors.max_seen_nonce) {
+    const manager = new ClientNonceManager(vector.next_nonce);
+    const apply = () => manager.observeMaxNonce(vector.header, vector.now_ms);
+    if (vector.accepted) {
+      apply();
+      assert.equal(manager.peek(), vector.next_after, vector.name);
+    } else {
+      assert.throws(apply, /jumps too far/, vector.name);
+      assert.equal(manager.peek(), vector.next_nonce, vector.name);
+    }
+  }
+});
+
+test("clock-derived nonces stay monotonic", () => {
+  const manager = new ClientNonceManager();
+  assert.equal(manager.nextNonce(1_000), 1_000);
+  assert.equal(manager.nextNonce(1_000), 1_001, "two events in one millisecond");
+  assert.equal(manager.nextNonce(900), 1_002, "a clock step back never reuses a nonce");
+  assert.equal(manager.nextNonce(), 1_003, "without a clock the manager counts");
+  assert.equal(manager.nextNonce(5_000), 5_000);
+});
+
+test("verifySubmission answers exact resubmissions before replay checks", async () => {
+  const { verifySubmission } = await import("./identity.js");
+  const signer = AgentSigner.fromSeed(new Uint8Array(32).fill(71));
+  const envelope = signer.signEvent(createEvent("agent-profile/1.0", "profile.update", signer.agentId(), 1_000, 5, { id: signer.agentId(), name: "A" }));
+  const store = new MemoryNonceStore();
+  const accepted = new Set<string>();
+  const first = verifySubmission(envelope, store, { nowMs: 1_000, isAccepted: (hash) => accepted.has(hash) });
+  assert.deepEqual(first, { kind: "accepted", maxNonce: 5 });
+  accepted.add(envelope.hash);
+  // A retry after a lost response: same nonce, and long past the time window.
+  assert.deepEqual(verifySubmission(envelope, store, { nowMs: 10_000_000, isAccepted: (hash) => accepted.has(hash) }), { kind: "resubmission" });
+  assert.throws(() => verifySubmission(envelope, store, { nowMs: 1_000 }), /nonce/);
+  const forged = { ...envelope, signature: identityVectors.signatures[0].signature };
+  assert.throws(() => verifySubmission(forged, store, { nowMs: 1_000, isAccepted: () => true }), /signature/);
+});

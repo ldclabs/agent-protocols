@@ -3,11 +3,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import re
 import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
-from typing import Any, MutableMapping, Protocol
+from typing import Any, Callable, Iterable, Literal, MutableMapping, Protocol
 
 import rfc8785
 from cryptography.exceptions import InvalidSignature
@@ -22,6 +23,29 @@ DEFAULT_NONCE_TTL_MS = 300_000
 DEFAULT_REQUEST_JWT_TTL_SECS = 300
 MAX_NONCE_HEADER = "Max-Seen-Nonce"
 MAX_SAFE_NONCE = 0x1FFFFFFFFFFFFF
+# Largest accepted Max-Seen-Nonce jump beyond max(next_nonce, now)
+# (Agent Identity Section 6.2). The nonce sequence is shared by every service
+# an agent uses, so one hostile service must not be able to exhaust it.
+MAX_NONCE_JUMP = 2**32
+
+# The six Agent Identity event fields; protocols add their own on top.
+IDENTITY_EVENT_FIELDS = ("protocol", "type", "actor", "created_at", "nonce", "payload")
+
+# Error codes shared by every Agent Protocols service (Section 8.1).
+SHARED_ERROR_CODES = (
+    "invalid_request",
+    "invalid_event",
+    "invalid_event_hash",
+    "invalid_signature",
+    "invalid_actor",
+    "timestamp_out_of_window",
+    "nonce_not_greater",
+    "invalid_token",
+    "permission_denied",
+    "not_found",
+    "rate_limited",
+    "payload_too_large",
+)
 
 Event = dict[str, Any]
 Envelope = dict[str, Any]
@@ -137,6 +161,13 @@ class MemoryNonceStore:
 
 
 class ClientNonceManager:
+    """Client-side nonce sequence for one Agent ID (Agent Identity Section 6.2).
+
+    Pass the event's ``created_at`` to derive clock-based nonces,
+    ``max(last + 1, created_at)``, which stay monotonic across restarts,
+    restores, and devices sharing a key; without it the manager is a plain
+    counter."""
+
     def __init__(self, next_nonce: int = 1) -> None:
         validate_nonce(next_nonce)
         self._next_nonce = next_nonce
@@ -144,13 +175,16 @@ class ClientNonceManager:
     def peek(self) -> int:
         return self._next_nonce
 
-    def next_nonce(self) -> int:
-        nonce = self._next_nonce
+    def next_nonce(self, created_at: int | None = None) -> int:
+        nonce = created_at if created_at is not None and created_at > self._next_nonce else self._next_nonce
         validate_nonce(nonce)
-        self._next_nonce += 1
+        self._next_nonce = nonce + 1
         return nonce
 
-    def observe_max_nonce(self, max_nonce: int | str | None) -> None:
+    def observe_max_nonce(self, max_nonce: int | str | None, now_ms: int | None = None) -> None:
+        """Applies a ``Max-Seen-Nonce`` header. A value more than
+        :data:`MAX_NONCE_JUMP` beyond ``max(next_nonce, now_ms)`` is rejected
+        rather than applied."""
         if max_nonce is None or max_nonce == "":
             return
         try:
@@ -158,6 +192,11 @@ class ClientNonceManager:
         except (TypeError, ValueError) as exc:
             raise AgentProtocolError("invalid_nonce", "invalid max nonce header") from exc
         validate_nonce(parsed)
+        now = now_ms if now_ms is not None else unix_ms()
+        if parsed > max(self._next_nonce, now) + MAX_NONCE_JUMP:
+            raise AgentProtocolError(
+                "invalid_nonce", f"Max-Seen-Nonce {parsed} jumps too far beyond the local sequence"
+            )
         if parsed >= self._next_nonce:
             self._next_nonce = parsed + 1
 
@@ -173,6 +212,20 @@ def create_event(protocol: str, event_type: str, actor: AgentId, created_at: int
         "nonce": nonce,
         "payload": payload,
     }
+
+
+def validate_event_fields(event: Event, extra_fields: Iterable[str] = ()) -> None:
+    """Enforces the closed event object (Section 5.1): the event may carry only
+    the six Agent Identity fields plus ``extra_fields`` the protocol defines."""
+    if not isinstance(event, dict):
+        raise AgentProtocolError("invalid_event", "event must be an object")
+    for field in IDENTITY_EVENT_FIELDS:
+        if field not in event:
+            raise AgentProtocolError("invalid_event", f"event requires {field}")
+    allowed = set(IDENTITY_EVENT_FIELDS) | set(extra_fields)
+    for key in event:
+        if key not in allowed:
+            raise AgentProtocolError("invalid_event", f"unknown event field: {key}")
 
 
 def with_room_id(event: Event, room_id: str) -> Event:
@@ -241,18 +294,143 @@ def verify_event_hash(envelope: Envelope) -> None:
 
 
 def verify_signature(envelope: Envelope) -> None:
-    public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes(envelope["event"]["actor"]))
-    verify_event_hash_signature(public_key, event_hash_bytes(envelope["event"]), envelope["signature"])
+    verify_event_hash_signature(
+        public_key_bytes(envelope["event"]["actor"]), event_hash_bytes(envelope["event"]), envelope["signature"]
+    )
 
 
-def verify_event_hash_signature(public_key: Ed25519PublicKey, event_hash: bytes, encoded_signature: str) -> None:
+def verify_event_hash_signature(public_key: Ed25519PublicKey | bytes, event_hash: bytes, encoded_signature: str) -> None:
     signature = _base64url_decode(encoded_signature)
     if len(signature) != 64:
         raise AgentProtocolError("invalid_signature", f"signature must be 64 bytes, got {len(signature)}")
+    if not verify_ed25519_strict(_valid_event_hash_bytes(event_hash), signature, _raw_public_key(public_key)):
+        raise AgentProtocolError("invalid_signature", "signature verification failed")
+
+
+# p = 2^255 - 19 and L = 2^252 + 27742317777372353535851937790883648493.
+_FIELD_P = (1 << 255) - 19
+_GROUP_L = (1 << 252) + 27742317777372353535851937790883648493
+# y-coordinates (sign bit cleared) of every small-order point (Appendix B).
+_SMALL_ORDER_Y = frozenset(
+    {
+        0,
+        1,
+        _FIELD_P - 1,
+        int.from_bytes(bytes.fromhex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"), "little"),
+        int.from_bytes(bytes.fromhex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"), "little"),
+    }
+)
+
+
+def _is_strict_point(encoding: bytes) -> bool:
+    """Canonical encoding (y < p) of a point that is not of small order."""
+    y = int.from_bytes(encoding, "little") & ((1 << 255) - 1)
+    return y < _FIELD_P and y not in _SMALL_ORDER_Y
+
+
+def verify_ed25519_strict(message: bytes, signature: bytes, public_key: bytes) -> bool:
+    """Ed25519 verification under the deterministic rules of Agent Identity
+    Section 3.1: canonical, non-small-order ``A`` and ``R``, reduced ``S``,
+    and the cofactorless equation."""
+    if len(signature) != 64 or len(public_key) != 32:
+        return False
+    if not _is_strict_point(public_key) or not _is_strict_point(signature[:32]):
+        return False
+    if int.from_bytes(signature[32:], "little") >= _GROUP_L:
+        return False
     try:
-        public_key.verify(signature, _valid_event_hash_bytes(event_hash))
-    except InvalidSignature as exc:
-        raise AgentProtocolError("invalid_signature", "signature verification failed") from exc
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
+    except (InvalidSignature, ValueError):
+        return False
+    return True
+
+
+def _raw_public_key(public_key: Ed25519PublicKey | bytes) -> bytes:
+    if isinstance(public_key, (bytes, bytearray)):
+        return bytes(public_key)
+    return public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+
+def parse_strict_json(text: str | bytes) -> Any:
+    """Parses signed JSON strictly (Agent Identity Section 4.1): rejects
+    duplicate member names, unpaired surrogates, and integers outside the safe
+    range. ``json.loads`` silently keeps the last of two duplicate names, so
+    parse raw request bodies with this before hashing."""
+
+    def fail(message: str) -> AgentProtocolError:
+        return AgentProtocolError("invalid_event", f"invalid JSON: {message}")
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in items:
+            if key in result:
+                raise fail(f"duplicate member name {json.dumps(key)}")
+            result[key] = value
+        return result
+
+    def parse_int(value: str) -> int:
+        number = int(value)
+        if abs(number) > MAX_SAFE_NONCE:
+            raise fail("integer outside the safe range")
+        return number
+
+    def parse_float(value: str) -> float:
+        number = float(value)
+        if not math.isfinite(number):
+            raise fail("number out of range")
+        if number.is_integer() and abs(number) > MAX_SAFE_NONCE:
+            raise fail("integer outside the safe range")
+        return number
+
+    def parse_constant(value: str) -> Any:
+        raise fail(f"unexpected token {value}")
+
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=pairs,
+            parse_int=parse_int,
+            parse_float=parse_float,
+            parse_constant=parse_constant,
+        )
+    except AgentProtocolError:
+        raise
+    except (ValueError, RecursionError) as exc:
+        raise fail(str(exc)) from exc
+    _reject_unpaired_surrogates(value, 0, fail)
+    return value
+
+
+def _reject_unpaired_surrogates(value: Any, depth: int, fail: Callable[[str], AgentProtocolError]) -> None:
+    # json.loads joins escaped surrogate pairs, so any surrogate left is unpaired.
+    if depth > 256:
+        raise fail("nesting too deep")
+    if isinstance(value, str):
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise fail("unpaired surrogate in string")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_unpaired_surrogates(key, depth + 1, fail)
+            _reject_unpaired_surrogates(item, depth + 1, fail)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_unpaired_surrogates(item, depth + 1, fail)
+
+
+def parse_envelope_json(text: str | bytes) -> Envelope:
+    """:func:`parse_strict_json` for a signed envelope, checking its outer shape."""
+    value = parse_strict_json(text)
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("hash"), str)
+        or not isinstance(value.get("signature"), str)
+        or not isinstance(value.get("event"), dict)
+    ):
+        raise AgentProtocolError("invalid_event", "envelope must contain hash, event, and signature")
+    for key in value:
+        if key not in ("hash", "event", "signature"):
+            raise AgentProtocolError("invalid_event", f"unknown envelope field: {key}")
+    return value
 
 
 def verify_envelope(envelope: Envelope) -> None:
@@ -263,6 +441,38 @@ def verify_envelope(envelope: Envelope) -> None:
 def verify_timestamp(created_at: int, now_ms: int, window_ms: int) -> None:
     if window_ms < 0 or abs(created_at - now_ms) > window_ms:
         raise AgentProtocolError("timestamp_out_of_window", "timestamp is outside the allowed live-write window")
+
+
+@dataclass(frozen=True)
+class SubmissionResult:
+    """Outcome of :func:`verify_submission`: an exact resubmission of an
+    accepted envelope, or a new live write with the nonce now recorded."""
+
+    kind: Literal["resubmission", "accepted"]
+    max_nonce: int | None = None
+
+
+def verify_submission(
+    envelope: Envelope,
+    nonce_store: NonceStore,
+    *,
+    is_accepted: Callable[[str], bool] | None = None,
+    now_ms: int | None = None,
+    window_ms: int = DEFAULT_LIVE_WRITE_WINDOW_MS,
+    nonce_ttl_ms: int = DEFAULT_NONCE_TTL_MS,
+) -> SubmissionResult:
+    """Agent Identity Section 6.1 for one submission: verifies the envelope,
+    answers an exact resubmission of an accepted envelope before the time
+    window and nonce checks (Section 6.3), and otherwise enforces both."""
+    verify_envelope(envelope)
+    if is_accepted is not None and is_accepted(envelope["hash"]):
+        return SubmissionResult("resubmission")
+    current_now_ms = now_ms if now_ms is not None else unix_ms()
+    verify_timestamp(envelope["event"]["created_at"], current_now_ms, window_ms)
+    max_nonce = nonce_store.check_and_update(
+        envelope["event"]["actor"], envelope["event"]["nonce"], current_now_ms, nonce_ttl_ms
+    )
+    return SubmissionResult("accepted", max_nonce)
 
 
 def verify_live_envelope(envelope: Envelope, nonce_store: NonceStore, *, now_ms: int | None = None, window_ms: int = DEFAULT_LIVE_WRITE_WINDOW_MS, nonce_ttl_ms: int = DEFAULT_NONCE_TTL_MS) -> int:
@@ -298,11 +508,8 @@ def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None
     if header.get("kid") != claims.get("iss") or claims.get("iss") != claims.get("sub"):
         raise AgentProtocolError("invalid_jwt_claim", "kid, iss, and sub must identify the same Agent ID")
 
-    public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes(header["kid"]))
-    try:
-        public_key.verify(signature, signing_input)
-    except InvalidSignature as exc:
-        raise AgentProtocolError("invalid_signature", "JWT signature verification failed") from exc
+    if not verify_ed25519_strict(signing_input, signature, public_key_bytes(header["kid"])):
+        raise AgentProtocolError("invalid_signature", "JWT signature verification failed")
 
     if claims.get("aud") != audience:
         raise AgentProtocolError("invalid_jwt_claim", "aud mismatch")

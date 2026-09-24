@@ -1,45 +1,92 @@
 use agent_protocols::delegation::*;
-use agent_protocols::identity::{AgentSigner, Envelope, Event};
+use agent_protocols::identity::{AgentSigner, Envelope};
 use serde_json::{json, Value};
 
 const ID: &str = "https://example.com/p";
 const ORIGIN: &str = "https://dmsg.net";
+
+fn vectors() -> Value {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/protocols/agent-delegation/1.0.vectors.json"
+    );
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+fn key(byte: u8) -> AgentSigner {
+    AgentSigner::from_seed([byte; 32])
+}
 fn signer() -> AgentSigner {
-    AgentSigner::from_seed([61; 32])
+    key(61)
 }
 fn root() -> AgentSigner {
-    AgentSigner::from_seed([62; 32])
+    key(62)
+}
+fn successor() -> AgentSigner {
+    key(63)
+}
+fn other() -> AgentSigner {
+    key(64)
 }
 fn document() -> PrincipalDocument {
-    serde_json::from_value(json!({"protocol":PROTOCOL,"id":ID,"updated_at":2000,"controllers":[
+    serde_json::from_value(json!({"protocol":PROTOCOL,"id":ID,"updated_at":2000,"delegation_query_url":format!("{ID}/query"),"controllers":[
         {"id":signer().agent_id(),"source":ORIGIN,"valid_from":100,"delegation":{"scopes":["draft"],"audiences":[ORIGIN]}},
         {"id":root().agent_id(),"source":"local","valid_from":100,"delegation":"*"}
     ]})).unwrap()
 }
-fn grant(actor: &AgentSigner, scope: &str, audience: &str) -> Envelope<DelegationPayload> {
+fn grant_with(
+    actor: &AgentSigner,
+    nonce: u64,
+    edit: impl FnOnce(&mut DelegationGrantPayload),
+) -> Envelope<DelegationPayload> {
     let mut payload = DelegationGrantPayload::new(
         "del",
-        PrincipalDescriptor::new(ID),
+        ID,
         root().agent_id(),
-        vec![scope.into()],
-        vec![audience.into()],
+        vec!["draft".into()],
+        vec![ORIGIN.into()],
     );
     payload.expires_at = Some(1000);
-    actor
-        .sign_event(Event::new(
-            PROTOCOL,
-            DELEGATION_GRANT,
-            actor.agent_id(),
-            200,
-            1,
-            DelegationPayload::Grant(payload),
-        ))
+    edit(&mut payload);
+    let event = delegation_grant_event(actor.agent_id(), 200, nonce, payload);
+    let envelope = actor.sign_event(event).unwrap();
+    serde_json::from_value(serde_json::to_value(envelope).unwrap()).unwrap()
+}
+fn grant(actor: &AgentSigner, nonce: u64) -> Envelope<DelegationPayload> {
+    grant_with(actor, nonce, |_| {})
+}
+fn revoke(actor: &AgentSigner, created_at: i64, nonce: u64) -> Envelope<DelegationPayload> {
+    let event = delegation_revoke_event(
+        actor.agent_id(),
+        created_at,
+        nonce,
+        DelegationRevokePayload {
+            id: "del".into(),
+            principal_id: ID.into(),
+            reason: None,
+        },
+    );
+    let envelope = actor.sign_event(event).unwrap();
+    serde_json::from_value(serde_json::to_value(envelope).unwrap()).unwrap()
+}
+fn materialize(
+    envelope: &Envelope<DelegationPayload>,
+    accepted_at: i64,
+    previous: Option<&DelegationCredential>,
+) -> DelegationCredential {
+    materialize_delegation_credential(envelope, DelegationStatus::Active, accepted_at, previous)
         .unwrap()
 }
+fn record(envelope: &Envelope<DelegationPayload>, accepted_at: i64) -> DelegationRecord {
+    DelegationRecord {
+        envelope: envelope.clone(),
+        accepted_at,
+    }
+}
+
 #[test]
-fn shared_controller_conformance() {
-    let cases: Vec<Value> = serde_json::from_str(include_str!("fixtures/delegation.json")).unwrap();
-    for case in cases {
+fn controller_conformance_vectors() {
+    let vectors = vectors();
+    for case in vectors["principal_documents"].as_array().unwrap() {
         let result = serde_json::from_value::<PrincipalDocument>(case["document"].clone())
             .map_err(|e| e.to_string())
             .and_then(|d| validate_principal_document(&d).map_err(|e| e.to_string()));
@@ -52,21 +99,40 @@ fn shared_controller_conformance() {
         );
     }
 }
+
+#[test]
+fn delegation_id_grammar_vectors() {
+    let vectors = vectors();
+    for id in vectors["delegation_ids"]["valid"].as_array().unwrap() {
+        validate_delegation_id(id.as_str().unwrap()).unwrap();
+    }
+    for id in vectors["delegation_ids"]["invalid"].as_array().unwrap() {
+        assert!(
+            validate_delegation_id(id.as_str().unwrap()).is_err(),
+            "{id}"
+        );
+    }
+}
+
 #[test]
 fn authority_ownership_and_materialization() {
     let doc = document();
-    let envelope = grant(&signer(), "draft", ORIGIN);
+    let envelope = grant(&signer(), 1);
     validate_delegation_acceptance(&envelope, &doc, ID, 250, None).unwrap();
-    let credential =
-        materialize_delegation_credential(&envelope, DelegationStatus::Active, 250, None).unwrap();
+    let credential = materialize(&envelope, 250, None);
     assert_eq!(credential.accepted_at, 250);
+    assert_eq!(credential.checked_at, 250);
+    assert_eq!(credential.principal_id, ID);
     assert_eq!(credential.owner_controller, signer().agent_id());
+    assert_eq!(credential.grant_event_id, envelope.hash);
     validate_delegation_use(&credential, ORIGIN, 300).unwrap();
     assert!(validate_delegation_use(&credential, "https://tokenlist.ing", 300).is_err());
     assert!(validate_delegation_use(&credential, ORIGIN, 1000).is_err());
     for bad in [
-        grant(&signer(), "admin", ORIGIN),
-        grant(&signer(), "draft", "https://tokenlist.ing"),
+        grant_with(&signer(), 2, |p| p.scopes = vec!["admin".into()]),
+        grant_with(&signer(), 2, |p| {
+            p.audiences = vec!["https://tokenlist.ing".into()]
+        }),
     ] {
         assert!(validate_delegation_acceptance(&bad, &doc, ID, 250, None).is_err());
     }
@@ -77,84 +143,150 @@ fn authority_ownership_and_materialization() {
     assert!(validate_delegation_acceptance(&envelope, &doc, ID, 1000, None).is_err());
     let mut only = doc.clone();
     only.controllers[0].delegation = None;
+    // Mathematically valid, but not authorized.
     validate_delegation_envelope(&envelope).unwrap();
     assert!(validate_delegation_acceptance(&envelope, &only, ID, 250, None).is_err());
-    let other = materialize_delegation_credential(
-        &grant(&root(), "draft", ORIGIN),
-        DelegationStatus::Active,
-        250,
-        None,
-    )
-    .unwrap();
-    assert!(validate_delegation_acceptance(&envelope, &doc, ID, 300, Some(&other)).is_err());
+    let root_credential = materialize(&grant(&root(), 1), 250, None);
+    assert!(
+        validate_delegation_acceptance(&envelope, &doc, ID, 300, Some(&root_credential)).is_err()
+    );
     assert!(
         validate_controller_enumeration(&doc, &signer().agent_id(), 300, &root().agent_id())
             .is_err()
     );
     validate_controller_enumeration(&doc, &root().agent_id(), 300, &signer().agent_id()).unwrap();
-    let revoke = root()
-        .sign_event(Event::new(
-            PROTOCOL,
-            DELEGATION_REVOKE,
-            root().agent_id(),
-            400,
-            2,
-            DelegationPayload::Revoke(DelegationRevokePayload {
-                id: "del".into(),
-                principal_id: ID.into(),
-                reason: None,
-            }),
-        ))
-        .unwrap();
-    validate_delegation_acceptance(&revoke, &doc, ID, 450, Some(&credential)).unwrap();
-    let revoked = materialize_delegation_credential(
-        &revoke,
-        DelegationStatus::Active,
-        450,
-        Some(&credential),
-    )
-    .unwrap();
+    let revocation = revoke(&root(), 400, 2);
+    validate_delegation_acceptance(&revocation, &doc, ID, 450, Some(&credential)).unwrap();
+    let revoked = materialize(&revocation, 450, Some(&credential));
     assert_eq!(revoked.status, DelegationStatus::Revoked);
     assert_eq!(revoked.controller, root().agent_id());
     assert_eq!(revoked.owner_controller, signer().agent_id());
     assert_eq!(revoked.grant_event_id, envelope.hash);
     assert_eq!(revoked.audiences, credential.audiences);
-    assert!(validate_delegation_acceptance(&revoke, &doc, ID, 450, None).is_err());
-    let replacement = grant(&root(), "draft", ORIGIN);
+    assert!(validate_delegation_acceptance(&revocation, &doc, ID, 450, None).is_err());
+    let replacement = grant(&root(), 3);
     validate_delegation_acceptance(&replacement, &doc, ID, 500, Some(&revoked)).unwrap();
     assert_eq!(
-        materialize_delegation_credential(
-            &replacement,
-            DelegationStatus::Active,
-            500,
-            Some(&revoked)
-        )
-        .unwrap()
-        .owner_controller,
+        materialize(&replacement, 500, Some(&revoked)).owner_controller,
         signer().agent_id()
     );
 }
+
 #[test]
-fn retired_history_requires_hash_bound_acceptance() {
+fn a_replacement_cannot_move_a_credential_to_another_subject() {
+    let doc = document();
+    let credential = materialize(&grant(&signer(), 1), 250, None);
+    let moved = grant_with(&root(), 2, |p| p.subject = other().agent_id());
+    let error =
+        validate_delegation_acceptance(&moved, &doc, ID, 300, Some(&credential)).unwrap_err();
+    assert!(error.to_string().contains("immutable"), "{error}");
+}
+
+#[test]
+fn retired_history_needs_accepted_records_and_the_original_ceiling() {
     let mut doc = document();
-    let envelope = grant(&signer(), "draft", ORIGIN);
+    let envelope = grant(&signer(), 1);
     let mut retired = doc.controllers.remove(0);
     retired.retired_at = Some(500);
     doc.retired_controllers.push(retired);
     assert!(validate_delegation_acceptance(&envelope, &doc, ID, 600, None).is_err());
-    let mut acceptance = DelegationAcceptance {
-        event_id: envelope.hash.clone(),
-        accepted_at: 250,
-    };
-    validate_historical_delegation(&envelope, &acceptance, &doc, ID, None).unwrap();
-    acceptance.event_id = "different".into();
-    assert!(validate_historical_delegation(&envelope, &acceptance, &doc, ID, None).is_err());
-    acceptance.event_id = envelope.hash.clone();
-    acceptance.accepted_at = 500;
-    assert!(validate_historical_delegation(&envelope, &acceptance, &doc, ID, None).is_err());
-    acceptance.accepted_at = 250;
+    validate_historical_delegation(&record(&envelope, 250), &doc, ID, None).unwrap();
+    assert!(validate_historical_delegation(&record(&envelope, 500), &doc, ID, None).is_err());
     doc.retired_controllers[0].invalid_from = Some(300);
-    validate_historical_delegation(&envelope, &acceptance, &doc, ID, None).unwrap();
+    validate_historical_delegation(&record(&envelope, 250), &doc, ID, None).unwrap();
     doc.retired_controllers[0].invalid_from = Some(250);
-    assert!(validate_historical_delegation(&envelope, &acceptance, &doc, ID, None).is_err());
+    assert!(validate_historical_delegation(&record(&envelope, 250), &doc, ID, None).is_err());
+    doc.retired_controllers[0].invalid_from = None;
+    let admin = grant_with(&signer(), 2, |p| p.scopes = vec!["admin".into()]);
+    assert!(validate_historical_delegation(&record(&admin, 250), &doc, ID, None).is_err());
+}
+
+#[test]
+fn a_restricted_successor_manages_its_predecessors_credentials() {
+    let mut doc = document();
+    let mut retired = doc.controllers.remove(0);
+    retired.retired_at = Some(600);
+    doc.retired_controllers.push(retired);
+    doc.controllers.push(
+        serde_json::from_value(json!({
+            "id": successor().agent_id(), "source": ORIGIN, "valid_from": 600,
+            "delegation": {"scopes": ["draft", "inbox"], "audiences": [ORIGIN]},
+            "supersedes": [signer().agent_id()]
+        }))
+        .unwrap(),
+    );
+    validate_principal_document(&doc).unwrap();
+    let lineage = controller_lineage(&doc, &successor().agent_id());
+    assert!(lineage.contains(&signer().agent_id()) && lineage.contains(&successor().agent_id()));
+    let credential = materialize(&grant(&signer(), 1), 250, None);
+    let revocation = revoke(&successor(), 700, 1);
+    validate_delegation_acceptance(&revocation, &doc, ID, 700, Some(&credential)).unwrap();
+    validate_controller_enumeration(&doc, &successor().agent_id(), 700, &signer().agent_id())
+        .unwrap();
+    let widened = {
+        let mut payload = DelegationGrantPayload::new(
+            "del",
+            ID,
+            root().agent_id(),
+            vec!["draft".into(), "inbox".into()],
+            vec![ORIGIN.into()],
+        );
+        payload.expires_at = Some(1900);
+        let event = delegation_grant_event(successor().agent_id(), 700, 2, payload);
+        let envelope = successor().sign_event(event).unwrap();
+        serde_json::from_value::<Envelope<DelegationPayload>>(
+            serde_json::to_value(envelope).unwrap(),
+        )
+        .unwrap()
+    };
+    validate_delegation_acceptance(&widened, &doc, ID, 700, Some(&credential)).unwrap();
+    assert_eq!(
+        materialize(&widened, 700, Some(&credential)).owner_controller,
+        signer().agent_id()
+    );
+    // Without the supersedes link the successor owns nothing.
+    let mut unlinked = doc.clone();
+    unlinked.controllers[1].supersedes = None;
+    assert!(
+        validate_delegation_acceptance(&revocation, &unlinked, ID, 700, Some(&credential)).is_err()
+    );
+}
+
+#[test]
+fn verify_delegation_credential_replays_accepted_records() {
+    let doc = document();
+    let envelope = grant(&signer(), 1);
+    let credential = materialize(&envelope, 250, None);
+    let records = vec![record(&envelope, 250)];
+    let ok = verify_delegation_credential(&credential, &records, &doc, ID, ORIGIN, 300);
+    assert!(
+        ok.verified && ok.usable && ok.reasons.is_empty(),
+        "{:?}",
+        ok.reasons
+    );
+    let wrong = verify_delegation_credential(
+        &credential,
+        &records,
+        &doc,
+        ID,
+        "https://tokenlist.ing",
+        300,
+    );
+    assert!(wrong.verified && !wrong.usable);
+    let expired = verify_delegation_credential(&credential, &records, &doc, ID, ORIGIN, 1000);
+    assert_eq!(expired.reasons, vec!["expired".to_owned()]);
+    let mut forged = credential.clone();
+    forged.subject = other().agent_id();
+    assert!(!verify_delegation_credential(&forged, &records, &doc, ID, ORIGIN, 300).verified);
+    assert!(!verify_delegation_credential(&credential, &[], &doc, ID, ORIGIN, 300).verified);
+    let revocation = revoke(&root(), 400, 2);
+    let revoked = materialize(&revocation, 450, Some(&credential));
+    let history = vec![record(&envelope, 250), record(&revocation, 450)];
+    let verdict = verify_delegation_credential(&revoked, &history, &doc, ID, ORIGIN, 500);
+    assert!(verdict.verified && !verdict.usable);
+    assert_eq!(verdict.reasons, vec!["status is revoked".to_owned()]);
+    // A service that hides the revocation does not match its own history.
+    let mut hidden = revoked.clone();
+    hidden.status = DelegationStatus::Active;
+    assert!(!verify_delegation_credential(&hidden, &history, &doc, ID, ORIGIN, 500).verified);
 }

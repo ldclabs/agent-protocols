@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const TOOL_IDENTITY_CURRENT: &str = "agent_protocols_identity_current";
-pub const TOOL_HOSTS_LIST: &str = "agent_protocols_hosts_list";
 pub const TOOL_PRINCIPAL_RESOLVE: &str = "agent_protocols_principal_resolve";
 pub const TOOL_DELEGATION_CHECK: &str = "agent_protocols_delegation_check";
 pub const TOOL_DELEGATIONS_LIST: &str = "agent_protocols_delegations_list";
@@ -15,33 +14,52 @@ pub const TOOL_DELEGATION_GRANT: &str = "agent_protocols_delegation_grant";
 pub const TOOL_DELEGATION_REVOKE: &str = "agent_protocols_delegation_revoke";
 pub const TOOL_ROOMS_SEARCH: &str = "agent_protocols_rooms_search";
 pub const TOOL_ROOMS_LIST: &str = "agent_protocols_rooms_list";
-pub const TOOL_ROOM_OPEN: &str = "agent_protocols_room_open";
 pub const TOOL_ROOM_STATE: &str = "agent_protocols_room_state";
 pub const TOOL_ROOM_MEMBERS_LIST: &str = "agent_protocols_room_members_list";
-pub const TOOL_ROOM_MEMBER_GET: &str = "agent_protocols_room_member_get";
 pub const TOOL_AGENT_STATUS_LIST: &str = "agent_protocols_agent_status_list";
-pub const TOOL_AGENT_STATUS_GET: &str = "agent_protocols_agent_status_get";
 pub const TOOL_AGENT_STATUS_SET: &str = "agent_protocols_agent_status_set";
-pub const TOOL_AGENT_STATUS_CLEAR: &str = "agent_protocols_agent_status_clear";
 pub const TOOL_ROOM_TIMELINE: &str = "agent_protocols_room_timeline";
-pub const TOOL_ROOM_UNREAD: &str = "agent_protocols_room_unread";
-pub const TOOL_ROOM_MARK_READ: &str = "agent_protocols_room_mark_read";
 pub const TOOL_INBOX_NEXT: &str = "agent_protocols_inbox_next";
 pub const TOOL_INBOX_ACK: &str = "agent_protocols_inbox_ack";
 pub const TOOL_DRAFTS_LIST: &str = "agent_protocols_drafts_list";
-pub const TOOL_DRAFT_GET: &str = "agent_protocols_draft_get";
 pub const TOOL_DRAFT_COMMIT: &str = "agent_protocols_draft_commit";
-pub const TOOL_DRAFT_DROP: &str = "agent_protocols_draft_drop";
 pub const TOOL_PROFILE_UPDATE: &str = "agent_protocols_profile_update";
 pub const TOOL_ROOM_CREATE: &str = "agent_protocols_room_create";
 pub const TOOL_ROOM_JOIN: &str = "agent_protocols_room_join";
-pub const TOOL_ROOM_JOIN_REQUEST: &str = "agent_protocols_room_join_request";
-pub const TOOL_ROOM_JOIN_WHEN_APPROVED: &str = "agent_protocols_room_join_when_approved";
 pub const TOOL_ROOM_LEAVE: &str = "agent_protocols_room_leave";
 pub const TOOL_ROOM_SEND_MESSAGE: &str = "agent_protocols_room_send_message";
 pub const TOOL_ROOM_SUBMIT_EVENT: &str = "agent_protocols_room_submit_event";
 pub const TOOL_JOIN_REQUESTS_LIST: &str = "agent_protocols_join_requests_list";
 pub const TOOL_JOIN_REQUEST_REVIEW: &str = "agent_protocols_join_request_review";
+
+/// Every standard tool name, in `tools/list` order.
+pub const TOOL_NAMES: [&str; 25] = [
+    TOOL_IDENTITY_CURRENT,
+    TOOL_PRINCIPAL_RESOLVE,
+    TOOL_DELEGATION_CHECK,
+    TOOL_DELEGATIONS_LIST,
+    TOOL_DELEGATION_GRANT,
+    TOOL_DELEGATION_REVOKE,
+    TOOL_ROOMS_SEARCH,
+    TOOL_ROOMS_LIST,
+    TOOL_ROOM_STATE,
+    TOOL_ROOM_MEMBERS_LIST,
+    TOOL_AGENT_STATUS_LIST,
+    TOOL_AGENT_STATUS_SET,
+    TOOL_ROOM_TIMELINE,
+    TOOL_INBOX_NEXT,
+    TOOL_INBOX_ACK,
+    TOOL_DRAFTS_LIST,
+    TOOL_DRAFT_COMMIT,
+    TOOL_PROFILE_UPDATE,
+    TOOL_ROOM_CREATE,
+    TOOL_ROOM_JOIN,
+    TOOL_ROOM_LEAVE,
+    TOOL_ROOM_SEND_MESSAGE,
+    TOOL_ROOM_SUBMIT_EVENT,
+    TOOL_JOIN_REQUESTS_LIST,
+    TOOL_JOIN_REQUEST_REVIEW,
+];
 
 pub const RESOURCE_IDENTITY_CURRENT: &str = "agent-protocols://identity/current";
 pub const RESOURCE_HOSTS: &str = "agent-protocols://hosts";
@@ -72,17 +90,146 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
     [
         (
             TOOL_IDENTITY_CURRENT,
-            "Return the active local Agent ID and non-secret connector configuration.",
+            "Return the active local Agent ID, profile services, and the operator host allowlist.",
             true,
             true,
             false,
         ),
         (
-            TOOL_HOSTS_LIST,
-            "List configured Agent Discourse hosts.",
+            TOOL_ROOMS_SEARCH,
+            "Search public rooms on an allowed host.",
+            true,
+            false,
+            true,
+        ),
+        (
+            TOOL_ROOMS_LIST,
+            "List locally known rooms and unread summaries.",
             true,
             true,
             false,
+        ),
+        (
+            TOOL_ROOM_STATE,
+            "Read a room's verified state, opening and syncing it on first use; optionally (un)subscribe.",
+            false,
+            true,
+            true,
+        ),
+        (
+            TOOL_ROOM_MEMBERS_LIST,
+            "List materialized room members, or one member with recent activity.",
+            true,
+            true,
+            false,
+        ),
+        (
+            TOOL_AGENT_STATUS_LIST,
+            "Read current transient agent statuses for a room, or one agent's status.",
+            true,
+            false,
+            true,
+        ),
+        (
+            TOOL_AGENT_STATUS_SET,
+            "Update the active local agent's transient status in a room.",
+            false,
+            false,
+            true,
+        ),
+        // MCP tool annotations are static declarations from tools/list: a pure
+        // read is the degenerate case, so mark_read-capable reads declare
+        // read_only_hint: false.
+        (
+            TOOL_ROOM_TIMELINE,
+            "Read timeline items from the local cache, optionally marking them read.",
+            false,
+            true,
+            false,
+        ),
+        (
+            TOOL_INBOX_NEXT,
+            "Read or claim pending actionable inbox items.",
+            false,
+            true,
+            false,
+        ),
+        (
+            TOOL_INBOX_ACK,
+            "Acknowledge, dismiss, or defer inbox items.",
+            false,
+            true,
+            false,
+        ),
+        (
+            TOOL_DRAFTS_LIST,
+            "List local held drafts, or read one with the room changes since it was held.",
+            true,
+            true,
+            false,
+        ),
+        (
+            TOOL_DRAFT_COMMIT,
+            "Revise, send, or drop a local held draft.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_PROFILE_UPDATE,
+            "Sign and submit a profile.update envelope.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_ROOM_CREATE,
+            "Sign and submit a room.create envelope bound to the host.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_ROOM_JOIN,
+            "Join a room directly when invited or open, otherwise sign and submit a room.join.request.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_ROOM_LEAVE,
+            "Sign and submit room.leave.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_ROOM_SEND_MESSAGE,
+            "Sign and submit message.create.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_ROOM_SUBMIT_EVENT,
+            "Sign and submit a built-in or room-defined event.",
+            false,
+            false,
+            true,
+        ),
+        (
+            TOOL_JOIN_REQUESTS_LIST,
+            "List visible join requests for a room.",
+            true,
+            false,
+            true,
+        ),
+        (
+            TOOL_JOIN_REQUEST_REVIEW,
+            "Sign and submit room.join.review embedding the signed request.",
+            false,
+            false,
+            true,
         ),
         (
             TOOL_PRINCIPAL_RESOLVE,
@@ -93,7 +240,7 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
         ),
         (
             TOOL_DELEGATION_CHECK,
-            "Check whether an agent holds a delegation from a principal.",
+            "Find and verify an agent's delegations from a principal for a relying application.",
             true,
             true,
             true,
@@ -119,213 +266,13 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
             false,
             true,
         ),
-        (
-            TOOL_ROOMS_SEARCH,
-            "Search public rooms on an allowed host.",
-            true,
-            false,
-            true,
-        ),
-        (
-            TOOL_ROOMS_LIST,
-            "List locally known rooms and unread summaries.",
-            true,
-            true,
-            false,
-        ),
-        (
-            TOOL_ROOM_OPEN,
-            "Open a room, refresh local state, and optionally mark it subscribed.",
-            false,
-            true,
-            true,
-        ),
-        (
-            TOOL_ROOM_STATE,
-            "Read the local materialized room state.",
-            true,
-            true,
-            false,
-        ),
-        (
-            TOOL_ROOM_MEMBERS_LIST,
-            "List materialized room members.",
-            true,
-            true,
-            false,
-        ),
-        (
-            TOOL_ROOM_MEMBER_GET,
-            "Read one materialized room member.",
-            true,
-            true,
-            false,
-        ),
-        (
-            TOOL_AGENT_STATUS_LIST,
-            "Read current transient agent statuses for a room.",
-            true,
-            false,
-            true,
-        ),
-        (
-            TOOL_AGENT_STATUS_GET,
-            "Read one agent's current transient status in a room.",
-            true,
-            false,
-            true,
-        ),
-        (
-            TOOL_AGENT_STATUS_SET,
-            "Update the active local agent's transient status in a room.",
-            false,
-            false,
-            true,
-        ),
-        (
-            TOOL_AGENT_STATUS_CLEAR,
-            "Clear the active local agent's transient status in a room.",
-            false,
-            true,
-            true,
-        ),
-        // MCP tool annotations are static declarations from tools/list: a pure
-        // read is the degenerate case, so mark_read-capable reads declare
-        // read_only_hint: false.
-        (
-            TOOL_ROOM_TIMELINE,
-            "Read simplified timeline items from the local cache.",
-            false,
-            true,
-            false,
-        ),
-        (
-            TOOL_ROOM_UNREAD,
-            "Read unread timeline items, optionally marking them read.",
-            false,
-            true,
-            false,
-        ),
-        (
-            TOOL_ROOM_MARK_READ,
-            "Mark a room timeline read through a sequence number.",
-            false,
-            true,
-            false,
-        ),
-        (
-            TOOL_INBOX_NEXT,
-            "Read or claim pending actionable inbox items.",
-            false,
-            true,
-            false,
-        ),
-        (
-            TOOL_INBOX_ACK,
-            "Acknowledge, dismiss, or defer inbox items.",
-            false,
-            true,
-            false,
-        ),
-        (
-            TOOL_DRAFTS_LIST,
-            "List local held drafts that need explicit agent action.",
-            true,
-            true,
-            false,
-        ),
-        (
-            TOOL_DRAFT_GET,
-            "Read one local held draft with room changes since it was held.",
-            true,
-            true,
-            false,
-        ),
-        (
-            TOOL_DRAFT_COMMIT,
-            "Revise, send, or silence a local held draft.",
-            false,
-            false,
-            true,
-        ),
-        (
-            TOOL_DRAFT_DROP,
-            "Drop a local held draft without submitting it.",
-            false,
-            true,
-            false,
-        ),
-        (
-            TOOL_PROFILE_UPDATE,
-            "Sign and submit a profile.update envelope.",
-            false,
-            false,
-            true,
-        ),
-        (
-            TOOL_ROOM_CREATE,
-            "Sign and submit a room.create envelope.",
-            false,
-            false,
-            true,
-        ),
-        (
-            TOOL_ROOM_JOIN,
-            "Create a join request when needed or sign and submit room.join.",
-            false,
-            false,
-            true,
-        ),
-        (
-            TOOL_ROOM_LEAVE,
-            "Sign and submit room.leave.",
-            false,
-            false,
-            true,
-        ),
-        (
-            TOOL_ROOM_SEND_MESSAGE,
-            "Sign and submit message.create.",
-            false,
-            false,
-            true,
-        ),
-        (
-            TOOL_ROOM_SUBMIT_EVENT,
-            "Sign and submit a room-defined event.",
-            false,
-            false,
-            true,
-        ),
-        (
-            TOOL_JOIN_REQUESTS_LIST,
-            "List visible join requests for a room.",
-            true,
-            false,
-            true,
-        ),
-        (
-            TOOL_JOIN_REQUEST_REVIEW,
-            "Sign and submit room.join.review.",
-            false,
-            false,
-            true,
-        ),
     ]
     .into_iter()
     .map(
         |(name, description, read_only, idempotent, open_world)| LocalConnectorToolDefinition {
             name: name.to_owned(),
             description: description.to_owned(),
-            input_schema: if name == TOOL_DELEGATION_GRANT { json!({
-                "type": "object", "required": ["delegation_service", "id", "principal_id", "subject", "scopes", "audiences"],
-                "properties": {
-                    "delegation_service": {"type":"string"}, "id": {"type":"string"}, "principal_id": {"type":"string"}, "subject": {"type":"string"},
-                    "scopes": {"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},
-                    "audiences": {"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},
-                    "relationship":{"type":"string"},"constraints":{"type":"object"},"not_before":{"type":"integer"},"expires_at":{"type":"integer"}
-                }
-            }) } else { json!({"type": "object"}) },
+            input_schema: input_schema(name),
             output_schema: json!({"type": "object"}),
             annotations: LocalConnectorToolAnnotations {
                 read_only_hint: read_only,
@@ -336,4 +283,33 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
         },
     )
     .collect()
+}
+
+/// Input schemas for tools whose inputs carry authority-relevant fields.
+fn input_schema(name: &str) -> Value {
+    let string = json!({"type": "string"});
+    let string_set =
+        json!({"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}});
+    match name {
+        TOOL_DELEGATION_CHECK => json!({
+            "type": "object", "required": ["principal_id", "audience"],
+            "properties": {"principal_id": string, "audience": string, "subject": string, "id": string}
+        }),
+        TOOL_DELEGATION_GRANT => json!({
+            "type": "object", "required": ["id", "principal_id", "subject", "scopes", "audiences"],
+            "properties": {
+                "id": string, "principal_id": string, "subject": string, "scopes": string_set, "audiences": string_set,
+                "relationship": string, "constraints": {"type": "object"}, "not_before": {"type": "integer"}, "expires_at": {"type": "integer"}
+            }
+        }),
+        TOOL_DELEGATION_REVOKE => json!({
+            "type": "object", "required": ["id", "principal_id"],
+            "properties": {"id": string, "principal_id": string, "reason": string}
+        }),
+        TOOL_DRAFT_COMMIT => json!({
+            "type": "object", "required": ["draft_id", "action"],
+            "properties": {"draft_id": string, "action": {"enum": ["revise", "send", "drop"]}}
+        }),
+        _ => json!({"type": "object"}),
+    }
 }

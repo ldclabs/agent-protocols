@@ -9,24 +9,30 @@ import {
   type DelegationQueryRequest,
   type DelegationQueryResponse,
   type DelegationServiceDiscovery,
-  type DelegationStatusDocument,
+  type DelegationServiceEndpoints,
   type PrincipalDocument,
 } from "./delegation.js";
 import {
   AgentStatus,
-  AgentStatusGetResponse,
   AgentStatusInput,
   AgentStatusListResponse,
   DiscourseProtocolDiscovery,
   RoomCreatePayload,
-  RoomResponse,
+  RoomEventsResponse,
   RoomJoinPayload,
-  RoomJoinRequestInput,
-  RoomJoinRequestStatus,
+  RoomJoinRequest,
+  RoomJoinRequestPayload,
   RoomLeavePayload,
+  RoomResponse,
   ServerRecord,
 } from "./discourse.js";
-import { AgentId, Envelope } from "./identity.js";
+import {
+  AgentId,
+  Envelope,
+  ErrorResponse,
+  ListResponse,
+  MAX_NONCE_HEADER,
+} from "./identity.js";
 import {
   AgentProfile,
   ProfileBatchReadResponse,
@@ -62,6 +68,12 @@ export interface PublicRoomsOptions {
   cursor?: string;
 }
 
+export interface JoinRequestsOptions {
+  status?: string;
+  limit?: number;
+  cursor?: string;
+}
+
 export class ProfileClient {
   constructor(
     private readonly baseUrl: string,
@@ -81,10 +93,7 @@ export class ProfileClient {
     limit = 1,
     cursor?: string,
   ): Promise<ProfileEventsResponse> {
-    const query = cursor
-      ? `limit=${limit}&cursor=${encodeURIComponent(cursor)}`
-      : `limit=${limit}`;
-    return this.getJson(`/v1/profiles/${agentId}/events?${query}`);
+    return this.getJson(addQuery(`/v1/profiles/${agentId}/events`, { limit, cursor }));
   }
 
   async submitProfileUpdate(
@@ -128,11 +137,11 @@ export class DiscourseClient {
     return this.postJson("/v1/rooms", envelope);
   }
 
-  async room(roomId: string): Promise<RoomResponse> {
-    return this.getJson(`/v1/rooms/${roomId}`);
+  async room(roomId: string, jwt?: string): Promise<RoomResponse> {
+    return this.getJson(`/v1/rooms/${roomId}`, jwt);
   }
 
-  async publicRooms(options: PublicRoomsOptions = {}): Promise<RoomResponse[]> {
+  async publicRooms(options: PublicRoomsOptions = {}): Promise<ListResponse<RoomResponse>> {
     return this.getJson(
       addQuery("/v1/rooms/public", {
         status: options.status,
@@ -148,7 +157,7 @@ export class DiscourseClient {
     );
   }
 
-  async myRooms(jwt: string, options: MyRoomsOptions = {}): Promise<RoomResponse[]> {
+  async myRooms(jwt: string, options: MyRoomsOptions = {}): Promise<ListResponse<RoomResponse>> {
     return this.getJson(
       addQuery("/v1/me/rooms", {
         status: options.status,
@@ -160,27 +169,35 @@ export class DiscourseClient {
     );
   }
 
+  /** Submits a signed `room.join.request`; the signature authenticates the applicant. */
   async requestJoin(
     roomId: string,
-    jwt: string,
-    request: RoomJoinRequestInput,
-  ): Promise<RoomJoinRequestStatus> {
-    return this.postJson(`/v1/rooms/${roomId}/join-requests`, request, jwt);
+    envelope: Envelope<RoomJoinRequestPayload>,
+  ): Promise<RoomJoinRequest> {
+    return this.postJson(`/v1/rooms/${roomId}/join-requests`, envelope);
   }
 
   async joinRequest(
     roomId: string,
     requestId: string,
     jwt: string,
-  ): Promise<RoomJoinRequestStatus> {
+  ): Promise<RoomJoinRequest> {
     return this.getJson(`/v1/rooms/${roomId}/join-requests/${requestId}`, jwt);
   }
 
   async joinRequests(
     roomId: string,
     jwt: string,
-  ): Promise<RoomJoinRequestStatus[]> {
-    return this.getJson(`/v1/rooms/${roomId}/join-requests`, jwt);
+    options: JoinRequestsOptions = {},
+  ): Promise<ListResponse<RoomJoinRequest>> {
+    return this.getJson(
+      addQuery(`/v1/rooms/${roomId}/join-requests`, {
+        status: options.status,
+        limit: options.limit,
+        cursor: options.cursor,
+      }),
+      jwt,
+    );
   }
 
   async joinRoom(
@@ -207,7 +224,7 @@ export class DiscourseClient {
   async events(
     roomId: string,
     options: RoomEventsOptions = {},
-  ): Promise<ServerRecord[]> {
+  ): Promise<RoomEventsResponse> {
     return this.getJson(
       addQuery(`/v1/rooms/${roomId}/events`, {
         after_seq: options.afterSeq,
@@ -229,7 +246,7 @@ export class DiscourseClient {
     roomId: string,
     agentId: AgentId,
     jwt?: string,
-  ): Promise<AgentStatusGetResponse> {
+  ): Promise<AgentStatus> {
     return this.getJson(`/v1/rooms/${roomId}/agent-status/${agentId}`, jwt);
   }
 
@@ -293,14 +310,45 @@ export class DiscourseClient {
   }
 }
 
+/**
+ * Agent Delegation client. Without `endpoints` it uses the RECOMMENDED paths
+ * under `baseUrl`; {@link DelegationClient.discover} reads the service's
+ * discovery document instead, whose endpoints clients MUST prefer.
+ */
 export class DelegationClient {
+  private readonly delegationsUrl: string;
+  private readonly queryUrl: string;
+
   constructor(
     private readonly baseUrl: string,
     private readonly fetchImpl: FetchLike = fetch,
-  ) {}
+    endpoints?: Partial<DelegationServiceEndpoints>,
+  ) {
+    const base = baseUrl.replace(/\/$/, "");
+    this.delegationsUrl = (endpoints?.delegations ?? `${base}/v1/delegations`).replace(/\/$/, "");
+    this.queryUrl = endpoints?.query ?? `${this.delegationsUrl}/query`;
+  }
+
+  /**
+   * Builds a client for the service at `origin` from its discovery document,
+   * falling back to the default paths when the service publishes none.
+   */
+  static async discover(origin: string, fetchImpl: FetchLike = fetch): Promise<DelegationClient> {
+    const base = origin.replace(/\/$/, "");
+    try {
+      const response = await fetchImpl(`${base}/.well-known/agent-delegation`);
+      if (response.ok) {
+        const discovery = (await response.json()) as DelegationServiceDiscovery;
+        return new DelegationClient(base, fetchImpl, discovery.endpoints);
+      }
+    } catch {
+      // Discovery is optional; the default paths apply.
+    }
+    return new DelegationClient(base, fetchImpl);
+  }
 
   async protocol(): Promise<DelegationServiceDiscovery> {
-    return this.getJson("/.well-known/agent-delegation");
+    return this.getJson(`${this.baseUrl.replace(/\/$/, "")}/.well-known/agent-delegation`);
   }
 
   /**
@@ -319,27 +367,33 @@ export class DelegationClient {
 
   async delegation(delegationId: string): Promise<DelegationCredential> {
     validateDelegationId(delegationId);
-    return this.getJson(`/v1/delegations/${encodeURIComponent(delegationId)}`);
-  }
-
-  async delegationStatus(
-    delegationId: string,
-  ): Promise<DelegationStatusDocument> {
-    validateDelegationId(delegationId);
-    return this.getJson(`/v1/delegations/${encodeURIComponent(delegationId)}/status`);
+    return this.getJson(`${this.delegationsUrl}/${delegationId}`);
   }
 
   async delegationEvents(
     delegationId: string,
+    cursor?: string,
   ): Promise<DelegationEventsResponse> {
     validateDelegationId(delegationId);
-    return this.getJson(`/v1/delegations/${encodeURIComponent(delegationId)}/events`);
+    return this.getJson(addQuery(`${this.delegationsUrl}/${delegationId}/events`, { cursor }));
+  }
+
+  /** Every accepted record of a credential, following `next_cursor`. */
+  async allDelegationEvents(delegationId: string): Promise<DelegationEventsResponse["result"]> {
+    const records: DelegationEventsResponse["result"] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.delegationEvents(delegationId, cursor);
+      records.push(...page.result);
+      cursor = page.next_cursor;
+    } while (cursor !== undefined);
+    return records;
   }
 
   async submitDelegationEvent(
     envelope: Envelope<DelegationPayload>,
-  ): Promise<DelegationCredential | DelegationStatusDocument> {
-    return this.postJson("/v1/delegations", envelope);
+  ): Promise<DelegationCredential> {
+    return this.postJson(this.delegationsUrl, envelope);
   }
 
   /**
@@ -351,11 +405,7 @@ export class DelegationClient {
     request: DelegationQueryRequest,
     jwt?: string,
   ): Promise<DelegationQueryResponse> {
-    return this.queryDelegationsAt(
-      this.url("/v1/delegations/query"),
-      request,
-      jwt,
-    );
+    return this.queryDelegationsAt(this.queryUrl, request, jwt);
   }
 
   /**
@@ -404,22 +454,18 @@ export class DelegationClient {
     }
   }
 
-  private async getJson<T>(path: string): Promise<T> {
-    const response = await this.fetchImpl(this.url(path));
+  private async getJson<T>(url: string): Promise<T> {
+    const response = await this.fetchImpl(url);
     return readJson<T>(response);
   }
 
-  private async postJson<T>(path: string, body: unknown): Promise<T> {
-    const response = await this.fetchImpl(this.url(path), {
+  private async postJson<T>(url: string, body: unknown): Promise<T> {
+    const response = await this.fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     return readJson<T>(response);
-  }
-
-  private url(path: string): string {
-    return `${this.baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
   }
 }
 
@@ -444,12 +490,32 @@ function addQuery(
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
-    throw new HttpResponseError(response.status, text);
+    throw new HttpResponseError(response.status, text, response.headers?.get?.(MAX_NONCE_HEADER) ?? undefined);
   }
   return response.json() as Promise<T>;
 }
 
-/** HTTP status is exposed so callers distinguish a missing resource from a failed read. */
+/**
+ * A non-2xx response. `code` and `data` come from the Agent Identity error body
+ * (Section 8.1) when the service sent one; `maxSeenNonce` from the
+ * `Max-Seen-Nonce` header.
+ */
 export class HttpResponseError extends Error {
-  constructor(public readonly status: number, body: string) { super(`HTTP ${status}: ${body}`); }
+  readonly code?: string;
+  readonly data?: Record<string, unknown>;
+  readonly maxSeenNonce?: string;
+
+  constructor(public readonly status: number, body: string, maxSeenNonce?: string) {
+    super(`HTTP ${status}: ${body}`);
+    try {
+      const parsed = JSON.parse(body) as ErrorResponse;
+      if (typeof parsed?.error?.code === "string") {
+        this.code = parsed.error.code;
+        this.data = parsed.error.data;
+      }
+    } catch {
+      // Not an Agent Identity error body.
+    }
+    if (maxSeenNonce !== undefined && maxSeenNonce !== null) this.maxSeenNonce = maxSeenNonce;
+  }
 }

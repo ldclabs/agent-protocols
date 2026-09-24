@@ -35,7 +35,7 @@ export interface RoomSendMessageInput {
 /**
  * Also covers the built-in events without a dedicated tool: `room.update`,
  * `room.close`, `room.cancel`, `room.member.role.update`,
- * `room.member.remove`, and `type.define`. For `signal`-kind writes —
+ * `room.member.remove`, and `type.define`. For contract and signal writes —
  * including the membership events — the base is only an anchor: the connector
  * never holds the draft and ignores `on_head_mismatch`.
  */
@@ -72,48 +72,32 @@ export interface RoomsListInput {
   cursor?: string;
 }
 
-export interface RoomOpenInput {
-  host: string;
-  room_id: string;
-  subscribe?: boolean;
-  refresh?: boolean;
-}
-
+/** Opens the room on first use (then `host` is required) or when `refresh` is set. */
 export interface RoomStateInput {
   room_id: string;
   host?: string;
   refresh?: boolean;
-  include_types?: boolean;
+  subscribe?: boolean;
 }
 
 export interface RoomMembersListInput {
   room_id: string;
   host?: string;
-  status?: RoomMemberStatus;
+  /** Narrows the result to one member. */
+  agent_id?: AgentId;
+  status?: RoomMemberStatus | "all";
   role?: Role;
   include_profiles?: boolean;
+  /** With `agent_id`: also return that member's most recent timeline items. */
+  include_recent_activity?: boolean;
   limit?: number;
   cursor?: string;
-}
-
-export interface RoomMemberGetInput {
-  room_id: string;
-  host?: string;
-  agent_id: AgentId;
-  include_profile?: boolean;
-  include_recent_activity?: boolean;
 }
 
 export interface AgentStatusListInput {
   room_id: string;
   host?: string;
-  refresh?: boolean;
-}
-
-export interface AgentStatusGetInput {
-  room_id: string;
-  host?: string;
-  agent_id: AgentId;
+  agent_id?: AgentId;
   refresh?: boolean;
 }
 
@@ -130,11 +114,6 @@ export interface AgentStatusSetInput {
   extra?: Record<string, unknown>;
 }
 
-export interface AgentStatusClearInput {
-  room_id: string;
-  host?: string;
-}
-
 export interface RoomTimelineInput {
   room_id: string;
   host?: string;
@@ -144,21 +123,9 @@ export interface RoomTimelineInput {
   types?: string[];
   actors?: AgentId[];
   unread_only?: boolean;
-  refresh?: boolean;
-  include_records?: boolean;
-}
-
-export interface RoomUnreadInput {
-  room_id: string;
-  host?: string;
-  limit?: number;
+  /** Advances the local read cursor through the last returned item. */
   mark_read?: boolean;
-}
-
-export interface RoomMarkReadInput {
-  room_id: string;
-  host?: string;
-  through_seq: number;
+  refresh?: boolean;
 }
 
 export interface InboxNextInput {
@@ -180,12 +147,10 @@ export interface InboxAckInput {
 export interface DraftsListInput {
   room_id?: string;
   host?: string;
+  /** Reads one draft together with the room changes since its base. */
+  draft_id?: string;
   limit?: number;
   cursor?: string;
-}
-
-export interface DraftGetInput {
-  draft_id: string;
 }
 
 export interface DraftCommitInput {
@@ -199,13 +164,7 @@ export interface DraftCommitInput {
   /** Replacement event type on `revise` for an event draft. */
   type?: string;
   payload?: Record<string, unknown>;
-  base_seq?: number;
-  base_hash?: string;
   on_head_mismatch?: HeadMismatchPolicy;
-}
-
-export interface DraftDropInput {
-  draft_id: string;
 }
 
 export interface ProfileUpdateInput {
@@ -225,6 +184,7 @@ export interface RoomCreateInput {
   language?: string;
   policy?: RoomPolicy;
   types?: TypeDeclaration[];
+  extra?: Record<string, unknown>;
 }
 
 export interface RoomJoinInput {
@@ -233,23 +193,7 @@ export interface RoomJoinInput {
   role: Role;
   perspective?: string;
   reason?: string;
-  request_id?: string;
   extra?: Record<string, unknown>;
-}
-
-export interface RoomJoinRequestToolInput {
-  host: string;
-  room_id: string;
-  role: Role;
-  perspective?: string;
-  reason?: string;
-  extra?: Record<string, unknown>;
-}
-
-export interface RoomJoinWhenApprovedInput {
-  room_id: string;
-  host?: string;
-  request_id: string;
 }
 
 export interface RoomLeaveInput {
@@ -272,19 +216,20 @@ export interface PrincipalResolveInput {
 
 export interface DelegationCheckInput {
   principal_id: string;
+  /** The relying application's origin the delegation must be usable for. */
+  audience: string;
   subject?: AgentId;
   id?: string;
-  status?: DelegationStatus;
 }
 
 export interface DelegationsListInput {
   delegation_service: string;
   status?: DelegationStatus;
   limit?: number;
+  cursor?: string;
 }
 
 export interface DelegationGrantInput {
-  delegation_service: string;
   id: string;
   principal_id: string;
   subject: AgentId;
@@ -297,7 +242,6 @@ export interface DelegationGrantInput {
 }
 
 export interface DelegationRevokeInput {
-  delegation_service: string;
   id: string;
   principal_id: string;
   reason?: string;

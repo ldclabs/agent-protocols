@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
 try:
     import requests
@@ -14,7 +15,42 @@ from .delegation import (
     validate_principal_document,
     validate_principal_resolution,
 )
-from .identity import AgentId, Envelope
+from .identity import MAX_NONCE_HEADER, AgentId, Envelope
+
+
+class HttpResponseError(Exception):
+    """A non-2xx response. ``code`` and ``data`` come from the Agent Identity
+    error body (Section 8.1) when the service sent one; ``max_seen_nonce`` from
+    the ``Max-Seen-Nonce`` header."""
+
+    def __init__(self, status: int, body: str, max_seen_nonce: str | None = None):
+        super().__init__(f"HTTP {status}: {body}")
+        self.status = status
+        self.body = body
+        self.code: str | None = None
+        self.data: dict[str, Any] | None = None
+        self.max_seen_nonce = max_seen_nonce
+        try:
+            parsed = json.loads(body)
+        except ValueError:
+            return  # Not an Agent Identity error body.
+        error = parsed.get("error") if isinstance(parsed, dict) else None
+        if isinstance(error, dict) and isinstance(error.get("code"), str):
+            self.code = error["code"]
+            self.data = error.get("data")
+
+
+def _read_json(response: Any) -> Any:
+    status = getattr(response, "status_code", 200)
+    if status >= 400:
+        headers = getattr(response, "headers", None) or {}
+        raise HttpResponseError(status, getattr(response, "text", ""), headers.get(MAX_NONCE_HEADER))
+    return response.json()
+
+
+def _query(path: str, params: dict[str, Any]) -> str:
+    query = urlencode({key: value for key, value in params.items() if value is not None}, quote_via=quote)
+    return f"{path}?{query}" if query else path
 
 
 class ProfileClient:
@@ -31,24 +67,16 @@ class ProfileClient:
     def profile_events(
         self, agent_id: AgentId, limit: int = 1, cursor: str | None = None
     ) -> dict[str, Any]:
-        query = urlencode(
-            {key: value for key, value in {"limit": limit, "cursor": cursor}.items() if value is not None},
-            quote_via=quote,
-        )
-        return self._get(f"/v1/profiles/{agent_id}/events?{query}")
+        return self._get(_query(f"/v1/profiles/{agent_id}/events", {"limit": limit, "cursor": cursor}))
 
     def submit_profile_update(self, envelope: Envelope) -> dict[str, Any]:
         return self._post("/v1/profiles", envelope)
 
     def _get(self, path: str) -> Any:
-        response = self.session.get(self.base_url + path)
-        response.raise_for_status()
-        return response.json()
+        return _read_json(self.session.get(self.base_url + path))
 
-    def _post(self, path: str, body: Any) -> dict[str, Any]:
-        response = self.session.post(self.base_url + path, json=body)
-        response.raise_for_status()
-        return response.json()
+    def _post(self, path: str, body: Any) -> Any:
+        return _read_json(self.session.post(self.base_url + path, json=body))
 
 
 class DiscourseClient:
@@ -62,8 +90,8 @@ class DiscourseClient:
     def create_room(self, envelope: Envelope) -> dict[str, Any]:
         return self._post("/v1/rooms", envelope)
 
-    def room(self, room_id: str) -> dict[str, Any]:
-        return self._get(f"/v1/rooms/{room_id}")
+    def room(self, room_id: str, jwt: str | None = None) -> dict[str, Any]:
+        return self._get(f"/v1/rooms/{room_id}", jwt=jwt)
 
     def public_rooms(
         self,
@@ -77,11 +105,11 @@ class DiscourseClient:
         language: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
-    ) -> list[dict[str, Any]]:
-        query = urlencode(
-            {
-                key: value
-                for key, value in {
+    ) -> dict[str, Any]:
+        return self._get(
+            _query(
+                "/v1/rooms/public",
+                {
                     "status": status,
                     "tag": tag,
                     "keyword": keyword,
@@ -91,13 +119,9 @@ class DiscourseClient:
                     "language": language,
                     "limit": limit,
                     "cursor": cursor,
-                }.items()
-                if value is not None
-            },
-            quote_via=quote,
+                },
+            )
         )
-        suffix = f"?{query}" if query else ""
-        return self._get(f"/v1/rooms/public{suffix}")
 
     def my_rooms(
         self,
@@ -107,31 +131,35 @@ class DiscourseClient:
         membership: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
-    ) -> list[dict[str, Any]]:
-        query = urlencode(
-            {
-                key: value
-                for key, value in {
-                    "status": status,
-                    "membership": membership,
-                    "limit": limit,
-                    "cursor": cursor,
-                }.items()
-                if value is not None
-            },
-            quote_via=quote,
+    ) -> dict[str, Any]:
+        return self._get(
+            _query(
+                "/v1/me/rooms",
+                {"status": status, "membership": membership, "limit": limit, "cursor": cursor},
+            ),
+            jwt=jwt,
         )
-        suffix = f"?{query}" if query else ""
-        return self._get(f"/v1/me/rooms{suffix}", jwt=jwt)
 
-    def request_join(self, room_id: str, jwt: str, request: dict[str, Any]) -> dict[str, Any]:
-        return self._post(f"/v1/rooms/{room_id}/join-requests", request, jwt=jwt)
+    def request_join(self, room_id: str, envelope: Envelope) -> dict[str, Any]:
+        """Submits a signed `room.join.request`; the signature authenticates the applicant."""
+        return self._post(f"/v1/rooms/{room_id}/join-requests", envelope)
 
     def join_request(self, room_id: str, request_id: str, jwt: str) -> dict[str, Any]:
         return self._get(f"/v1/rooms/{room_id}/join-requests/{request_id}", jwt=jwt)
 
-    def join_requests(self, room_id: str, jwt: str) -> list[dict[str, Any]]:
-        return self._get(f"/v1/rooms/{room_id}/join-requests", jwt=jwt)
+    def join_requests(
+        self,
+        room_id: str,
+        jwt: str,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        return self._get(
+            _query(f"/v1/rooms/{room_id}/join-requests", {"status": status, "limit": limit, "cursor": cursor}),
+            jwt=jwt,
+        )
 
     def join_room(self, room_id: str, envelope: Envelope) -> dict[str, Any]:
         return self._post(f"/v1/rooms/{room_id}", envelope)
@@ -150,21 +178,11 @@ class DiscourseClient:
         limit: int | None = None,
         cursor: str | None = None,
         jwt: str | None = None,
-    ) -> list[dict[str, Any]]:
-        query = urlencode(
-            {
-                key: value
-                for key, value in {
-                    "after_seq": after_seq,
-                    "limit": limit,
-                    "cursor": cursor,
-                }.items()
-                if value is not None
-            },
-            quote_via=quote,
+    ) -> dict[str, Any]:
+        return self._get(
+            _query(f"/v1/rooms/{room_id}/events", {"after_seq": after_seq, "limit": limit, "cursor": cursor}),
+            jwt=jwt,
         )
-        suffix = f"?{query}" if query else ""
-        return self._get(f"/v1/rooms/{room_id}/events{suffix}", jwt=jwt)
 
     def agent_statuses(self, room_id: str, jwt: str | None = None) -> dict[str, Any]:
         return self._get(f"/v1/rooms/{room_id}/agent-status", jwt=jwt)
@@ -182,28 +200,42 @@ class DiscourseClient:
         return self._get(f"/v1/rooms/{room_id}/archive")
 
     def _get(self, path: str, jwt: str | None = None) -> Any:
-        response = self.session.get(self.base_url + path, headers=_auth_headers(jwt))
-        response.raise_for_status()
-        return response.json()
+        return _read_json(self.session.get(self.base_url + path, headers=_auth_headers(jwt)))
 
     def _post(self, path: str, body: Any, jwt: str | None = None) -> Any:
-        response = self.session.post(self.base_url + path, json=body, headers=_auth_headers(jwt))
-        response.raise_for_status()
-        return response.json()
+        return _read_json(self.session.post(self.base_url + path, json=body, headers=_auth_headers(jwt)))
 
     def _put(self, path: str, body: Any, jwt: str | None = None) -> Any:
-        response = self.session.put(self.base_url + path, json=body, headers=_auth_headers(jwt))
-        response.raise_for_status()
-        return response.json()
+        return _read_json(self.session.put(self.base_url + path, json=body, headers=_auth_headers(jwt)))
 
 
 class DelegationClient:
-    def __init__(self, base_url: str, session: Any | None = None):
+    """Agent Delegation client. Without ``endpoints`` it uses the RECOMMENDED
+    paths under ``base_url``; :meth:`discover` reads the service's discovery
+    document instead, whose endpoints clients MUST prefer."""
+
+    def __init__(self, base_url: str, session: Any | None = None, endpoints: dict[str, str] | None = None):
         self.base_url = base_url.rstrip("/")
         self.session = session or _requests_session()
+        endpoints = endpoints or {}
+        self.delegations_url = (endpoints.get("delegations") or f"{self.base_url}/v1/delegations").rstrip("/")
+        self.query_url = endpoints.get("query") or f"{self.delegations_url}/query"
+
+    @classmethod
+    def discover(cls, origin: str, session: Any | None = None) -> "DelegationClient":
+        """Builds a client for the service at ``origin`` from its discovery
+        document, falling back to the default paths when the service publishes none."""
+        session = session or _requests_session()
+        base = origin.rstrip("/")
+        try:
+            discovery = _read_json(session.get(f"{base}/.well-known/agent-delegation"))
+            endpoints = discovery.get("endpoints") if isinstance(discovery, dict) else None
+            return cls(base, session, endpoints if isinstance(endpoints, dict) else None)
+        except Exception:  # Discovery is optional; the default paths apply.
+            return cls(base, session)
 
     def protocol(self) -> dict[str, Any]:
-        return self._get("/.well-known/agent-delegation")
+        return _read_json(self.session.get(f"{self.base_url}/.well-known/agent-delegation"))
 
     def principal(self, principal_url: str | None = None) -> dict[str, Any]:
         """Resolves a principal document per Agent Delegation Section 3. A
@@ -219,18 +251,25 @@ class DelegationClient:
 
     def delegation(self, delegation_id: str) -> dict[str, Any]:
         validate_delegation_id(delegation_id)
-        return self._get(f"/v1/delegations/{quote(delegation_id, safe='')}")
+        return _read_json(self.session.get(f"{self.delegations_url}/{delegation_id}"))
 
-    def delegation_status(self, delegation_id: str) -> dict[str, Any]:
+    def delegation_events(self, delegation_id: str, cursor: str | None = None) -> dict[str, Any]:
         validate_delegation_id(delegation_id)
-        return self._get(f"/v1/delegations/{quote(delegation_id, safe='')}/status")
+        return _read_json(self.session.get(_query(f"{self.delegations_url}/{delegation_id}/events", {"cursor": cursor})))
 
-    def delegation_events(self, delegation_id: str) -> dict[str, Any]:
-        validate_delegation_id(delegation_id)
-        return self._get(f"/v1/delegations/{quote(delegation_id, safe='')}/events")
+    def all_delegation_events(self, delegation_id: str) -> list[dict[str, Any]]:
+        """Every accepted record of a credential, following `next_cursor`."""
+        records: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            page = self.delegation_events(delegation_id, cursor)
+            records.extend(page.get("result", []))
+            cursor = page.get("next_cursor")
+            if cursor is None:
+                return records
 
     def submit_delegation_event(self, envelope: Envelope) -> dict[str, Any]:
-        return self._post("/v1/delegations", envelope)
+        return _read_json(self.session.post(self.delegations_url, json=envelope))
 
     def query_delegations(
         self,
@@ -240,9 +279,7 @@ class DelegationClient:
         """Public queries are existence checks and carry both `subject` and
         `principal_id`. Passing a request JWT authorizes an enumeration query,
         which a service must otherwise refuse."""
-        return self.query_delegations_at(
-            self.base_url + "/v1/delegations/query", request, jwt
-        )
+        return self.query_delegations_at(self.query_url, request, jwt)
 
     def query_delegations_at(
         self,
@@ -255,12 +292,9 @@ class DelegationClient:
         authoritative service for a principal without trusting a URL supplied
         by whoever presented the credential."""
         validate_delegation_query_request(request, allow_enumeration=jwt is not None)
-        response = self.session.post(query_url, json=request, headers=_auth_headers(jwt))
-        response.raise_for_status()
-        return response.json()
+        return _read_json(self.session.post(query_url, json=request, headers=_auth_headers(jwt)))
 
     def _read_principal(self, url: str) -> tuple[dict[str, Any], str]:
-        from urllib.parse import urljoin, urlparse
         for redirects in range(6):
             if urlparse(url).scheme != "https":
                 raise ValueError("principal resolution requires HTTPS")
@@ -271,27 +305,17 @@ class DelegationClient:
                     raise ValueError("invalid principal redirect chain")
                 url = urljoin(url, location)
                 continue
-            response.raise_for_status()
-            document = response.json()
+            document = _read_json(response)
             resolved = getattr(response, "url", None) or url
             if (not isinstance(document, dict) or not isinstance(document.get("id"), str)
                 or urlparse(document["id"]).scheme != "https" or not urlparse(document["id"]).hostname
                 or urlparse(resolved).scheme != "https"):
                 raise ValueError("invalid principal HTTPS URL")
+            # Copies contribute only the canonical ID, never authority fields.
             if document["id"] == resolved:
                 validate_principal_document(document)
             return document, resolved
         raise ValueError("invalid principal redirect chain")
-
-    def _get(self, path: str) -> Any:
-        response = self.session.get(self.base_url + path)
-        response.raise_for_status()
-        return response.json()
-
-    def _post(self, path: str, body: Any) -> dict[str, Any]:
-        response = self.session.post(self.base_url + path, json=body)
-        response.raise_for_status()
-        return response.json()
 
 
 def sse_events_url(base_url: str, room_id: str) -> str:

@@ -5,6 +5,7 @@ import { AgentSigner } from "./identity.js";
 import {
   DelegationClient,
   DiscourseClient,
+  HttpResponseError,
   ProfileClient,
   sseEventsUrl,
 } from "./http-client.js";
@@ -13,6 +14,7 @@ interface QueuedResponse {
   ok?: boolean;
   status?: number;
   body?: unknown;
+  headers?: Record<string, string>;
 }
 
 interface RecordedCall {
@@ -30,6 +32,7 @@ function makeFetch(responses: QueuedResponse[] = []) {
       ok: queued.ok ?? true,
       status: queued.status ?? 200,
       url: String(url),
+      headers: new Headers(queued.headers ?? {}),
       json: async () => queued.body,
       text: async () =>
         typeof queued.body === "string"
@@ -97,12 +100,12 @@ test("DiscourseClient calls every endpoint and forwards bearer tokens", async ()
     { body: { id: "room1" } },
     { body: { status: "pending" } },
     { body: { status: "pending" } },
-    { body: [] },
+    { body: { result: [] } },
     { body: { room_id: "room1" } },
     { body: { room_id: "room1" } },
     { body: { room_id: "room1" } },
-    { body: [] },
-    { body: [] },
+    { body: { result: [] } },
+    { body: { result: [] } },
     { body: { manifest: true } },
   ]);
   const client = new DiscourseClient("https://api.example.com", fetchImpl);
@@ -122,7 +125,7 @@ test("DiscourseClient calls every endpoint and forwards bearer tokens", async ()
   await client.protocol();
   await client.createRoom(envelope as never);
   await client.room("room1");
-  await client.requestJoin("room1", "jwt-a", { role: "speaker" });
+  await client.requestJoin("room1", envelope as never);
   await client.joinRequest("room1", "req1", "jwt-b");
   await client.joinRequests("room1", "jwt-c");
   await client.joinRoom("room1", envelope as never);
@@ -142,9 +145,12 @@ test("DiscourseClient calls every endpoint and forwards bearer tokens", async ()
   assert.equal(calls[1].url, "https://api.example.com/v1/rooms");
   assert.equal(calls[1].init?.method, "POST");
   assert.equal(calls[2].url, "https://api.example.com/v1/rooms/room1");
+  // A join request is a signed envelope: no request JWT is needed.
+  assert.equal(calls[3].url, "https://api.example.com/v1/rooms/room1/join-requests");
+  assert.equal(calls[3].init?.method, "POST");
   assert.equal(
     (calls[3].init?.headers as Record<string, string>).authorization,
-    "Bearer jwt-a",
+    undefined,
   );
   assert.equal(
     calls[4].url,
@@ -194,7 +200,7 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
       body: {
         id: "del_1",
         protocol: "agent-delegation/1.0",
-        principal: { id: PRINCIPAL_ID },
+        principal_id: PRINCIPAL_ID,
         controller: AGENT_ID,
         subject: AGENT_ID,
         scopes: ["inbox.screen"],
@@ -203,7 +209,6 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
         event_id: "e",
       },
     },
-    { body: { id: "del_1", status: "active", checked_at: 2, event_id: "e" } },
     { body: { result: [] } },
     { body: { id: "del_1", status: "revoked", checked_at: 3, event_id: "e2" } },
     { body: { result: [] } },
@@ -213,7 +218,6 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
   await client.protocol();
   await client.principal(PRINCIPAL_ID);
   await client.delegation("del_1");
-  await client.delegationStatus("del_1");
   await client.delegationEvents("del_1");
   await client.submitDelegationEvent({
     hash: "h",
@@ -238,40 +242,52 @@ test("DelegationClient calls delegation discovery, read, submit, and query endpo
   assert.equal(calls[1].url, PRINCIPAL_ID);
   assert.deepEqual(calls[1].init?.headers, { accept: "application/json" });
   assert.equal(calls[2].url, "https://api.al.ink/v1/delegations/del_1");
-  assert.equal(calls[3].url, "https://api.al.ink/v1/delegations/del_1/status");
-  assert.equal(calls[4].url, "https://api.al.ink/v1/delegations/del_1/events");
-  assert.equal(calls[5].url, "https://api.al.ink/v1/delegations");
-  assert.equal(calls[5].init?.method, "POST");
-  assert.equal(calls[6].url, "https://api.al.ink/v1/delegations/query");
-  assert.match(String(calls[6].init?.body), /inbox|active|limit/);
+  assert.equal(calls[3].url, "https://api.al.ink/v1/delegations/del_1/events");
+  assert.equal(calls[4].url, "https://api.al.ink/v1/delegations");
+  assert.equal(calls[4].init?.method, "POST");
+  assert.equal(calls[5].url, "https://api.al.ink/v1/delegations/query");
+  assert.match(String(calls[5].init?.body), /inbox|active|limit/);
 });
 
-test("DelegationClient encodes opaque delegation ids as one path segment", async () => {
-  const { fetchImpl, calls } = makeFetch([
-    { body: {} },
-    { body: {} },
-    { body: {} },
-  ]);
+test("DelegationClient uses unreserved delegation ids unencoded and rejects others before fetch", async () => {
+  const { fetchImpl, calls } = makeFetch([{ body: {} }, { body: { result: [] } }]);
   const client = new DelegationClient("https://api.example.com", fetchImpl);
-  const id = "a/b?#% 雪";
+  const id = "Del.a~b-c_1";
 
   await client.delegation(id);
-  await client.delegationStatus(id);
   await client.delegationEvents(id);
-
-  const encoded = "a%2Fb%3F%23%25%20%E9%9B%AA";
   assert.deepEqual(
     calls.map((call) => call.url),
     [
-      `https://api.example.com/v1/delegations/${encoded}`,
-      `https://api.example.com/v1/delegations/${encoded}/status`,
-      `https://api.example.com/v1/delegations/${encoded}/events`,
+      `https://api.example.com/v1/delegations/${id}`,
+      `https://api.example.com/v1/delegations/${id}/events`,
     ],
   );
-  for (const dotSegment of [".", ".."]) {
-    await assert.rejects(() => client.delegation(dotSegment), /dot segment/);
+  for (const bad of [".", "..", "a/b", "雪", "a b"]) {
+    await assert.rejects(() => client.delegation(bad), /delegation id/);
   }
-  assert.equal(calls.length, 3, "dot-segment ids were rejected before fetch");
+  assert.equal(calls.length, 2, "invalid ids were rejected before fetch");
+});
+
+test("DelegationClient.discover prefers the discovery endpoints and pages events", async () => {
+  const { fetchImpl, calls } = makeFetch([
+    { body: { protocol: "agent-delegation/1.0", service: "https://svc.example", endpoints: { delegations: "https://svc.example/d", query: "https://svc.example/q" } } },
+    { body: { result: [{ n: 1 }], next_cursor: "c2" } },
+    { body: { result: [{ n: 2 }] } },
+    { body: { result: [] } },
+  ]);
+  const client = await DelegationClient.discover("https://svc.example", fetchImpl);
+  const records = await client.allDelegationEvents("del");
+  assert.deepEqual(records, [{ n: 1 }, { n: 2 }]);
+  await client.queryDelegations({ subject: AGENT_ID, principal_id: PRINCIPAL_ID });
+  assert.deepEqual(calls.map((call) => call.url), [
+    "https://svc.example/.well-known/agent-delegation",
+    "https://svc.example/d/del/events",
+    "https://svc.example/d/del/events?cursor=c2",
+    "https://svc.example/q",
+  ]);
+  const fallback = await DelegationClient.discover("https://none.example", makeFetch([{ ok: false, status: 404, body: "no" }]).fetchImpl);
+  assert.ok(fallback instanceof DelegationClient);
 });
 
 test("delegation enumeration requires a request JWT and queries the principal's endpoint", async () => {
@@ -327,18 +343,16 @@ test("DelegationClient re-resolves a principal document served away from its id"
 
 test("DiscourseClient supports public rooms, my rooms, and agent status endpoints", async () => {
   const { fetchImpl, calls } = makeFetch([
-    { body: [] },
-    { body: [] },
-    { body: { statuses: [] } },
+    { body: { result: [] } },
+    { body: { result: [] } },
+    { body: { result: [] } },
     {
       body: {
-        status: {
-          room_id: "room1",
-          agent_id: AGENT_ID,
-          state: "idle",
-          expires_at: 2,
-          updated_at: 1,
-        },
+        room_id: "room1",
+        agent_id: AGENT_ID,
+        state: "idle",
+        expires_at: 2,
+        updated_at: 1,
       },
     },
     {
@@ -395,10 +409,17 @@ test("DiscourseClient supports public rooms, my rooms, and agent status endpoint
   assert.match(String(calls[4].init?.body), /idle/);
 });
 
-test("readJson throws on non-2xx responses", async () => {
-  const { fetchImpl } = makeFetch([{ ok: false, status: 500, body: "boom" }]);
+test("readJson throws on non-2xx responses and parses Agent Identity errors", async () => {
+  const { fetchImpl } = makeFetch([
+    { ok: false, status: 500, body: "boom" },
+    { ok: false, status: 409, body: { error: { code: "nonce_not_greater", message: "no", data: { max_nonce: 9 } } }, headers: { "Max-Seen-Nonce": "9" } },
+  ]);
   const client = new ProfileClient("https://api.example.com", fetchImpl);
   await assert.rejects(() => client.getProfile(AGENT_ID), /HTTP 500: boom/);
+  await assert.rejects(() => client.getProfile(AGENT_ID), (error: unknown) => {
+    const e = error as HttpResponseError;
+    return e.status === 409 && e.code === "nonce_not_greater" && e.maxSeenNonce === "9" && e.data?.max_nonce === 9;
+  });
 });
 
 test("sseEventsUrl preserves HTTP schemes and encodes room ids", () => {

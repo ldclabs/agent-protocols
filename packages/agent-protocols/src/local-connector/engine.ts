@@ -1,32 +1,35 @@
-import { HttpResponseError } from "../http-client.js";
-import { validateDelegationEventAuthority, type DelegationCredential } from "../delegation.js";
 // The stateful local connector engine. `LocalConnector` is transport-neutral:
-// it signs on the active agent's behalf, calls an Agent Discourse host over
+// it signs on the active agent's behalf, calls Agent Protocols services over
 // HTTP, materializes local room state by projecting accepted records, derives
-// an actionable inbox, and holds drafts on a room-head mismatch — all behind a
-// single `callTool` dispatcher. The agent never sees the signing key or a
-// reusable request JWT. This is one deep module; its methods are mutually
-// recursive over `this`, so the class stays whole here while the data shapes
-// and pure projection live in sibling submodules.
+// an actionable inbox, tracks the head presented to the agent, and holds
+// head-bound drafts on a room-head mismatch — all behind a single `callTool`
+// dispatcher. The agent never sees the signing key or a reusable request JWT.
+// This is one deep module; its methods are mutually recursive over `this`, so
+// the class stays whole here while the data shapes and pure projection live in
+// sibling submodules.
 
 import {
   AgentStatus,
   AgentStatusInput,
+  ArchiveRecord,
   MessageCreatePayload,
   ReasonPayload,
   RoomCreatePayload,
   RoomJoinPayload,
-  RoomJoinRequestInput,
-  RoomJoinRequestStatus,
+  RoomJoinRequest,
+  RoomJoinRequestPayload,
   RoomJoinReviewPayload,
   RoomMemberRemovePayload,
   RoomPolicy,
   RoomResponse,
   ServerRecord,
   Visibility,
+  canJoinDirectly,
   discourseEvent,
   eventType,
+  isRedactedRecord,
   roomCreateEvent,
+  roomJoinRequestEvent,
   validateDiscourseEnvelope,
   validateRoomPath,
   verifyServerRecord,
@@ -49,15 +52,20 @@ import {
   DelegationClient,
   DiscourseClient,
   FetchLike,
+  HttpResponseError,
   ProfileClient,
 } from "../http-client.js";
 import {
+  DelegationCredential,
   DelegationGrantPayload,
+  DelegationPayload,
+  DelegationVerdict,
   PrincipalDocument,
   delegationGrantEvent,
   delegationRevokeEvent,
   isPrincipalAlias,
-  validateDelegationGrantPayload,
+  validateDelegationEventAuthority,
+  verifyDelegationCredential,
 } from "../delegation.js";
 import {
   AgentProfile,
@@ -66,42 +74,31 @@ import {
 } from "../profile.js";
 
 import {
-  TOOL_AGENT_STATUS_CLEAR,
-  TOOL_AGENT_STATUS_GET,
   TOOL_AGENT_STATUS_LIST,
   TOOL_AGENT_STATUS_SET,
+  TOOL_DELEGATIONS_LIST,
+  TOOL_DELEGATION_CHECK,
+  TOOL_DELEGATION_GRANT,
+  TOOL_DELEGATION_REVOKE,
   TOOL_DRAFTS_LIST,
   TOOL_DRAFT_COMMIT,
-  TOOL_DRAFT_DROP,
-  TOOL_DRAFT_GET,
-  TOOL_HOSTS_LIST,
   TOOL_IDENTITY_CURRENT,
   TOOL_INBOX_ACK,
   TOOL_INBOX_NEXT,
   TOOL_JOIN_REQUESTS_LIST,
   TOOL_JOIN_REQUEST_REVIEW,
+  TOOL_PRINCIPAL_RESOLVE,
   TOOL_PROFILE_UPDATE,
   TOOL_ROOMS_LIST,
-  TOOL_PRINCIPAL_RESOLVE,
-  TOOL_DELEGATION_CHECK,
-  TOOL_DELEGATIONS_LIST,
-  TOOL_DELEGATION_GRANT,
-  TOOL_DELEGATION_REVOKE,
   TOOL_ROOMS_SEARCH,
   TOOL_ROOM_CREATE,
   TOOL_ROOM_JOIN,
-  TOOL_ROOM_JOIN_REQUEST,
-  TOOL_ROOM_JOIN_WHEN_APPROVED,
   TOOL_ROOM_LEAVE,
-  TOOL_ROOM_MARK_READ,
   TOOL_ROOM_MEMBERS_LIST,
-  TOOL_ROOM_MEMBER_GET,
-  TOOL_ROOM_OPEN,
   TOOL_ROOM_SEND_MESSAGE,
   TOOL_ROOM_STATE,
   TOOL_ROOM_SUBMIT_EVENT,
   TOOL_ROOM_TIMELINE,
-  TOOL_ROOM_UNREAD,
 } from "./catalog.js";
 import {
   invalidPayload,
@@ -110,44 +107,34 @@ import {
   permissionDenied,
 } from "./internal.js";
 import {
-  AgentStatusClearInput,
-  AgentStatusGetInput,
   AgentStatusListInput,
   AgentStatusSetInput,
+  DelegationCheckInput,
+  DelegationGrantInput,
+  DelegationRevokeInput,
+  DelegationsListInput,
   DraftCommitInput,
-  DraftDropInput,
-  DraftGetInput,
   DraftsListInput,
   InboxAckInput,
   InboxNextInput,
   JoinRequestReviewInput,
   JoinRequestsListInput,
+  PrincipalResolveInput,
   ProfileUpdateInput,
   RoomCreateInput,
   RoomJoinInput,
-  RoomJoinRequestToolInput,
-  RoomJoinWhenApprovedInput,
   RoomLeaveInput,
-  RoomMarkReadInput,
-  RoomMemberGetInput,
   RoomMembersListInput,
-  RoomOpenInput,
   RoomSendMessageInput,
   RoomStateInput,
   RoomSubmitEventInput,
   RoomTimelineInput,
-  RoomUnreadInput,
   RoomsListInput,
-  PrincipalResolveInput,
-  DelegationCheckInput,
-  DelegationsListInput,
-  DelegationGrantInput,
-  DelegationRevokeInput,
   RoomsSearchInput,
 } from "./inputs.js";
 import {
   applyRecordProjection,
-  eventTypeAdvancesRoomHead,
+  eventTypeRequiresRoomHead,
   inboxEntryReady,
   isDuplicateRecord,
   materializeCreator,
@@ -156,14 +143,19 @@ import {
   validateNextRecord,
   validateRecordBasePrecondition,
 } from "./projection.js";
-import { LocalConnectorState, LocalRoomState, RoomKey } from "./state.js";
+import {
+  HeldDraftRequest,
+  LocalConnectorState,
+  LocalRoomState,
+  RoomKey,
+} from "./state.js";
 import {
   AgentProtocolsHost,
   DraftAction,
+  HeadMismatchPolicy,
   HeldDraft,
   InboxItem,
   RoomMemberProfile,
-  RoomMemberView,
   RoomStateView,
   RoomSummary,
   RoomWriteResult,
@@ -173,10 +165,10 @@ import {
   timelineItemFromRecord,
 } from "./views.js";
 
-interface HeadMismatchState {
-  sync: SyncState;
-  changes: TimelineItem[];
-}
+/** Automatic `send_anyway` re-sign attempts before a draft is held. */
+export const SEND_ANYWAY_MAX_ATTEMPTS = 3;
+/** Lease on an inbox item claimed with `claim: true`. */
+export const INBOX_CLAIM_LEASE_MS = 60_000;
 
 function roomKeyString(key: RoomKey): string {
   return `${key.host} ${key.roomId}`;
@@ -281,7 +273,7 @@ function eventDraftValue(input: RoomSubmitEventInput): unknown {
 }
 
 function heldDraftOptions(): DraftAction[] {
-  return ["revise", "send_as_is", "stay_silent", "send_anyway"];
+  return ["revise", "send", "drop"];
 }
 
 function profileToMemberProfile(profile: AgentProfile): RoomMemberProfile {
@@ -306,12 +298,25 @@ function parseCursor(cursor: string | undefined): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+/** Offset-cursor page over a sorted list, with `next_cursor` when more follow. */
+function page<T>(items: T[], cursor: string | undefined, limit: number): { items: T[]; next_cursor?: string } {
+  const offset = parseCursor(cursor);
+  const slice = items.slice(offset, offset + limit);
+  return offset + limit < items.length
+    ? { items: slice, next_cursor: String(offset + limit) }
+    : { items: slice };
+}
+
 function sortedAgentStatuses(
   statuses: Map<AgentId, AgentStatus>,
 ): AgentStatus[] {
   return [...statuses.entries()]
     .sort((a, b) => compareStrings(a[0], b[0]))
     .map(([, status]) => status);
+}
+
+function isHttpError(error: unknown, code: string): error is HttpResponseError {
+  return error instanceof HttpResponseError && error.code === code;
 }
 
 export interface LocalConnectorOptions {
@@ -373,20 +378,22 @@ export class LocalConnector {
 
   /** Applies a verified record to the room named by its `room_id` alone. Throws
    * an ambiguity error when the room ID is open on more than one host. */
-  applyRecord(record: ServerRecord): void {
+  applyRecord(record: ArchiveRecord): void {
     const key = this.resolveRoomKey(undefined, record.room_id);
     this.applyRecordTo(key, record);
   }
 
   /** Applies a verified record to the room on the given host. */
-  applyHostRecord(host: string, record: ServerRecord): void {
+  applyHostRecord(host: string, record: ArchiveRecord): void {
     const key: RoomKey = { host: normalizeHost(host), roomId: record.room_id };
     this.applyRecordTo(key, record);
   }
 
-  private applyRecordTo(key: RoomKey, record: ServerRecord): void {
-    validateDiscourseEnvelope(record.envelope);
-    validateRoomPath(record.envelope, record.room_id);
+  private applyRecordTo(key: RoomKey, record: ArchiveRecord): void {
+    if (!isRedactedRecord(record)) {
+      validateDiscourseEnvelope(record.envelope);
+      validateRoomPath(record.envelope, record.room_id);
+    }
     verifyServerRecord(record);
 
     const activeAgent = this.agentId();
@@ -398,12 +405,12 @@ export class LocalConnector {
     validateNextRecord(room, record);
     validateRecordBasePrecondition(room, record);
 
-    const item = timelineItemFromRecord(record);
+    const item = timelineItemFromRecord(record, room.room.types ?? []);
     const newInbox: InboxItem[] = [];
     applyRecordProjection(room, record, item, activeAgent, newInbox);
 
     let clearedStatus: AgentId | undefined;
-    if (record.envelope.event.type === eventType.ROOM_MEMBER_REMOVE) {
+    if (!isRedactedRecord(record) && record.envelope.event.type === eventType.ROOM_MEMBER_REMOVE) {
       const payload = record.envelope.event.payload as RoomMemberRemovePayload;
       clearedStatus = payload?.member;
     }
@@ -445,8 +452,6 @@ export class LocalConnector {
     switch (name) {
       case TOOL_IDENTITY_CURRENT:
         return this.identityCurrent();
-      case TOOL_HOSTS_LIST:
-        return this.hostsList();
       case TOOL_PRINCIPAL_RESOLVE:
         return this.principalResolve(input as PrincipalResolveInput);
       case TOOL_DELEGATION_CHECK:
@@ -461,50 +466,30 @@ export class LocalConnector {
         return this.roomsSearch(input as RoomsSearchInput);
       case TOOL_ROOMS_LIST:
         return this.roomsList(input as RoomsListInput);
-      case TOOL_ROOM_OPEN:
-        return this.roomOpen(input as RoomOpenInput);
       case TOOL_ROOM_STATE:
-        return this.roomStateTool(input as RoomStateInput);
+        return this.roomState(input as RoomStateInput);
       case TOOL_ROOM_MEMBERS_LIST:
         return this.roomMembersList(input as RoomMembersListInput);
-      case TOOL_ROOM_MEMBER_GET:
-        return this.roomMemberGet(input as RoomMemberGetInput);
       case TOOL_AGENT_STATUS_LIST:
         return this.agentStatusList(input as AgentStatusListInput);
-      case TOOL_AGENT_STATUS_GET:
-        return this.agentStatusGet(input as AgentStatusGetInput);
       case TOOL_AGENT_STATUS_SET:
         return this.agentStatusSet(input as AgentStatusSetInput);
-      case TOOL_AGENT_STATUS_CLEAR:
-        return this.agentStatusClear(input as AgentStatusClearInput);
       case TOOL_ROOM_TIMELINE:
         return this.roomTimeline(input as RoomTimelineInput);
-      case TOOL_ROOM_UNREAD:
-        return this.roomUnread(input as RoomUnreadInput);
-      case TOOL_ROOM_MARK_READ:
-        return this.roomMarkRead(input as RoomMarkReadInput);
       case TOOL_INBOX_NEXT:
         return this.inboxNext(input as InboxNextInput);
       case TOOL_INBOX_ACK:
         return this.inboxAck(input as InboxAckInput);
       case TOOL_DRAFTS_LIST:
         return this.draftsList(input as DraftsListInput);
-      case TOOL_DRAFT_GET:
-        return this.draftGet(input as DraftGetInput);
       case TOOL_DRAFT_COMMIT:
         return this.draftCommit(input as DraftCommitInput);
-      case TOOL_DRAFT_DROP:
-        return this.draftDrop(input as DraftDropInput);
       case TOOL_PROFILE_UPDATE:
         return this.profileUpdate(input as ProfileUpdateInput);
       case TOOL_ROOM_CREATE:
         return this.roomCreate(input as RoomCreateInput);
       case TOOL_ROOM_JOIN:
         return this.roomJoin(input as RoomJoinInput);
-      case TOOL_ROOM_JOIN_REQUEST:
-        return this.roomJoinRequest(input as RoomJoinRequestToolInput);
-      case TOOL_ROOM_JOIN_WHEN_APPROVED:
-        return this.roomJoinWhenApproved(input as RoomJoinWhenApprovedInput);
       case TOOL_ROOM_LEAVE:
         return this.roomLeave(input as RoomLeaveInput);
       case TOOL_ROOM_SEND_MESSAGE:
@@ -530,14 +515,10 @@ export class LocalConnector {
     };
   }
 
-  private hostsList(): unknown {
-    return { hosts: this.sortedHosts() };
-  }
-
   private async roomsSearch(input: RoomsSearchInput): Promise<unknown> {
     const host = normalizeHost(input.host);
     this.requireAllowedHost(host);
-    const rooms = await this.discourse(host).publicRooms({
+    const response = await this.discourse(host).publicRooms({
       status: input.status,
       tag: input.tag,
       keyword: input.keyword,
@@ -548,50 +529,72 @@ export class LocalConnector {
       limit: input.limit,
       cursor: input.cursor,
     });
-    for (const room of rooms) this.observeRoom(host, room);
-    const summaries = rooms.map((room) => this.summaryForResponse(host, room));
-    return { rooms: summaries };
+    for (const room of response.result) this.observeRoom(host, room);
+    const rooms = response.result.map((room) => this.summaryForResponse(host, room));
+    return response.next_cursor !== undefined
+      ? { rooms, next_cursor: response.next_cursor }
+      : { rooms };
   }
 
   private roomsList(input: RoomsListInput): unknown {
-    const offset = parseCursor(input.cursor);
-    const limit = input.limit ?? 50;
     const agentId = this.agentId();
-    const rooms = [...this.state.rooms.values()]
+    const rooms = [...this.state.rooms.entries()]
       .sort(
-        (a, b) =>
+        ([, a], [, b]) =>
           compareStrings(a.host, b.host) ||
           compareStrings(a.room.id, b.room.id),
       )
-      .filter((room) =>
+      .filter(([, room]) =>
         input.status !== undefined ? room.room.status === input.status : true,
       )
-      .filter((room) => membershipFilter(room, agentId, input.membership))
-      .slice(offset, offset + limit)
-      .map((room) => this.summaryForRoom(room));
-    return { rooms };
+      .filter(([keyStr, room]) =>
+        membershipFilter(
+          room,
+          agentId,
+          input.membership,
+          this.state.ownJoinRequests.get(keyStr)?.status === "pending",
+        ),
+      )
+      .map(([, room]) => this.summaryForRoom(room));
+    const result = page(rooms, input.cursor, input.limit ?? 50);
+    return { rooms: result.items, ...(result.next_cursor ? { next_cursor: result.next_cursor } : {}) };
   }
 
-  private async roomOpen(input: RoomOpenInput): Promise<unknown> {
-    const host = normalizeHost(input.host);
-    this.requireAllowedHost(host);
-    const key: RoomKey = { host, roomId: input.room_id };
-    const previousSeq =
-      this.state.rooms.get(roomKeyString(key))?.syncedSeq ?? 0;
-    if (input.refresh || previousSeq === 0) {
-      const client = this.discourse(host);
-      const room = await client.room(input.room_id);
-      this.observeRoom(host, room);
-      const jwt = this.requestJwt(host);
-      const records = await client.events(input.room_id, {
-        afterSeq: previousSeq > 0 ? previousSeq : undefined,
+  /** Reads the room resource and every record after the local tip, then verifies and applies them. */
+  private async syncRoom(key: RoomKey): Promise<void> {
+    const client = this.discourse(key.host);
+    const jwt = this.requestJwt(key.host);
+    const room = await client.room(key.roomId, jwt);
+    this.observeRoom(key.host, room);
+    // The cursor continues the first query, so its after_seq stays fixed.
+    const syncedSeq = this.localRoom(key).syncedSeq;
+    let cursor: string | undefined;
+    for (;;) {
+      const response = await client.events(key.roomId, {
+        afterSeq: syncedSeq > 0 ? syncedSeq : undefined,
+        cursor,
         jwt,
       });
-      for (const record of records) this.applyHostRecord(host, record);
+      for (const record of response.result) this.applyHostRecord(key.host, record);
+      cursor = response.next_cursor;
+      if (cursor === undefined) break;
     }
-    const opened = this.state.rooms.get(roomKeyString(key));
-    if (opened) opened.subscribed = input.subscribe ?? false;
+  }
+
+  private async roomState(input: RoomStateInput): Promise<unknown> {
+    let key: RoomKey;
+    if (input.host !== undefined) {
+      key = { host: normalizeHost(input.host), roomId: input.room_id };
+    } else {
+      key = this.resolveRoomKey(undefined, input.room_id);
+    }
+    this.requireAllowedHost(key.host);
+    const known = (this.state.rooms.get(roomKeyString(key))?.syncedSeq ?? 0) > 0;
+    if (!known || input.refresh) await this.syncRoom(key);
     const room = this.localRoom(key);
+    if (input.subscribe !== undefined) room.subscribed = input.subscribe;
+    // The first state read in a session is the agent's starting view.
+    if (room.presentedSeq === undefined) this.presentHead(room, room.headSeq);
     return {
       room: this.roomStateView(room),
       sync: this.syncState(key),
@@ -599,32 +602,26 @@ export class LocalConnector {
     };
   }
 
-  private async roomStateTool(input: RoomStateInput): Promise<unknown> {
-    void input.include_types;
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    if (input.refresh) {
-      const host = this.localRoom(key).host;
-      return this.roomOpen({ host, room_id: input.room_id, refresh: true });
-    }
-    const room = this.localRoom(key);
-    return { room: this.roomStateView(room), sync: this.syncState(key) };
-  }
-
   private roomMembersList(input: RoomMembersListInput): unknown {
     const key = this.resolveRoomKey(input.host, input.room_id);
     const room = this.localRoom(key);
-    const offset = parseCursor(input.cursor);
-    const limit = input.limit ?? 100;
     const members = [...room.members.values()]
       .sort((a, b) => compareStrings(a.agent_id, b.agent_id))
       .filter((member) =>
-        input.status !== undefined ? member.status === input.status : true,
+        input.agent_id !== undefined ? member.agent_id === input.agent_id : true,
+      )
+      .filter((member) =>
+        input.status !== undefined && input.status !== "all"
+          ? member.status === input.status
+          : true,
       )
       .filter((member) =>
         input.role !== undefined ? member.role === input.role : true,
       )
-      .slice(offset, offset + limit)
       .map((member) => ({ ...member }));
+    if (input.agent_id !== undefined && members.length === 0) {
+      throw invalidPayload("room member not found");
+    }
     if (input.include_profiles) {
       for (const member of members) {
         if (member.profile === undefined) {
@@ -633,87 +630,61 @@ export class LocalConnector {
         }
       }
     }
-    return { members, sync: this.syncState(key) };
-  }
-
-  private roomMemberGet(input: RoomMemberGetInput): unknown {
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const room = this.localRoom(key);
-    const found = room.members.get(input.agent_id);
-    if (!found) throw invalidPayload("room member not found");
-    const member = { ...found };
-    if (input.include_profile && member.profile === undefined) {
-      const profile = this.state.profiles.get(member.agent_id);
-      if (profile) member.profile = profileToMemberProfile(profile);
-    }
-    const recent = input.include_recent_activity
-      ? room.timeline
-          .filter((item) => item.actor === input.agent_id)
-          .slice(-10)
-          .reverse()
-      : [];
-    return { member, recent, sync: this.syncState(key) };
+    const result = page(members, input.cursor, input.limit ?? 100);
+    const recent =
+      input.agent_id !== undefined && input.include_recent_activity
+        ? room.timeline
+            .filter((item) => item.actor === input.agent_id)
+            .slice(-10)
+            .reverse()
+        : undefined;
+    return {
+      members: result.items,
+      ...(recent !== undefined ? { recent } : {}),
+      ...(result.next_cursor ? { next_cursor: result.next_cursor } : {}),
+      sync: this.syncState(key),
+    };
   }
 
   private async agentStatusList(input: AgentStatusListInput): Promise<unknown> {
     const key = this.resolveRoomKey(input.host, input.room_id);
     const keyStr = roomKeyString(key);
-    if (!input.refresh) {
-      const cached = this.state.agentStatuses.get(keyStr);
-      if (cached) {
-        return {
-          statuses: sortedAgentStatuses(cached),
-          sync: this.syncState(key),
-        };
+    const cached = this.state.agentStatuses.get(keyStr);
+    if (input.agent_id !== undefined) {
+      const hit = input.refresh ? undefined : cached?.get(input.agent_id);
+      if (hit) return { statuses: [hit], sync: this.syncState(key) };
+      const host = this.allowedRoomHost(key);
+      let status: AgentStatus;
+      try {
+        status = await this.discourse(host).agentStatus(input.room_id, input.agent_id, this.requestJwt(host));
+      } catch (error) {
+        if (isHttpError(error, "agent_status_not_found")) return { statuses: [], sync: this.syncState(key) };
+        throw error;
       }
+      this.cacheAgentStatus(keyStr, status);
+      return { statuses: [status], sync: this.syncState(key) };
+    }
+    if (!input.refresh && cached) {
+      return { statuses: sortedAgentStatuses(cached), sync: this.syncState(key) };
     }
     const host = this.allowedRoomHost(key);
-    const jwt = this.requestJwt(host);
-    const response = await this.discourse(host).agentStatuses(
-      input.room_id,
-      jwt,
-    );
+    const response = await this.discourse(host).agentStatuses(input.room_id, this.requestJwt(host));
     const statuses = new Map<AgentId, AgentStatus>();
-    for (const status of response.statuses) {
-      statuses.set(status.agent_id, status);
-    }
+    for (const status of response.result) statuses.set(status.agent_id, status);
     this.state.agentStatuses.set(keyStr, statuses);
     return { statuses: sortedAgentStatuses(statuses), sync: this.syncState(key) };
-  }
-
-  private async agentStatusGet(input: AgentStatusGetInput): Promise<unknown> {
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const keyStr = roomKeyString(key);
-    if (!input.refresh) {
-      const cached = this.state.agentStatuses.get(keyStr)?.get(input.agent_id);
-      if (cached) return { status: cached, sync: this.syncState(key) };
-    }
-    const host = this.allowedRoomHost(key);
-    const jwt = this.requestJwt(host);
-    const response = await this.discourse(host).agentStatus(
-      input.room_id,
-      input.agent_id,
-      jwt,
-    );
-    let statuses = this.state.agentStatuses.get(keyStr);
-    if (!statuses) {
-      statuses = new Map();
-      this.state.agentStatuses.set(keyStr, statuses);
-    }
-    statuses.set(response.status.agent_id, response.status);
-    return { status: response.status, sync: this.syncState(key) };
   }
 
   private async agentStatusSet(input: AgentStatusSetInput): Promise<unknown> {
     const key = this.resolveRoomKey(input.host, input.room_id);
     const keyStr = roomKeyString(key);
     const host = this.allowedRoomHost(key);
-    const jwt = this.requestJwt(host);
+    const room = this.localRoom(key);
     const request: AgentStatusInput = {
       state: input.state,
       summary: input.summary,
-      seen_seq: input.seen_seq,
-      seen_hash: input.seen_hash,
+      seen_seq: input.seen_seq ?? (room.syncedSeq > 0 ? room.syncedSeq : undefined),
+      seen_hash: input.seen_hash ?? (input.seen_seq === undefined ? room.syncedHash : undefined),
       claim_id: input.claim_id,
       activity: input.activity,
       expires_at: input.expires_at,
@@ -721,37 +692,29 @@ export class LocalConnector {
     };
     const status = await this.discourse(host).setAgentStatus(
       input.room_id,
-      jwt,
+      this.requestJwt(host),
       request,
     );
+    if (status.expires_at <= unixTimeMillis()) {
+      this.state.agentStatuses.get(keyStr)?.delete(status.agent_id);
+    } else {
+      this.cacheAgentStatus(keyStr, status);
+    }
+    return { status, sync: this.syncState(key) };
+  }
+
+  private cacheAgentStatus(keyStr: string, status: AgentStatus): void {
     let statuses = this.state.agentStatuses.get(keyStr);
     if (!statuses) {
       statuses = new Map();
       this.state.agentStatuses.set(keyStr, statuses);
     }
     statuses.set(status.agent_id, status);
-    return { status, sync: this.syncState(key) };
   }
 
-  private async agentStatusClear(
-    input: AgentStatusClearInput,
-  ): Promise<unknown> {
+  private async roomTimeline(input: RoomTimelineInput): Promise<unknown> {
     const key = this.resolveRoomKey(input.host, input.room_id);
-    const host = this.allowedRoomHost(key);
-    const jwt = this.requestJwt(host);
-    const request: AgentStatusInput = {
-      state: "away",
-      expires_at: unixTimeMillis() - 1,
-    };
-    await this.discourse(host).setAgentStatus(input.room_id, jwt, request);
-    this.state.agentStatuses.get(roomKeyString(key))?.delete(this.agentId());
-    return { cleared: true, room_id: input.room_id };
-  }
-
-  private roomTimeline(input: RoomTimelineInput): unknown {
-    void input.refresh;
-    void input.include_records;
-    const key = this.resolveRoomKey(input.host, input.room_id);
+    if (input.refresh) await this.syncRoom(key);
     const room = this.localRoom(key);
     const items = room.timeline
       .filter((item) =>
@@ -764,48 +727,27 @@ export class LocalConnector {
         input.types !== undefined ? input.types.includes(item.type) : true,
       )
       .filter((item) =>
-        input.actors !== undefined ? input.actors.includes(item.actor) : true,
+        input.actors !== undefined
+          ? item.actor !== undefined && input.actors.includes(item.actor)
+          : true,
       )
       .filter((item) => !input.unread_only || item.seq > room.readSeq)
       .slice(0, input.limit ?? 50);
-    const nextAfterSeq =
-      items.length > 0 ? items[items.length - 1].seq : undefined;
-    return {
-      items,
-      sync: this.syncState(key),
-      next_after_seq: nextAfterSeq,
-    };
-  }
-
-  private roomUnread(input: RoomUnreadInput): unknown {
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const room = this.localRoom(key);
-    let items = room.timeline
-      .filter((item) => item.seq > room.readSeq)
-      .slice(0, input.limit ?? 50);
-    const throughSeq =
-      items.length > 0 ? items[items.length - 1].seq : undefined;
-    if (input.mark_read) {
-      if (throughSeq !== undefined) room.readSeq = throughSeq;
-      items =
-        throughSeq !== undefined
-          ? room.timeline.filter((item) => item.seq <= throughSeq)
-          : [];
+    const lastSeq = items.length > 0 ? items[items.length - 1].seq : undefined;
+    if (input.mark_read && lastSeq !== undefined) {
+      room.readSeq = Math.max(room.readSeq, lastSeq);
+    }
+    // An unfiltered, gap-free read from the presented head presents the latest
+    // head it reaches (local connector Section 4.2).
+    if (input.types === undefined && input.actors === undefined && items.length > 0) {
+      const base = room.presentedSeq ?? 0;
+      const contiguous = items.every((item, index) => index === 0 || item.seq === items[index - 1].seq + 1);
+      if (contiguous && items[0].seq <= base + 1) this.presentThrough(room, lastSeq!);
     }
     return {
       items,
-      unread_count: unreadCount(room),
       sync: this.syncState(key),
-    };
-  }
-
-  private roomMarkRead(input: RoomMarkReadInput): unknown {
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const room = this.localRoom(key);
-    room.readSeq = Math.max(room.readSeq, input.through_seq);
-    return {
-      room_id: input.room_id,
-      read_seq: room.readSeq,
+      ...(lastSeq !== undefined ? { next_after_seq: lastSeq } : {}),
       unread_count: unreadCount(room),
     };
   }
@@ -833,7 +775,8 @@ export class LocalConnector {
       const entry = this.state.inbox.get(id);
       if (entry) {
         items.push(entry.item);
-        if (input.claim) entry.state = { kind: "claimed" };
+        // A claim is a lease, so a crashed session cannot hold the item forever.
+        if (input.claim) entry.state = { kind: "claimed", until: now + INBOX_CLAIM_LEASE_MS };
       }
     }
     return { items, pending_count: this.pendingInboxCount() };
@@ -855,8 +798,19 @@ export class LocalConnector {
   }
 
   private draftsList(input: DraftsListInput): unknown {
-    const offset = parseCursor(input.cursor);
-    const limit = input.limit ?? 50;
+    if (input.draft_id !== undefined) {
+      const entry = this.state.drafts.get(input.draft_id);
+      if (!entry) throw invalidPayload("draft not found");
+      const key: RoomKey = {
+        host: entry.draft.current_sync.host,
+        roomId: entry.draft.room_id,
+      };
+      const room = this.localRoom(key);
+      const changes = this.roomChangesSince(key, entry.draft.base_seq);
+      // The changes reach the current head, which is now presented.
+      this.presentHead(room, room.headSeq);
+      return { drafts: [entry.draft], changes, sync: this.syncState(key) };
+    }
     const host = input.host !== undefined ? normalizeHost(input.host) : undefined;
     const drafts = [...this.state.drafts.values()]
       .sort((a, b) => compareStrings(a.draft.id, b.draft.id))
@@ -868,97 +822,52 @@ export class LocalConnector {
       .filter((entry) =>
         host !== undefined ? entry.draft.current_sync.host === host : true,
       )
-      .slice(offset, offset + limit + 1)
       .map((entry) => entry.draft);
-    let nextCursor: string | undefined;
-    if (drafts.length > limit) {
-      drafts.pop();
-      nextCursor = String(offset + limit);
-    }
-    return { drafts, next_cursor: nextCursor };
-  }
-
-  private draftGet(input: DraftGetInput): unknown {
-    const entry = this.state.drafts.get(input.draft_id);
-    if (!entry) throw invalidPayload("draft not found");
-    const key: RoomKey = {
-      host: entry.draft.current_sync.host,
-      roomId: entry.draft.room_id,
-    };
-    return {
-      draft: entry.draft,
-      changes: this.roomChangesSince(key, entry.draft.base_seq),
-      sync: this.syncState(key),
-    };
+    const result = page(drafts, input.cursor, input.limit ?? 50);
+    return { drafts: result.items, ...(result.next_cursor ? { next_cursor: result.next_cursor } : {}) };
   }
 
   private async draftCommit(input: DraftCommitInput): Promise<unknown> {
     const entry = this.state.drafts.get(input.draft_id);
     if (!entry) throw invalidPayload("draft not found");
-
-    if (input.action === "stay_silent") {
+    if (input.action === "drop") {
       this.state.drafts.delete(input.draft_id);
       return { status: "dropped", draft_id: input.draft_id };
     }
-
-    let result: RoomWriteResult;
+    if (input.action !== "revise" && input.action !== "send") {
+      throw invalidPayload(`invalid draft action: ${input.action}`);
+    }
+    // Both actions sign against the presented head; a further mismatch is
+    // handled by on_head_mismatch.
+    let request: HeldDraftRequest;
     if (entry.request.kind === "message") {
-      const request: RoomSendMessageInput = { ...entry.request.input };
-      if (input.action === "send_anyway") {
-        request.base_seq = undefined;
-        request.base_hash = undefined;
-        request.on_head_mismatch = "send_anyway";
-        result = await this.submitMessageUnchecked(request);
-      } else {
-        if (input.action === "revise") {
-          if (input.content !== undefined) request.content = input.content;
-          if (input.content_type !== undefined)
-            request.content_type = input.content_type;
-          if (input.mentions !== undefined) request.mentions = input.mentions;
-          if (input.references !== undefined)
-            request.references = input.references;
-          if (input.extra !== undefined) request.extra = input.extra;
-        }
-        request.base_seq = input.base_seq;
-        request.base_hash = input.base_hash;
-        request.on_head_mismatch = input.on_head_mismatch;
-        result = await this.roomSendMessage(request);
+      const message: RoomSendMessageInput = { ...entry.request.input };
+      if (input.action === "revise") {
+        if (input.content !== undefined) message.content = input.content;
+        if (input.content_type !== undefined) message.content_type = input.content_type;
+        if (input.mentions !== undefined) message.mentions = input.mentions;
+        if (input.references !== undefined) message.references = input.references;
+        if (input.extra !== undefined) message.extra = input.extra;
       }
+      message.base_seq = undefined;
+      message.base_hash = undefined;
+      message.on_head_mismatch = input.on_head_mismatch;
+      request = { kind: "message", input: message };
     } else {
-      const request: RoomSubmitEventInput = { ...entry.request.input };
-      if (input.action === "send_anyway") {
-        request.base_seq = undefined;
-        request.base_hash = undefined;
-        request.on_head_mismatch = "send_anyway";
-        result = await this.submitEventUnchecked(request);
-      } else {
-        if (input.action === "revise") {
-          if (input.type !== undefined) request.type = input.type;
-          if (input.payload !== undefined) request.payload = input.payload;
-          if (input.mentions !== undefined) request.mentions = input.mentions;
-          if (input.references !== undefined)
-            request.references = input.references;
-        }
-        request.base_seq = input.base_seq;
-        request.base_hash = input.base_hash;
-        request.on_head_mismatch = input.on_head_mismatch;
-        result = await this.roomSubmitEvent(request);
+      const event: RoomSubmitEventInput = { ...entry.request.input };
+      if (input.action === "revise") {
+        if (input.type !== undefined) event.type = input.type;
+        if (input.payload !== undefined) event.payload = input.payload;
+        if (input.mentions !== undefined) event.mentions = input.mentions;
+        if (input.references !== undefined) event.references = input.references;
       }
+      event.base_seq = undefined;
+      event.base_hash = undefined;
+      event.on_head_mismatch = input.on_head_mismatch;
+      request = { kind: "event", input: event };
     }
-
-    if (result.status === "sent" || result.status === "held") {
-      this.state.drafts.delete(input.draft_id);
-    }
-    return result;
-  }
-
-  private draftDrop(input: DraftDropInput): unknown {
     this.state.drafts.delete(input.draft_id);
-    return {
-      status: "dropped",
-      draft_id: input.draft_id,
-      pending_count: this.state.drafts.size,
-    };
+    return this.submitRoomWrite(request);
   }
 
   /**
@@ -970,17 +879,28 @@ export class LocalConnector {
   private async resolvePrincipal(
     url: string,
   ): Promise<{ document: PrincipalDocument; alias: boolean }> {
-    const document = await this.delegationClient(url).principal(url);
+    const document = await new DelegationClient(url, this.fetchImpl).principal(url);
     return {
       document,
       alias: document.id !== url && isPrincipalAlias(document, url),
     };
   }
 
+  /** The principal's authoritative delegation service, located from its `delegation_query_url`. */
+  private async principalDelegationService(document: PrincipalDocument): Promise<DelegationClient> {
+    const queryUrl = document.delegation_query_url;
+    if (queryUrl === undefined) {
+      throw invalidPayload(`principal ${document.id} publishes no delegation_query_url`);
+    }
+    const origin = serviceOrigin(queryUrl);
+    this.requireAllowedHost(origin);
+    return DelegationClient.discover(origin, this.fetchImpl);
+  }
+
   /**
    * Resolves the principal and refuses when the active Agent ID is not one of
-   * its controller keys, so a grant that could never be accepted is not signed
-   * or transmitted.
+   * its current controller keys with delegation authority, so a grant that
+   * could never be accepted is not signed or transmitted.
    */
   private async controllerPrincipal(
     principalId: string,
@@ -1008,90 +928,110 @@ export class LocalConnector {
   }
 
   private async delegationCheck(input: DelegationCheckInput): Promise<unknown> {
+    if (typeof input.audience !== "string") throw invalidPayload("audience is required");
     const { document } = await this.resolvePrincipal(input.principal_id);
     // The authoritative service is the one the principal names, never one
     // supplied by whoever presented a credential.
-    const queryUrl = document.delegation_query_url;
-    if (queryUrl === undefined) {
-      throw invalidPayload(
-        `principal ${document.id} publishes no delegation_query_url`,
-      );
+    const service = await this.principalDelegationService(document);
+    const queryUrl = document.delegation_query_url!;
+    const response = await service.queryDelegationsAt(queryUrl, {
+      subject: input.subject ?? this.agentId(),
+      principal_id: document.id,
+      id: input.id,
+    });
+    const now = unixTimeMillis();
+    const delegations: DelegationVerdict[] = [];
+    for (const credential of response.result) {
+      let records: Awaited<ReturnType<DelegationClient["allDelegationEvents"]>> = [];
+      try {
+        records = await service.allDelegationEvents(credential.id);
+      } catch (error) {
+        delegations.push({ credential, verified: false, usable: false, reasons: [`history unavailable: ${error instanceof Error ? error.message : error}`] });
+        continue;
+      }
+      delegations.push(verifyDelegationCredential(credential, records, document, document.id, input.audience, now));
     }
-    const response = await this.delegationClient(queryUrl).queryDelegationsAt(
-      queryUrl,
-      {
-        subject: input.subject ?? this.agentId(),
-        principal_id: document.id,
-        id: input.id,
-        status: input.status,
-      },
-    );
-    return {
-      canonical_id: document.id,
-      query_url: queryUrl,
-      delegations: response.result,
-    };
+    return { canonical_id: document.id, query_url: queryUrl, delegations };
   }
 
   private async delegationsList(input: DelegationsListInput): Promise<unknown> {
     // Enumerating one subject requires authorization; the connector proves the
     // active identity and never enumerates anyone else.
-    const jwt = this.requestJwt(input.delegation_service);
-    const response = await this.delegationClient(
-      input.delegation_service,
-    ).queryDelegations(
+    const origin = serviceOrigin(input.delegation_service);
+    const jwt = this.requestJwt(origin);
+    const service = await DelegationClient.discover(origin, this.fetchImpl);
+    const response = await service.queryDelegations(
       {
         subject: this.agentId(),
         status: input.status,
         limit: input.limit,
+        cursor: input.cursor,
       },
       jwt,
     );
-    return { delegations: response.result };
+    return response.next_cursor !== undefined
+      ? { delegations: response.result, next_cursor: response.next_cursor }
+      : { delegations: response.result };
   }
 
-  private async delegationPrevious(principal: PrincipalDocument, service: string, id: string): Promise<DelegationCredential | undefined> {
-    this.requestJwt(service); // Enforce the operator host policy before any service request.
-    if (principal.delegation_query_url !== `${service.replace(/\/$/, "")}/v1/delegations/query`) {
-      throw invalidPayload("delegation service does not match principal authority");
-    }
-    try { return await this.delegationClient(service).delegation(id); }
+  private async delegationPrevious(service: DelegationClient, id: string): Promise<DelegationCredential | undefined> {
+    try { return await service.delegation(id); }
     catch (error) { if (error instanceof HttpResponseError && error.status === 404) return undefined; throw error; }
+  }
+
+  private async submitDelegation(
+    service: DelegationClient,
+    sign: () => Envelope<DelegationPayload>,
+  ): Promise<{ credential: DelegationCredential; envelope: Envelope<DelegationPayload> }> {
+    let envelope = sign();
+    try {
+      return { credential: await service.submitDelegationEvent(envelope), envelope };
+    } catch (error) {
+      if (!this.resyncNonce(error)) throw error;
+      envelope = sign();
+      return { credential: await service.submitDelegationEvent(envelope), envelope };
+    }
   }
 
   private async delegationGrant(input: DelegationGrantInput): Promise<unknown> {
     const principal = await this.controllerPrincipal(input.principal_id);
-    const previous = await this.delegationPrevious(principal, input.delegation_service, input.id);
+    const service = await this.principalDelegationService(principal);
+    const previous = await this.delegationPrevious(service, input.id);
     const payload: DelegationGrantPayload = {
-      id: input.id, principal: { id: principal.id }, subject: input.subject,
+      id: input.id, principal_id: principal.id, subject: input.subject,
       relationship: input.relationship, scopes: input.scopes, audiences: input.audiences,
       constraints: input.constraints, not_before: input.not_before, expires_at: input.expires_at,
     };
-    const createdAt = unixTimeMillis();
-    const event = delegationGrantEvent(this.agentId(), createdAt, this.nonces.nextNonce(), payload);
-    validateDelegationEventAuthority(event, principal, createdAt, previous);
-    const envelope = this.signer.signEvent(event);
-    const credential = await this.delegationClient(input.delegation_service).submitDelegationEvent(envelope);
-    return { credential, envelope };
+    for (const field of ["relationship", "constraints", "not_before", "expires_at"] as const) {
+      if (payload[field] === undefined) delete payload[field];
+    }
+    return this.submitDelegation(service, () => {
+      const createdAt = unixTimeMillis();
+      const event = delegationGrantEvent(this.agentId(), createdAt, this.nonces.nextNonce(createdAt), payload);
+      validateDelegationEventAuthority(event, principal, createdAt, previous);
+      return this.signer.signEvent(event) as Envelope<DelegationPayload>;
+    });
   }
 
   private async delegationRevoke(input: DelegationRevokeInput): Promise<unknown> {
     const principal = await this.controllerPrincipal(input.principal_id);
-    const previous = await this.delegationPrevious(principal, input.delegation_service, input.id);
-    const createdAt = unixTimeMillis();
-    const event = delegationRevokeEvent(this.agentId(), createdAt, this.nonces.nextNonce(), {
-      id: input.id, principal_id: principal.id, reason: input.reason,
+    const service = await this.principalDelegationService(principal);
+    const previous = await this.delegationPrevious(service, input.id);
+    return this.submitDelegation(service, () => {
+      const createdAt = unixTimeMillis();
+      const event = delegationRevokeEvent(this.agentId(), createdAt, this.nonces.nextNonce(createdAt), {
+        id: input.id, principal_id: principal.id, ...(input.reason !== undefined ? { reason: input.reason } : {}),
+      });
+      validateDelegationEventAuthority(event, principal, createdAt, previous);
+      return this.signer.signEvent(event) as Envelope<DelegationPayload>;
     });
-    validateDelegationEventAuthority(event, principal, createdAt, previous);
-    const envelope = this.signer.signEvent(event);
-    const result = await this.delegationClient(input.delegation_service).submitDelegationEvent(envelope);
-    return { result, envelope };
   }
 
   private async profileUpdate(input: ProfileUpdateInput): Promise<unknown> {
     if (!isRecord(input.profile)) {
       throw invalidPayload("profile must be an object");
     }
+    this.requireAllowedOrigin(input.profile_service);
     const profile: Record<string, unknown> = { ...input.profile };
     // payload.id is always the active Agent ID; reject an input that names a
     // different agent instead of silently rewriting it.
@@ -1101,12 +1041,16 @@ export class LocalConnector {
     } else if (profile.id !== activeId) {
       throw invalidPayload("profile.id must be the active Agent ID");
     }
-    const envelope = this.signProfileUpdate(
-      profile as unknown as ProfileUpdatePayload,
-    );
-    const materialized = await this.profileClient(
-      input.profile_service,
-    ).submitProfileUpdate(envelope);
+    const client = this.profileClient(input.profile_service);
+    let envelope = this.signProfileUpdate(profile as unknown as ProfileUpdatePayload);
+    let materialized: AgentProfile;
+    try {
+      materialized = await client.submitProfileUpdate(envelope);
+    } catch (error) {
+      if (!this.resyncNonce(error)) throw error;
+      envelope = this.signProfileUpdate(profile as unknown as ProfileUpdatePayload);
+      materialized = await client.submitProfileUpdate(envelope);
+    }
     this.state.profiles.set(materialized.id, materialized);
     return { profile: materialized, envelope };
   }
@@ -1115,6 +1059,8 @@ export class LocalConnector {
     const host = normalizeHost(input.host);
     this.requireAllowedHost(host);
     const payload: RoomCreatePayload = {
+      // Binds the signed event to this host (ADP Section 8.1).
+      host: serviceOrigin(host),
       topic: input.topic,
       visibility: input.visibility,
       start_time: input.start_time,
@@ -1125,14 +1071,29 @@ export class LocalConnector {
       language: input.language,
       policy: input.policy,
       types: input.types,
+      extra: input.extra,
     };
-    const envelope = this.signRoomCreate(payload);
-    const room = await this.discourse(host).createRoom(envelope);
+    for (const field of ["agenda", "guidance", "tags", "language", "policy", "types", "extra"] as const) {
+      if (payload[field] === undefined) delete payload[field];
+    }
+    const client = this.discourse(host);
+    let envelope = this.signRoomCreate(payload);
+    let room: RoomResponse;
+    try {
+      room = await client.createRoom(envelope);
+    } catch (error) {
+      if (!this.resyncNonce(error)) throw error;
+      envelope = this.signRoomCreate(payload);
+      room = await client.createRoom(envelope);
+    }
     if (!room.envelope) room.envelope = envelope;
     this.acceptRoomResponse(host, room);
     const key: RoomKey = { host, roomId: room.id };
+    const local = this.localRoom(key);
+    // The creator has seen its own room.
+    this.presentHead(local, local.headSeq);
     return {
-      room: this.roomStateView(this.localRoom(key)),
+      room: this.roomStateView(local),
       envelope,
       sync: this.syncState(key),
     };
@@ -1140,220 +1101,212 @@ export class LocalConnector {
 
   private async roomJoin(input: RoomJoinInput): Promise<unknown> {
     const roomId = input.room_id;
-    let key: RoomKey;
-    if (input.host !== undefined) {
-      const host = normalizeHost(input.host);
-      this.requireAllowedHost(host);
-      key = { host, roomId };
-    } else {
-      key = this.resolveRoomKey(undefined, roomId);
-      this.requireAllowedHost(key.host);
-    }
+    const key: RoomKey = input.host !== undefined
+      ? { host: normalizeHost(input.host), roomId }
+      : this.resolveRoomKey(undefined, roomId);
     const host = key.host;
-
-    if (!this.state.rooms.has(roomKeyString(key))) {
-      const room = await this.discourse(host).room(roomId);
-      this.acceptRoomResponse(host, room);
-    }
-
-    if (input.request_id !== undefined) {
-      const status = await this.approvedJoinRequest(
-        host,
-        roomId,
-        input.request_id,
-      );
-      const approvedRole = status.approved_role ?? status.request.role;
-      // The completion call signs room.join with the approved role; a differing
-      // input role is a mismatch error, never a silent substitution.
-      if (input.role !== approvedRole) {
-        throw invalidPayload(
-          `join_request_role_mismatch: approved role is ${approvedRole}`,
-        );
-      }
-      const payload: RoomJoinPayload = {
-        request_id: input.request_id,
-        role: approvedRole,
-      };
-      return this.completeJoin(host, key, payload);
-    }
-
-    if (roomVisibility(this.localRoom(key).room) === "public") {
-      const payload: RoomJoinPayload = {
-        request_id: undefined,
-        role: input.role,
-        perspective: input.perspective,
-      };
-      return this.completeJoin(host, key, payload);
-    }
-
-    const jwt = this.requestJwt(host);
-    const request: RoomJoinRequestInput = {
-      role: input.role,
-      perspective: input.perspective,
-      reason: input.reason,
-      extra: input.extra,
-    };
-    const status = await this.discourse(host).requestJoin(roomId, jwt, request);
-    this.pushJoinRequest(key, status);
-    let sync: SyncState | undefined;
-    try {
-      sync = this.syncState(key);
-    } catch {
-      sync = undefined;
-    }
-    return { status: "approval_required", join_request: status, sync };
-  }
-
-  private async roomJoinRequest(
-    input: RoomJoinRequestToolInput,
-  ): Promise<unknown> {
-    const host = normalizeHost(input.host);
     this.requireAllowedHost(host);
-    const jwt = this.requestJwt(host);
-    const request: RoomJoinRequestInput = {
-      role: input.role,
-      perspective: input.perspective,
-      reason: input.reason,
-      extra: input.extra,
-    };
-    const status = await this.discourse(host).requestJoin(
-      input.room_id,
-      jwt,
-      request,
-    );
-    this.pushJoinRequest({ host, roomId: input.room_id }, status);
-    return { join_request: status };
-  }
+    const keyStr = roomKeyString(key);
+    const agentId = this.agentId();
 
-  private async roomJoinWhenApproved(
-    input: RoomJoinWhenApprovedInput,
-  ): Promise<unknown> {
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const host = this.allowedRoomHost(key);
-    const status = await this.approvedJoinRequest(
-      host,
-      input.room_id,
-      input.request_id,
+    // A stored request decides the outcome until it resolves.
+    const own = this.state.ownJoinRequests.get(keyStr);
+    if (own && own.status === "pending") {
+      const current = await this.discourse(host).joinRequest(roomId, own.id, this.requestJwt(host));
+      this.state.ownJoinRequests.set(keyStr, current);
+      if (current.status === "pending") return { status: "approval_required", join_request: current, sync: this.maybeSync(key) };
+      if (current.status === "rejected") return { status: "rejected", join_request: current, sync: this.maybeSync(key) };
+      if (current.status === "approved") {
+        // The approving review record is the membership event.
+        await this.syncRoom(key);
+        const member = this.localRoom(key).members.get(agentId);
+        if (member?.status !== "active") throw invalidPayload("approved membership is not yet visible");
+        return { status: "joined", member, join_request: current, sync: this.syncState(key) };
+      }
+    }
+
+    // Read the room when possible: invitees and public rooms are readable.
+    if (!this.state.rooms.has(keyStr)) {
+      try {
+        const room = await this.discourse(host).room(roomId, this.requestJwt(host));
+        this.acceptRoomResponse(host, room);
+      } catch (error) {
+        if (!(error instanceof HttpResponseError)) throw error;
+      }
+    }
+    const local = this.state.rooms.get(keyStr);
+    const visibility = local ? roomVisibility(local.room) : undefined;
+    const direct =
+      local !== undefined &&
+      visibility !== undefined &&
+      canJoinDirectly(visibility, roomPolicy(local.room), agentId, input.role);
+    if (direct) {
+      const payload: RoomJoinPayload = { role: input.role };
+      if (input.perspective !== undefined) payload.perspective = input.perspective;
+      const record = await this.submitSigned(
+        () => this.signRoomEvent(eventType.ROOM_JOIN, key, undefined, undefined, [], payload),
+        (envelope) => this.discourse(host).joinRoom(roomId, envelope),
+      );
+      await this.applyOwnRecord(key, record as ServerRecord);
+      const member = this.localRoom(key).members.get(agentId);
+      if (!member) throw invalidPayload("joined member not materialized");
+      return { status: "joined", record, member, sync: this.syncState(key) };
+    }
+
+    const requestPayload: RoomJoinRequestPayload = { role: input.role };
+    if (input.perspective !== undefined) requestPayload.perspective = input.perspective;
+    if (input.reason !== undefined) requestPayload.reason = input.reason;
+    if (input.extra !== undefined) requestPayload.extra = input.extra;
+    const request = await this.submitSigned(
+      () => this.signJoinRequest(roomId, requestPayload),
+      (envelope) => this.discourse(host).requestJoin(roomId, envelope),
     );
-    const role = status.approved_role ?? status.request.role;
-    const payload: RoomJoinPayload = {
-      request_id: input.request_id,
-      role,
-    };
-    const result = await this.completeJoin(host, key, payload);
-    return { record: result.record, member: result.member, sync: result.sync };
+    this.state.ownJoinRequests.set(keyStr, request);
+    return { status: "approval_required", join_request: request, sync: this.maybeSync(key) };
   }
 
   private async roomLeave(input: RoomLeaveInput): Promise<unknown> {
     const key = this.resolveRoomKey(input.host, input.room_id);
     const host = this.allowedRoomHost(key);
-    const payload: ReasonPayload = {
-      reason: input.reason,
-      references: [],
-      extra: {},
-    };
-    const envelope = this.signRoomEvent(
-      eventType.ROOM_LEAVE,
-      key,
-      undefined,
-      undefined,
-      [],
-      payload,
+    const payload: ReasonPayload = {};
+    if (input.reason !== undefined) payload.reason = input.reason;
+    const record = await this.submitSigned(
+      () => this.signRoomEvent(eventType.ROOM_LEAVE, key, undefined, undefined, [], payload),
+      (envelope) => this.discourse(host).leaveRoom(input.room_id, envelope),
     );
-    const record = await this.discourse(host).leaveRoom(input.room_id, envelope);
-    this.applyHostRecord(host, record as ServerRecord);
+    await this.applyOwnRecord(key, record as ServerRecord);
     return { record, sync: this.syncState(key) };
   }
 
   private async roomSendMessage(
     input: RoomSendMessageInput,
   ): Promise<RoomWriteResult> {
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const held = this.headMismatchMessageResult(key, input);
-    if (held) return held;
-    return this.submitMessageUnchecked(input);
-  }
-
-  private async submitMessageUnchecked(
-    input: RoomSendMessageInput,
-  ): Promise<RoomWriteResult> {
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const host = this.allowedRoomHost(key);
-    const payload: MessageCreatePayload = {
-      content_type: input.content_type ?? "text/plain",
-      content: input.content,
-    };
-    if (input.references && input.references.length > 0) {
-      payload.references = input.references;
-    }
-    if (input.extra && Object.keys(input.extra).length > 0) {
-      payload.extra = input.extra;
-    }
-    const envelope = this.signRoomEvent(
-      eventType.MESSAGE_CREATE,
-      key,
-      input.base_seq,
-      input.base_hash,
-      input.mentions ?? [],
-      payload,
-    );
-    const record = await this.discourse(host).submitEvent(
-      input.room_id,
-      envelope,
-    );
-    this.applyHostRecord(host, record as ServerRecord);
-    const item = this.timelineItemByEvent(key, record.envelope.hash);
-    return {
-      status: "sent",
-      record: record as ServerRecord,
-      item,
-      sync: this.syncState(key),
-    };
+    return this.submitRoomWrite({ kind: "message", input: { ...input } });
   }
 
   private async roomSubmitEvent(
     input: RoomSubmitEventInput,
   ): Promise<RoomWriteResult> {
-    // For signal-kind writes — including the membership events — the base is
-    // only an anchor: never hold the draft, ignore on_head_mismatch.
-    const key = this.resolveRoomKey(input.host, input.room_id);
-    const room = this.state.rooms.get(roomKeyString(key));
-    const advancesHead = room
-      ? eventTypeAdvancesRoomHead(room, input.type)
-      : true;
-    if (advancesHead) {
-      const held = this.headMismatchEventResult(key, input);
-      if (held) return held;
-    }
-    return this.submitEventUnchecked(input);
+    return this.submitRoomWrite({ kind: "event", input: { ...input } });
   }
 
-  private async submitEventUnchecked(
-    input: RoomSubmitEventInput,
-  ): Promise<RoomWriteResult> {
+  /**
+   * One room write under the Section 5.1 freshness rules. Contract and signal
+   * writes only anchor, so they are signed against the base and never held.
+   * Head-bound writes apply `on_head_mismatch` when the local head or the
+   * host's `room_head_mismatch` shows the room moved.
+   */
+  private async submitRoomWrite(request: HeldDraftRequest): Promise<RoomWriteResult> {
+    const input = request.input;
     const key = this.resolveRoomKey(input.host, input.room_id);
     const host = this.allowedRoomHost(key);
-    const payload = payloadWithReferences(input.payload, input.references ?? []);
-    const envelope = this.signRoomEvent(
-      input.type,
-      key,
-      input.base_seq,
-      input.base_hash,
-      input.mentions ?? [],
-      payload,
-    );
-    const record = await this.discourse(host).submitEvent(
-      input.room_id,
-      envelope,
-    );
-    this.applyHostRecord(host, record as ServerRecord);
-    const item = this.timelineItemByEvent(key, record.envelope.hash);
-    return {
-      status: "sent",
-      record: record as ServerRecord,
-      item,
-      sync: this.syncState(key),
-    };
+    const type = request.kind === "message" ? eventType.MESSAGE_CREATE : request.input.type;
+    const headBound = eventTypeRequiresRoomHead(this.localRoom(key), type);
+    if ((input.base_seq === undefined) !== (input.base_hash === undefined)) {
+      throw invalidPayload("base_seq and base_hash must be provided together");
+    }
+    let base: [number, string] = this.writeBase(key, input.base_seq, input.base_hash);
+    const policy: HeadMismatchPolicy = input.on_head_mismatch ?? "hold";
+    for (let attempts = 0; ; attempts++) {
+      if (headBound) {
+        const room = this.localRoom(key);
+        if (base[0] !== room.headSeq || base[1] !== room.headHash) {
+          if (policy === "send_anyway" && attempts < SEND_ANYWAY_MAX_ATTEMPTS) {
+            base = [room.headSeq, room.headHash!];
+          } else {
+            return policy === "reject"
+              ? this.rejectedHeadMismatch(key, base[0])
+              : this.holdDraft(key, request, base);
+          }
+        }
+      }
+      const presentedSeq = this.localRoom(key).presentedSeq;
+      try {
+        const record = await this.submitSigned(
+          () => this.signWrite(request, key, base),
+          (envelope) => this.discourse(host).submitEvent(input.room_id, envelope),
+        );
+        await this.applyOwnRecord(key, record as ServerRecord);
+        const after = this.localRoom(key);
+        // The agent's own write extends what it saw only when nothing it has
+        // not seen advanced the head in between.
+        if (after.headSeq === record.seq && this.headBefore(after, record.seq) === presentedSeq) {
+          this.presentHead(after, record.seq);
+        }
+        return {
+          status: "sent",
+          record: record as ServerRecord,
+          item: this.timelineItemByEvent(key, record.envelope.hash),
+          sync: this.syncState(key),
+        };
+      } catch (error) {
+        if (!headBound || !isHttpError(error, "room_head_mismatch")) throw error;
+        await this.syncRoom(key);
+        // A host that reports a mismatch the verified history does not show
+        // cannot be resolved by retrying.
+        const synced = this.localRoom(key);
+        if (base[0] === synced.headSeq && base[1] === synced.headHash) throw error;
+      }
+    }
+  }
+
+  /**
+   * Applies the record the host returned for the agent's own write, first
+   * syncing any records accepted before it that the connector has not seen.
+   */
+  private async applyOwnRecord(key: RoomKey, record: ArchiveRecord): Promise<void> {
+    const room = this.localRoom(key);
+    if (record.seq > room.syncedSeq + 1) await this.syncRoom(key);
+    else this.applyHostRecord(key.host, record);
+  }
+
+  /** Seq of the latest head-advancing record before `seq`, or 0. */
+  private headBefore(room: LocalRoomState, seq: number): number {
+    for (let s = seq - 1; s > 0; s--) {
+      const record = room.records.find((candidate) => candidate.seq === s);
+      if (record && recordAdvancesRoomHead(room, record)) return s;
+    }
+    return room.headSeq < seq ? room.headSeq : 0;
+  }
+
+  /** Signs and submits once, re-signing a single time after a bounded Max-Seen-Nonce resync. */
+  private async submitSigned<P, T>(
+    sign: () => Envelope<P>,
+    submit: (envelope: Envelope<P>) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await submit(sign());
+    } catch (error) {
+      if (!this.resyncNonce(error)) throw error;
+      return submit(sign());
+    }
+  }
+
+  /** Applies `Max-Seen-Nonce` from a `nonce_not_greater` rejection; reports whether to retry. */
+  private resyncNonce(error: unknown): boolean {
+    if (!isHttpError(error, "nonce_not_greater") || error.maxSeenNonce === undefined) return false;
+    this.nonces.observeMaxNonce(error.maxSeenNonce);
+    return true;
+  }
+
+  private signWrite(
+    request: HeldDraftRequest,
+    key: RoomKey,
+    base: [number, string],
+  ): Envelope<unknown> {
+    if (request.kind === "message") {
+      const input = request.input;
+      const payload: MessageCreatePayload = {
+        content_type: input.content_type ?? "text/plain",
+        content: input.content,
+      };
+      if (input.references && input.references.length > 0) payload.references = input.references;
+      if (input.extra && Object.keys(input.extra).length > 0) payload.extra = input.extra;
+      return this.signRoomEvent(eventType.MESSAGE_CREATE, key, base[0], base[1], input.mentions ?? [], payload);
+    }
+    const input = request.input;
+    const payload = payloadWithReferences({ ...input.payload }, input.references ?? []);
+    return this.signRoomEvent(input.type, key, base[0], base[1], input.mentions ?? [], payload);
   }
 
   private async joinRequestsList(
@@ -1361,16 +1314,15 @@ export class LocalConnector {
   ): Promise<unknown> {
     const key = this.resolveRoomKey(input.host, input.room_id);
     const host = this.allowedRoomHost(key);
-    const jwt = this.requestJwt(host);
-    let requests = await this.discourse(host).joinRequests(input.room_id, jwt);
-    if (input.status !== undefined) {
-      requests = requests.filter((request) => request.status === input.status);
-    }
-    const offset = parseCursor(input.cursor);
-    if (offset > 0) requests = requests.slice(offset);
-    if (input.limit !== undefined) requests = requests.slice(0, input.limit);
-    this.state.joinRequests.set(roomKeyString(key), requests);
-    return { join_requests: requests };
+    const response = await this.discourse(host).joinRequests(input.room_id, this.requestJwt(host), {
+      status: input.status,
+      limit: input.limit,
+      cursor: input.cursor,
+    });
+    this.state.joinRequests.set(roomKeyString(key), response.result);
+    return response.next_cursor !== undefined
+      ? { join_requests: response.result, next_cursor: response.next_cursor }
+      : { join_requests: response.result };
   }
 
   private async joinRequestReview(
@@ -1378,87 +1330,26 @@ export class LocalConnector {
   ): Promise<unknown> {
     const key = this.resolveRoomKey(input.host, input.room_id);
     const host = this.allowedRoomHost(key);
-    const jwt = this.requestJwt(host);
-    const status = await this.discourse(host).joinRequest(
+    if (input.decision === "approve" && input.role === undefined) {
+      throw invalidPayload("approving a join request requires a role");
+    }
+    const joinRequest = await this.discourse(host).joinRequest(
       input.room_id,
       input.request_id,
-      jwt,
+      this.requestJwt(host),
     );
     const payload: RoomJoinReviewPayload = {
-      request: status.request,
+      request: joinRequest.request,
       decision: input.decision,
-      role: input.role,
-      reason: input.reason,
-      extra: {},
     };
-    const envelope = this.signRoomEvent(
-      eventType.ROOM_JOIN_REVIEW,
-      key,
-      undefined,
-      undefined,
-      [],
-      payload,
+    if (input.role !== undefined) payload.role = input.role;
+    if (input.reason !== undefined) payload.reason = input.reason;
+    const record = await this.submitSigned(
+      () => this.signRoomEvent(eventType.ROOM_JOIN_REVIEW, key, undefined, undefined, [], payload),
+      (envelope) => this.discourse(host).submitEvent(input.room_id, envelope),
     );
-    const record = await this.discourse(host).submitEvent(
-      input.room_id,
-      envelope,
-    );
-    this.applyHostRecord(host, record as ServerRecord);
+    await this.applyOwnRecord(key, record as ServerRecord);
     return { record, sync: this.syncState(key) };
-  }
-
-  // ── Join helpers shared by the join tools.
-
-  private async approvedJoinRequest(
-    host: string,
-    roomId: string,
-    requestId: string,
-  ): Promise<RoomJoinRequestStatus> {
-    const jwt = this.requestJwt(host);
-    const status = await this.discourse(host).joinRequest(
-      roomId,
-      requestId,
-      jwt,
-    );
-    if (status.request.applicant !== this.agentId()) {
-      throw invalidPayload("join request belongs to another agent");
-    }
-    if (status.status !== "approved") {
-      throw invalidPayload("join request is not approved");
-    }
-    return status;
-  }
-
-  private async completeJoin(
-    host: string,
-    key: RoomKey,
-    payload: RoomJoinPayload,
-  ): Promise<{ status: "joined"; record: ServerRecord; member: RoomMemberView; sync: SyncState }> {
-    const envelope = this.signRoomEvent(
-      eventType.ROOM_JOIN,
-      key,
-      undefined,
-      undefined,
-      [],
-      payload,
-    );
-    const record = await this.discourse(host).joinRoom(key.roomId, envelope);
-    this.applyHostRecord(host, record as ServerRecord);
-    const member = this.localRoom(key).members.get(this.agentId());
-    if (!member) throw invalidPayload("joined member not materialized");
-    return {
-      status: "joined",
-      record: record as ServerRecord,
-      member,
-      sync: this.syncState(key),
-    };
-  }
-
-  private pushJoinRequest(key: RoomKey, status: RoomJoinRequestStatus): void {
-    const keyStr = roomKeyString(key);
-    const existing = this.state.joinRequests.get(keyStr);
-    if (existing) existing.push(status);
-    else this.state.joinRequests.set(keyStr, [status]);
   }
 
   // ── Signing.
@@ -1466,10 +1357,11 @@ export class LocalConnector {
   private signProfileUpdate(
     payload: ProfileUpdatePayload,
   ): Envelope<ProfileUpdatePayload> {
+    const createdAt = unixTimeMillis();
     const event = profileUpdateEvent(
       this.agentId(),
-      unixTimeMillis(),
-      this.nonces.nextNonce(),
+      createdAt,
+      this.nonces.nextNonce(createdAt),
       payload,
     );
     return this.signer.signEvent(event);
@@ -1478,10 +1370,28 @@ export class LocalConnector {
   private signRoomCreate(
     payload: RoomCreatePayload,
   ): Envelope<RoomCreatePayload> {
+    const createdAt = unixTimeMillis();
     const event = roomCreateEvent(
       this.agentId(),
-      unixTimeMillis(),
-      this.nonces.nextNonce(),
+      createdAt,
+      this.nonces.nextNonce(createdAt),
+      payload,
+    );
+    const envelope = this.signer.signEvent(event);
+    validateDiscourseEnvelope(envelope);
+    return envelope;
+  }
+
+  private signJoinRequest(
+    roomId: string,
+    payload: RoomJoinRequestPayload,
+  ): Envelope<RoomJoinRequestPayload> {
+    const createdAt = unixTimeMillis();
+    const event = roomJoinRequestEvent(
+      this.agentId(),
+      createdAt,
+      this.nonces.nextNonce(createdAt),
+      roomId,
       payload,
     );
     const envelope = this.signer.signEvent(event);
@@ -1499,30 +1409,29 @@ export class LocalConnector {
   ): Envelope<P> {
     const host = this.localRoom(key).host;
     this.requireAllowedHost(host);
-    const [resolvedSeq, resolvedHash] = this.roomHeadForWrite(
-      key,
-      baseSeq,
-      baseHash,
+    const [resolvedSeq, resolvedHash] = this.writeBase(key, baseSeq, baseHash);
+    const createdAt = unixTimeMillis();
+    let event = discourseEvent(
+      type,
+      this.agentId(),
+      createdAt,
+      this.nonces.nextNonce(createdAt),
+      key.roomId,
+      resolvedSeq,
+      resolvedHash,
+      payload,
     );
-    const event = withMentions(
-      discourseEvent(
-        type,
-        this.agentId(),
-        unixTimeMillis(),
-        this.nonces.nextNonce(),
-        key.roomId,
-        resolvedSeq,
-        resolvedHash,
-        payload,
-      ),
-      mentions,
-    );
+    if (mentions.length > 0) event = withMentions(event, mentions);
     const envelope = this.signer.signEvent(event);
     validateDiscourseEnvelope(envelope);
     return envelope;
   }
 
-  private roomHeadForWrite(
+  /**
+   * The base for a write: the explicit base, else the presented head, else the
+   * current verified head (local connector Section 4.2).
+   */
+  private writeBase(
     key: RoomKey,
     baseSeq: number | undefined,
     baseHash: string | undefined,
@@ -1533,14 +1442,18 @@ export class LocalConnector {
         "base_seq and base_hash must identify a valid room head",
       );
     }
-    if (baseSeq === undefined && baseHash === undefined) {
-      const sync = this.syncState(key);
-      if (sync.head_seq === 0 || sync.head_hash.trim() === "") {
-        throw invalidPayload("current room head is not known locally");
-      }
-      return [sync.head_seq, sync.head_hash];
+    if (baseSeq !== undefined || baseHash !== undefined) {
+      throw invalidPayload("base_seq and base_hash must be provided together");
     }
-    throw invalidPayload("base_seq and base_hash must be provided together");
+    const room = this.localRoom(key);
+    if (room.presentedSeq !== undefined && room.presentedHash !== undefined) {
+      return [room.presentedSeq, room.presentedHash];
+    }
+    const sync = this.syncState(key);
+    if (sync.head_seq === 0 || sync.head_hash.trim() === "") {
+      throw invalidPayload("current room head is not known locally");
+    }
+    return [sync.head_seq, sync.head_hash];
   }
 
   private requestJwt(host: string): string {
@@ -1557,135 +1470,80 @@ export class LocalConnector {
     return this.signer.signRequestJwt(claims);
   }
 
+  // ── Presented head.
+
+  /** Presents the head at `seq`, which must be a known head-advancing record or the current head. */
+  private presentHead(room: LocalRoomState, seq: number): void {
+    if (seq <= 0) return;
+    const hash = seq === room.headSeq
+      ? room.headHash
+      : room.records.find((record) => record.seq === seq)?.hash;
+    if (hash === undefined) return;
+    room.presentedSeq = seq;
+    room.presentedHash = hash;
+  }
+
+  /** Presents the latest head-advancing record at or before `seq`, if it moves the presented head forward. */
+  private presentThrough(room: LocalRoomState, seq: number): void {
+    const base = room.presentedSeq ?? 0;
+    for (let s = Math.min(seq, room.syncedSeq); s > base; s--) {
+      const record = room.records.find((candidate) => candidate.seq === s);
+      if (record && recordAdvancesRoomHead(room, record)) {
+        room.presentedSeq = s;
+        room.presentedHash = record.hash;
+        return;
+      }
+    }
+  }
+
   // ── Head-mismatch handling and draft holding.
 
-  private headMismatchMessageResult(
-    key: RoomKey,
-    input: RoomSendMessageInput,
-  ): RoomWriteResult | undefined {
-    const headMismatch = this.headMismatchWriteState(
-      key,
-      input.base_seq,
-      input.base_hash,
-    );
-    if (!headMismatch) return undefined;
-    switch (input.on_head_mismatch ?? "hold") {
-      case "send_anyway":
-        input.base_seq = undefined;
-        input.base_hash = undefined;
-        return undefined;
-      case "reject":
-        return this.rejectedHeadMismatchResult(headMismatch);
-      default:
-        return this.holdMessageDraft(input, headMismatch);
-    }
-  }
-
-  private headMismatchEventResult(
-    key: RoomKey,
-    input: RoomSubmitEventInput,
-  ): RoomWriteResult | undefined {
-    const headMismatch = this.headMismatchWriteState(
-      key,
-      input.base_seq,
-      input.base_hash,
-    );
-    if (!headMismatch) return undefined;
-    switch (input.on_head_mismatch ?? "hold") {
-      case "send_anyway":
-        input.base_seq = undefined;
-        input.base_hash = undefined;
-        return undefined;
-      case "reject":
-        return this.rejectedHeadMismatchResult(headMismatch);
-      default:
-        return this.holdEventDraft(input, headMismatch);
-    }
-  }
-
-  private headMismatchWriteState(
-    key: RoomKey,
-    baseSeq: number | undefined,
-    baseHash: string | undefined,
-  ): HeadMismatchState | undefined {
-    if (baseSeq === undefined && baseHash === undefined) return undefined;
-    const sync = this.syncState(key);
-    const seqMismatch = baseSeq !== undefined && baseSeq !== sync.head_seq;
-    const hashMismatch = baseHash !== undefined && sync.head_hash !== baseHash;
-    if (!seqMismatch && !hashMismatch) return undefined;
-    return { sync, changes: this.roomChangesSince(key, baseSeq) };
-  }
-
-  private rejectedHeadMismatchResult(
-    headMismatch: HeadMismatchState,
-  ): RoomWriteResult {
+  private rejectedHeadMismatch(key: RoomKey, baseSeq: number): RoomWriteResult {
+    const room = this.localRoom(key);
+    const changes = this.roomChangesSince(key, baseSeq);
+    this.presentHead(room, room.headSeq);
     return {
       status: "rejected",
       reason: "room_head_mismatch",
-      changes: headMismatch.changes,
-      sync: headMismatch.sync,
+      changes,
+      sync: this.syncState(key),
     };
   }
 
-  private holdMessageDraft(
-    input: RoomSendMessageInput,
-    headMismatch: HeadMismatchState,
-  ): RoomWriteResult {
-    input.host = headMismatch.sync.host;
+  private holdDraft(key: RoomKey, request: HeldDraftRequest, base: [number, string]): RoomWriteResult {
+    const room = this.localRoom(key);
+    const changes = this.roomChangesSince(key, base[0]);
+    // The held result shows every change up to the current head.
+    this.presentHead(room, room.headSeq);
+    const sync = this.syncState(key);
+    const input = { ...request.input, host: sync.host, base_seq: base[0], base_hash: base[1] };
     const draftId = this.nextDraftId(input.room_id);
     const draft: HeldDraft = {
       id: draftId,
       room_id: input.room_id,
-      kind: "message",
+      kind: request.kind,
       created_at: unixTimeMillis(),
-      base_seq: input.base_seq,
-      base_hash: input.base_hash,
-      current_sync: headMismatch.sync,
-      draft: messageDraftValue(input),
+      base_seq: base[0],
+      base_hash: base[1],
+      current_sync: sync,
+      draft: request.kind === "message"
+        ? messageDraftValue(input as RoomSendMessageInput)
+        : eventDraftValue(input as RoomSubmitEventInput),
       reason: "room_head_mismatch",
       options: heldDraftOptions(),
     };
     this.state.drafts.set(draftId, {
       draft,
-      request: { kind: "message", input },
+      request: request.kind === "message"
+        ? { kind: "message", input: input as RoomSendMessageInput }
+        : { kind: "event", input: input as RoomSubmitEventInput },
     });
     return {
       status: "held",
       reason: "room_head_mismatch",
       draft,
-      changes: headMismatch.changes,
-      sync: headMismatch.sync,
-    };
-  }
-
-  private holdEventDraft(
-    input: RoomSubmitEventInput,
-    headMismatch: HeadMismatchState,
-  ): RoomWriteResult {
-    input.host = headMismatch.sync.host;
-    const draftId = this.nextDraftId(input.room_id);
-    const draft: HeldDraft = {
-      id: draftId,
-      room_id: input.room_id,
-      kind: "event",
-      created_at: unixTimeMillis(),
-      base_seq: input.base_seq,
-      base_hash: input.base_hash,
-      current_sync: headMismatch.sync,
-      draft: eventDraftValue(input),
-      reason: "room_head_mismatch",
-      options: heldDraftOptions(),
-    };
-    this.state.drafts.set(draftId, {
-      draft,
-      request: { kind: "event", input },
-    });
-    return {
-      status: "held",
-      reason: "room_head_mismatch",
-      draft,
-      changes: headMismatch.changes,
-      sync: headMismatch.sync,
+      changes,
+      sync,
     };
   }
 
@@ -1704,7 +1562,9 @@ export class LocalConnector {
     const room = [...roomId]
       .map((ch) => (/[A-Za-z0-9_-]/.test(ch) ? ch : "_"))
       .join("");
-    return `draft_${room}_${this.state.drafts.size + 1}`;
+    let n = this.state.drafts.size + 1;
+    while (this.state.drafts.has(`draft_${room}_${n}`)) n += 1;
+    return `draft_${room}_${n}`;
   }
 
   // ── Views.
@@ -1718,12 +1578,19 @@ export class LocalConnector {
       room_id: key.roomId,
       head_seq: room.headSeq,
       head_hash: headHash,
+      ...(room.presentedSeq !== undefined
+        ? { presented_seq: room.presentedSeq, presented_hash: room.presentedHash }
+        : {}),
       synced_seq: room.syncedSeq,
       remote_seq: Math.max(room.room.seq, room.syncedSeq),
       subscribed: room.subscribed,
       unread_count: unreadCount(room),
       pending_inbox_count: this.pendingInboxCount(key.roomId),
     };
+  }
+
+  private maybeSync(key: RoomKey): SyncState | undefined {
+    return this.state.rooms.has(roomKeyString(key)) ? this.syncState(key) : undefined;
   }
 
   private roomStateView(room: LocalRoomState): RoomStateView {
@@ -1736,8 +1603,8 @@ export class LocalConnector {
       topic: roomTopic(room.room),
       agenda: roomAgenda(room.room),
       guidance: roomGuidance(room.room),
-      creator: room.room.envelope?.event.actor,
-      created_at: room.room.envelope?.event.created_at,
+      creator: room.room.creator ?? room.room.envelope?.event.actor,
+      created_at: room.room.created_at ?? room.room.envelope?.event.created_at,
       start_time: roomStartTime(room.room),
       end_time: roomEndTime(room.room),
       tags: roomTags(room.room),
@@ -1785,8 +1652,21 @@ export class LocalConnector {
   }
 
   private requireAllowedHost(host: string): void {
-    const record = this.state.hosts.get(host);
+    const record = this.state.hosts.get(normalizeHost(host));
     if (!record || !record.allowed) throw permissionDenied();
+  }
+
+  /**
+   * Operator policy for a service URL that is not a discourse host: its origin
+   * must be an allowed host or the profile service of one.
+   */
+  private requireAllowedOrigin(url: string): void {
+    const origin = serviceOrigin(url);
+    if (this.state.hosts.get(origin)?.allowed) return;
+    for (const host of this.state.hosts.values()) {
+      if (host.allowed && host.profile_service !== undefined && serviceOrigin(host.profile_service) === origin) return;
+    }
+    throw permissionDenied();
   }
 
   private allowedRoomHost(key: RoomKey): string {
@@ -1830,9 +1710,5 @@ export class LocalConnector {
 
   private profileClient(url: string): ProfileClient {
     return new ProfileClient(url, this.fetchImpl);
-  }
-
-  private delegationClient(url: string): DelegationClient {
-    return new DelegationClient(url, this.fetchImpl);
   }
 }

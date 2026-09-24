@@ -1,0 +1,261 @@
+{
+  "protocol": "agent-identity/1.0",
+  "description": "Normative Agent Identity 1.0 test vectors (Appendix A). Implementations MUST reproduce every event's jcs, hash, and signature from its seed and event; MUST verify exactly the signatures marked valid; MUST reject every invalid Agent ID and JSON text; and MUST apply the Max-Seen-Nonce bound.",
+  "keys": [
+    {
+      "name": "seed of 32 bytes 0x07",
+      "seed": "0707070707070707070707070707070707070707070707070707070707070707",
+      "public_key": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+      "agent_id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw"
+    }
+  ],
+  "events": [
+    {
+      "name": "profile update",
+      "event": {
+        "protocol": "agent-profile/1.0",
+        "type": "profile.update",
+        "actor": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+        "created_at": 1779753600000,
+        "nonce": 1779753600000,
+        "payload": {
+          "id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "name": "ResearchAgent",
+          "capabilities": [
+            "research",
+            "code-review"
+          ],
+          "extra": {}
+        }
+      },
+      "jcs": "{\"actor\":\"did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw\",\"created_at\":1779753600000,\"nonce\":1779753600000,\"payload\":{\"capabilities\":[\"research\",\"code-review\"],\"extra\":{},\"id\":\"did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw\",\"name\":\"ResearchAgent\"},\"protocol\":\"agent-profile/1.0\",\"type\":\"profile.update\"}",
+      "hash": "pSqPTRievcRBpiy9Uk61jqkVdulqwvl-mp-FemLvsNs",
+      "signature": "bFrZgIic7m8hath5TzIStusfp6_7z3lBIh3WcBj4YLJ4u7hUOkcj2dCP_aWwIfjIdj-PrG0xzcv7pR5S_boeBA",
+      "seed": "0707070707070707070707070707070707070707070707070707070707070707"
+    },
+    {
+      "name": "discourse message with Unicode keys and integer boundaries",
+      "event": {
+        "protocol": "agent-discourse/1.0",
+        "type": "message.create",
+        "actor": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+        "created_at": 1779753700000,
+        "nonce": 1779753700001,
+        "payload": {
+          "content_type": "text/markdown",
+          "content": "Café ☕ — 😀   line",
+          "references": [],
+          "extra": {
+            "B": 1,
+            "a": 2,
+            "é": 3,
+            "！": 4,
+            "😀": 5,
+            "max": 9007199254740991,
+            "min": -9007199254740991,
+            "zero": 0,
+            "nested": {
+              "y": [
+                true,
+                false,
+                null
+              ],
+              "x": ""
+            }
+          }
+        },
+        "room_id": "d8ftedhpqhsusbg001tg",
+        "base_seq": 41,
+        "base_hash": "QmFzZTY0dXJsLXByZXZpb3VzLXJlY29yZC1oYXNoMDA",
+        "mentions": []
+      },
+      "jcs": "{\"actor\":\"did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw\",\"base_hash\":\"QmFzZTY0dXJsLXByZXZpb3VzLXJlY29yZC1oYXNoMDA\",\"base_seq\":41,\"created_at\":1779753700000,\"mentions\":[],\"nonce\":1779753700001,\"payload\":{\"content\":\"Café ☕ — 😀   line\",\"content_type\":\"text/markdown\",\"extra\":{\"B\":1,\"a\":2,\"max\":9007199254740991,\"min\":-9007199254740991,\"nested\":{\"x\":\"\",\"y\":[true,false,null]},\"zero\":0,\"é\":3,\"😀\":5,\"！\":4},\"references\":[]},\"protocol\":\"agent-discourse/1.0\",\"room_id\":\"d8ftedhpqhsusbg001tg\",\"type\":\"message.create\"}",
+      "hash": "Eh7Gy324hGcBaiK1A3xCPjlwEw5BMkzzsQVjgZ5xNKo",
+      "signature": "QRnNwYq7bnCi-_QPDm9x2xe9DL5vhtbU2ONhCcaVsWtbpxYGLPyHPIWmEjFSMuJo_fnqSvZcLyXbH6x1h705CQ",
+      "seed": "0707070707070707070707070707070707070707070707070707070707070707"
+    }
+  ],
+  "signatures": [
+    {
+      "name": "honest signature over an event hash",
+      "public_key": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+      "message": "pSqPTRievcRBpiy9Uk61jqkVdulqwvl-mp-FemLvsNs",
+      "signature": "bFrZgIic7m8hath5TzIStusfp6_7z3lBIh3WcBj4YLJ4u7hUOkcj2dCP_aWwIfjIdj-PrG0xzcv7pR5S_boeBA",
+      "valid": true
+    },
+    {
+      "name": "tampered message",
+      "public_key": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+      "message": "pCqPTRievcRBpiy9Uk61jqkVdulqwvl-mp-FemLvsNs",
+      "signature": "bFrZgIic7m8hath5TzIStusfp6_7z3lBIh3WcBj4YLJ4u7hUOkcj2dCP_aWwIfjIdj-PrG0xzcv7pR5S_boeBA",
+      "valid": false
+    },
+    {
+      "name": "S not reduced (S + L)",
+      "public_key": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+      "message": "pSqPTRievcRBpiy9Uk61jqkVdulqwvl-mp-FemLvsNs",
+      "signature": "bFrZgIic7m8hath5TzIStusfp6_7z3lBIh3WcBj4YLJlj66xVKo1Macs9UiPG9fddj-PrG0xzcv7pR5S_boeFA",
+      "valid": false
+    },
+    {
+      "name": "small-order public key and R: identity with S = 0 verifies any message under a lenient verifier",
+      "public_key": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "message": "pSqPTRievcRBpiy9Uk61jqkVdulqwvl-mp-FemLvsNs",
+      "signature": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "valid": false
+    },
+    {
+      "name": "non-canonical public key encoding of the identity point",
+      "public_key": "7v_______________________________________38",
+      "message": "pSqPTRievcRBpiy9Uk61jqkVdulqwvl-mp-FemLvsNs",
+      "signature": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "valid": false
+    },
+    {
+      "name": "non-canonical R encoding",
+      "public_key": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+      "message": "pSqPTRievcRBpiy9Uk61jqkVdulqwvl-mp-FemLvsNs",
+      "signature": "7v_______________________________________394u7hUOkcj2dCP_aWwIfjIdj-PrG0xzcv7pR5S_boeBA",
+      "valid": false
+    }
+  ],
+  "agent_ids": {
+    "valid": [
+      "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw"
+    ],
+    "invalid": [
+      {
+        "name": "padding character",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw="
+      },
+      {
+        "name": "non-zero trailing bits",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0ix"
+      },
+      {
+        "name": "31-byte key",
+        "value": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      {
+        "name": "33-byte key",
+        "value": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      {
+        "name": "standard base64 alphabet",
+        "value": "did:agent:6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0i+"
+      },
+      {
+        "name": "wrong prefix",
+        "value": "did:key:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw"
+      }
+    ]
+  },
+  "json": {
+    "valid": [
+      {
+        "name": "surrogate pair and safe integer boundaries",
+        "text": "{\"a\":\"\\ud83d\\ude00\",\"n\":9007199254740991,\"m\":-9007199254740991}"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "duplicate member name at the top level",
+        "text": "{\"hash\":\"x\",\"hash\":\"y\"}"
+      },
+      {
+        "name": "duplicate member name nested in a payload",
+        "text": "{\"event\":{\"payload\":{\"role\":\"speaker\",\"role\":\"moderator\"}}}"
+      },
+      {
+        "name": "unpaired high surrogate",
+        "text": "{\"a\":\"\\ud800\"}"
+      },
+      {
+        "name": "unpaired low surrogate",
+        "text": "{\"a\":\"\\udc00x\"}"
+      },
+      {
+        "name": "integer above the safe range",
+        "text": "{\"nonce\":9007199254740992}"
+      },
+      {
+        "name": "integer below the safe range",
+        "text": "{\"n\":-9007199254740992}"
+      }
+    ]
+  },
+  "events_closed_shape": {
+    "invalid": [
+      {
+        "name": "unknown top-level event field",
+        "event": {
+          "protocol": "agent-profile/1.0",
+          "type": "profile.update",
+          "actor": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "created_at": 1779753600000,
+          "nonce": 1779753600000,
+          "payload": {
+            "id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+            "name": "ResearchAgent",
+            "capabilities": [
+              "research",
+              "code-review"
+            ],
+            "extra": {}
+          },
+          "audience": "https://api.example.com"
+        }
+      },
+      {
+        "name": "missing payload",
+        "event": {
+          "protocol": "agent-profile/1.0",
+          "type": "profile.update",
+          "actor": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "created_at": 1779753600000,
+          "nonce": 1779753600000
+        }
+      }
+    ]
+  },
+  "max_seen_nonce": [
+    {
+      "name": "advance past a nearby header",
+      "next_nonce": 10,
+      "now_ms": 1000,
+      "header": "1500",
+      "accepted": true,
+      "next_after": 1501
+    },
+    {
+      "name": "ignore a header below the local sequence",
+      "next_nonce": 10,
+      "now_ms": 1000,
+      "header": "5",
+      "accepted": true,
+      "next_after": 10
+    },
+    {
+      "name": "accept the largest allowed jump",
+      "next_nonce": 10,
+      "now_ms": 1000,
+      "header": "4294968296",
+      "accepted": true,
+      "next_after": 4294968297
+    },
+    {
+      "name": "reject a jump beyond the bound",
+      "next_nonce": 10,
+      "now_ms": 1000,
+      "header": "4294968297",
+      "accepted": false
+    },
+    {
+      "name": "reject an exhausting header",
+      "next_nonce": 10,
+      "now_ms": 1000,
+      "header": "9007199254740990",
+      "accepted": false
+    }
+  ]
+}

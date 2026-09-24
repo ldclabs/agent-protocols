@@ -3,7 +3,9 @@ import {
   AgentId,
   Envelope,
   Event,
+  ListResponse,
   createEvent,
+  validateEventFields,
   verifyEnvelope,
 } from "./identity.js";
 import type { PrincipalDescriptor } from "./delegation.js";
@@ -17,12 +19,17 @@ export interface ServiceEndpoint {
   protocols?: string[];
 }
 
+/**
+ * Defined link relationships. `rel` is an open vocabulary: clients accept other
+ * non-empty values and may render them as generic links.
+ */
 export type ProfileLinkRel =
   | "homepage"
   | "documentation"
   | "source_code"
   | "social"
-  | "browser";
+  | "browser"
+  | (string & {});
 
 export interface ProfileLink {
   name: string;
@@ -74,13 +81,11 @@ export interface ProfileBatchReadRequest {
   ids: AgentId[];
 }
 
-export interface ProfileBatchReadResponse {
-  result: AgentProfile[];
-}
+/** Agent Identity list of profile documents; never carries `next_cursor`. */
+export type ProfileBatchReadResponse = ListResponse<AgentProfile>;
 
-export interface ProfileEventsResponse {
-  result: Envelope<ProfileUpdatePayload>[];
-}
+/** Agent Identity list of accepted updates, newest first by `nonce`. */
+export type ProfileEventsResponse = ListResponse<Envelope<ProfileUpdatePayload>>;
 
 export interface ProfileServiceEndpoints {
   profiles: string;
@@ -114,6 +119,8 @@ export function validateProfileUpdate(
   envelope: Envelope<ProfileUpdatePayload>,
 ): void {
   verifyEnvelope(envelope);
+  // Profile events carry only the six Agent Identity event fields.
+  validateEventFields(envelope.event);
   if (envelope.event.protocol !== PROFILE_PROTOCOL) {
     throw protocolError(
       "invalid_event_protocol",
@@ -156,6 +163,24 @@ export function materializeProfile(
     updated_at: envelope.event.created_at,
     event_id: envelope.hash,
   };
+}
+
+/**
+ * Durable ordering check for a new update (Agent Profile Section 6): its nonce
+ * must exceed the nonce of the latest accepted update for the same Agent ID,
+ * independent of the replay cache. `latestNonce` is the stored latest nonce.
+ */
+export function validateProfileSuccession(
+  envelope: Envelope<ProfileUpdatePayload>,
+  latestNonce: number | undefined,
+): void {
+  if (latestNonce !== undefined && envelope.event.nonce <= latestNonce) {
+    throw protocolError(
+      "nonce_not_greater",
+      `nonce must be greater than the latest accepted profile nonce ${latestNonce}`,
+      { max_nonce: latestNonce },
+    );
+  }
 }
 
 /**

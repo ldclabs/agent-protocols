@@ -23,11 +23,7 @@ test("validates and materializes delegation grant events", () => {
   const subject = AgentSigner.fromSeed(new Uint8Array(32).fill(32));
   const payload: DelegationGrantPayload = {
     id: "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
-    principal: {
-      id: "https://api.al.ink/d9c6a99cne5g00a6scn0",
-      type: "person",
-      name: "Yan",
-    },
+    principal_id: "https://api.al.ink/d9c6a99cne5g00a6scn0",
     subject: subject.agentId(),
     relationship: "primary_delegate",
     scopes: ["inbox.screen", "meeting.propose"],
@@ -44,6 +40,7 @@ test("validates and materializes delegation grant events", () => {
   const credential = materializeDelegationCredential(envelope, { acceptedAt: 1_779_753_600_000 });
 
   assert.equal(credential.protocol, DELEGATION_PROTOCOL);
+  assert.equal(credential.principal_id, payload.principal_id);
   assert.equal(credential.controller, controller.agentId());
   assert.equal(credential.subject, subject.agentId());
   assert.equal(credential.status, "active");
@@ -66,7 +63,7 @@ test("validates revocation events and rejects invalid payloads", () => {
     () =>
       validateDelegationGrantPayload({
         id: "del",
-        principal: { id: "http://example.com" },
+        principal_id: "http://example.com",
         subject: controller.agentId(),
         scopes: [],
         audiences: ["https://dmsg.net"],
@@ -92,6 +89,16 @@ test("validates principal documents and event protocol", () => {
       controllers: [],
     }),
   );
+  // A controller with delegation authority needs an authoritative query endpoint.
+  assert.throws(
+    () =>
+      validatePrincipalDocument({
+        id: "https://profiles.example.com/org/acme",
+        protocol: DELEGATION_PROTOCOL, updated_at: 1000,
+        controllers: [{ id: controller.agentId(), source: "local", valid_from: 0, delegation: "*" }],
+      }),
+    /delegation_query_url/,
+  );
 
   const wrong = controller.signEvent(
     createEvent(DELEGATION_PROTOCOL, "delegation.unknown", controller.agentId(), 1, 1, {
@@ -103,7 +110,7 @@ test("validates principal documents and event protocol", () => {
   const valid = controller.signEvent(
     delegationGrantEvent(controller.agentId(), 1, 1, {
       id: "del",
-      principal: { id: "https://example.com/p" },
+      principal_id: "https://example.com/p",
       subject: controller.agentId(),
       scopes: ["scope"],
       audiences: ["https://dmsg.net"],
@@ -118,7 +125,7 @@ test("rejects malformed HTTPS-like principal URLs", () => {
     assert.throws(() =>
       validateDelegationGrantPayload({
         id: "del",
-        principal: { id: principalId },
+        principal_id: principalId,
         subject: signer.agentId(),
         scopes: ["scope"],
         audiences: ["https://dmsg.net"],
@@ -132,7 +139,7 @@ test("grant expiry is checked against not_before and created_at separately", () 
   const subject = AgentSigner.fromSeed(new Uint8Array(32).fill(46));
   const base: DelegationGrantPayload = {
     id: "del_1",
-    principal: { id: "https://api.al.ink/d9c6a99cne5g00a6scn0" },
+    principal_id: "https://api.al.ink/d9c6a99cne5g00a6scn0",
     subject: subject.agentId(),
     scopes: ["inbox.screen"],
     audiences: ["https://dmsg.net"],

@@ -8,12 +8,27 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::{Result, SdkError};
-use crate::identity::{verify_envelope, AgentId, Envelope, Event};
+use crate::identity::{
+    validate_event_fields, verify_envelope, AcceptedRecord, AgentId, Envelope, Event, ListResponse,
+};
 use url::Url;
 
 pub const PROTOCOL: &str = "agent-delegation/1.0";
 pub const DELEGATION_GRANT: &str = "delegation.grant";
 pub const DELEGATION_REVOKE: &str = "delegation.revoke";
+
+/// Delegation-specific error codes (Agent Delegation Section 9.7).
+pub const DELEGATION_ERROR_CODES: [&str; 9] = [
+    "principal_unresolvable",
+    "principal_not_canonical",
+    "controller_not_current",
+    "delegation_not_permitted",
+    "delegation_ceiling_exceeded",
+    "not_owner_controller",
+    "credential_not_found",
+    "credential_identity_mismatch",
+    "grant_expired",
+];
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +46,7 @@ pub struct PrincipalLink {
     pub rel: String,
 }
 
+/// Display descriptor of a principal, used by Agent Profile delegation hints.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrincipalDescriptor {
     pub id: String,
@@ -64,6 +80,14 @@ pub struct Controller {
         skip_serializing_if = "Option::is_none"
     )]
     pub delegation: Option<DelegationAuthority>,
+    /// Earlier controllers of this principal whose credentials this key may
+    /// manage (Section 5.1). `None` when the field is absent.
+    #[serde(
+        default,
+        deserialize_with = "non_null_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub supersedes: Option<Vec<AgentId>>,
     #[serde(
         default,
         deserialize_with = "non_null_option",
@@ -76,6 +100,22 @@ pub struct Controller {
         skip_serializing_if = "Option::is_none"
     )]
     pub invalid_from: Option<i64>,
+}
+
+impl Controller {
+    /// A current controller record with no delegation authority.
+    pub fn new(id: AgentId, source: impl Into<String>, valid_from: i64) -> Self {
+        Self {
+            id,
+            source: source.into(),
+            valid_from,
+            name: None,
+            delegation: None,
+            supersedes: None,
+            retired_at: None,
+            invalid_from: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -91,12 +131,6 @@ pub enum DelegationAuthority {
 pub struct DelegationPolicy {
     pub scopes: Vec<String>,
     pub audiences: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DelegationAcceptance {
-    pub event_id: String,
-    pub accepted_at: i64,
 }
 
 fn non_null_option<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
@@ -127,7 +161,7 @@ pub struct PrincipalDocument {
     pub controllers: Vec<Controller>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired_controllers: Vec<Controller>,
-    /// Delegation query endpoint for this principal; answers existence checks.
+    /// Delegation query endpoint; required when any controller carries `delegation`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation_query_url: Option<String>,
     pub updated_at: i64,
@@ -138,14 +172,14 @@ pub struct PrincipalDocument {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DelegationGrantPayload {
     pub id: String,
-    pub principal: PrincipalDescriptor,
+    pub principal_id: String,
     pub subject: AgentId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationship: Option<String>,
     pub scopes: Vec<String>,
     pub audiences: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub constraints: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_before: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,19 +189,19 @@ pub struct DelegationGrantPayload {
 impl DelegationGrantPayload {
     pub fn new(
         id: impl Into<String>,
-        principal: PrincipalDescriptor,
+        principal_id: impl Into<String>,
         subject: AgentId,
         scopes: Vec<String>,
         audiences: Vec<String>,
     ) -> Self {
         Self {
             id: id.into(),
-            principal,
+            principal_id: principal_id.into(),
             subject,
             relationship: None,
             scopes,
             audiences,
-            constraints: BTreeMap::new(),
+            constraints: None,
             not_before: None,
             expires_at: None,
         }
@@ -193,39 +227,29 @@ pub enum DelegationPayload {
 pub struct DelegationCredential {
     pub id: String,
     pub protocol: String,
-    pub principal: PrincipalDescriptor,
-    pub controller: AgentId,
-    pub owner_controller: AgentId,
-    pub grant_event_id: String,
-    pub accepted_at: i64,
+    pub principal_id: String,
     pub subject: AgentId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationship: Option<String>,
     pub scopes: Vec<String>,
     pub audiences: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub constraints: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_before: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
     pub status: DelegationStatus,
-    pub updated_at: i64,
+    pub controller: AgentId,
+    pub owner_controller: AgentId,
+    pub grant_event_id: String,
     pub event_id: String,
+    pub accepted_at: i64,
+    pub updated_at: i64,
+    pub checked_at: i64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DelegationStatusDocument {
-    pub protocol: String,
-    pub grant_event_id: String,
-    pub accepted_at: i64,
-    pub id: String,
-    pub status: DelegationStatus,
-    pub checked_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<i64>,
-    pub event_id: String,
-}
+pub type DelegationRecord = AcceptedRecord<DelegationPayload>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DelegationServiceDiscovery {
@@ -236,9 +260,10 @@ pub struct DelegationServiceDiscovery {
     pub features: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DelegationServiceEndpoints {
-    pub delegations: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegations: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
 }
@@ -255,27 +280,26 @@ pub struct DelegationQueryRequest {
     pub status: Option<DelegationStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct DelegationSummary {
-    pub id: String,
-    pub subject: AgentId,
-    pub principal: PrincipalDescriptor,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scopes: Vec<String>,
-    pub status: DelegationStatus,
-}
+/// Agent Identity list of full credentials.
+pub type DelegationQueryResponse = ListResponse<DelegationCredential>;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct DelegationQueryResponse {
-    pub result: Vec<DelegationSummary>,
-}
+/// Agent Identity list of accepted records in service acceptance order.
+pub type DelegationEventsResponse = ListResponse<DelegationRecord>;
 
+/// Result of [`verify_delegation_credential`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct DelegationEventsResponse {
-    pub result: Vec<Envelope<DelegationPayload>>,
-    pub acceptances: Vec<DelegationAcceptance>,
+pub struct DelegationVerdict {
+    pub credential: DelegationCredential,
+    /// Signature, history, controller, and replay checks all passed.
+    pub verified: bool,
+    /// Verified, and usable for the audience now.
+    pub usable: bool,
+    /// Every failed check.
+    pub reasons: Vec<String>,
 }
 
 pub fn delegation_grant_event(
@@ -332,6 +356,10 @@ pub fn validate_controller(controller: &Controller, retired: bool) -> Result<()>
         }
         _ => {}
     }
+    if let Some(supersedes) = &controller.supersedes {
+        let ids: Vec<String> = supersedes.iter().map(ToString::to_string).collect();
+        strings(&ids, "supersedes", false)?;
+    }
     if retired {
         let end = controller
             .retired_at
@@ -358,20 +386,33 @@ pub fn validate_principal_document(document: &PrincipalDocument) -> Result<()> {
         return fail("invalid principal protocol");
     }
     timestamp(document.updated_at, "updated_at")?;
-    let mut seen = BTreeSet::new();
-    for (records, retired) in [
+    let mut records: BTreeMap<String, &Controller> = BTreeMap::new();
+    let mut delegates = false;
+    for (list, retired) in [
         (&document.controllers, false),
         (&document.retired_controllers, true),
     ] {
-        for record in records {
+        for record in list {
             validate_controller(record, retired)?;
-            if !seen.insert(record.id.to_string()) {
+            if records.insert(record.id.to_string(), record).is_some() {
                 return fail("duplicate controller key");
             }
+            delegates |= record.delegation.is_some();
             if record.valid_from > document.updated_at
                 || record.retired_at.is_some_and(|v| v > document.updated_at)
             {
                 return fail("controller timestamp exceeds document update");
+            }
+        }
+    }
+    // Succession (Section 5.1): each entry names another, earlier record.
+    for record in records.values() {
+        for id in record.supersedes.iter().flatten() {
+            match records.get(id.as_str()) {
+                Some(predecessor)
+                    if predecessor.id != record.id
+                        && predecessor.valid_from < record.valid_from => {}
+                _ => return fail("invalid supersedes entry"),
             }
         }
     }
@@ -382,8 +423,12 @@ pub fn validate_principal_document(document: &PrincipalDocument) -> Result<()> {
     if let Some(url) = &document.avatar_url {
         validate_https_url(url, "avatar_url")?;
     }
-    if let Some(url) = &document.delegation_query_url {
-        validate_https_url(url, "delegation_query_url")?;
+    match &document.delegation_query_url {
+        Some(url) => validate_https_url(url, "delegation_query_url")?,
+        None if delegates => {
+            return fail("delegation_query_url is required when a controller carries delegation")
+        }
+        None => {}
     }
     Ok(())
 }
@@ -413,12 +458,38 @@ pub fn is_principal_alias(document: &PrincipalDocument, url: &str) -> bool {
     document.aliases.iter().any(|alias| alias == url)
 }
 
+/// The lineage of a controller (Section 5.1): its own ID plus, transitively,
+/// every record it supersedes. A restricted controller owns a credential
+/// whose `owner_controller` is in its lineage.
+pub fn controller_lineage(
+    document: &PrincipalDocument,
+    controller_id: &AgentId,
+) -> BTreeSet<AgentId> {
+    let records: BTreeMap<&AgentId, &Controller> = document
+        .controllers
+        .iter()
+        .chain(document.retired_controllers.iter())
+        .map(|record| (&record.id, record))
+        .collect();
+    let mut lineage = BTreeSet::new();
+    let mut pending = vec![controller_id.clone()];
+    while let Some(id) = pending.pop() {
+        if !lineage.insert(id.clone()) {
+            continue;
+        }
+        if let Some(record) = records.get(&id) {
+            pending.extend(record.supersedes.iter().flatten().cloned());
+        }
+    }
+    lineage
+}
+
 pub fn validate_delegation_grant_payload(
     payload: &DelegationGrantPayload,
     created_at: Option<i64>,
 ) -> Result<()> {
     validate_delegation_id(&payload.id)?;
-    validate_principal_descriptor(&payload.principal)?;
+    validate_https_url(&payload.principal_id, "principal_id")?;
     payload.subject.public_key_bytes()?;
     strings(&payload.scopes, "scopes", false)?;
     strings(&payload.audiences, "audiences", false)?;
@@ -436,13 +507,15 @@ pub fn validate_delegation_grant_payload(
     }
     if let Some(expires_at) = payload.expires_at {
         if matches!(payload.not_before, Some(not_before) if expires_at <= not_before) {
-            return Err(SdkError::InvalidPayload(
-                "expires_at must be greater than not_before".to_owned(),
+            return Err(SdkError::protocol(
+                "grant_expired",
+                "expires_at must be greater than not_before",
             ));
         }
         if matches!(created_at, Some(created_at) if expires_at <= created_at) {
-            return Err(SdkError::InvalidPayload(
-                "expires_at must be greater than created_at".to_owned(),
+            return Err(SdkError::protocol(
+                "grant_expired",
+                "expires_at must be greater than created_at",
             ));
         }
     }
@@ -460,13 +533,15 @@ pub fn validate_delegation_query_request(
 ) -> Result<()> {
     if allow_enumeration {
         if request.subject.is_none() && request.principal_id.is_none() {
-            return Err(SdkError::InvalidPayload(
-                "query must include at least one of subject or principal_id".to_owned(),
+            return Err(SdkError::protocol(
+                "invalid_request",
+                "query must include at least one of subject or principal_id",
             ));
         }
     } else if request.subject.is_none() || request.principal_id.is_none() {
-        return Err(SdkError::InvalidPayload(
-            "public query must include both subject and principal_id".to_owned(),
+        return Err(SdkError::protocol(
+            "invalid_request",
+            "public query must include both subject and principal_id",
         ));
     }
     if let Some(subject) = &request.subject {
@@ -479,8 +554,9 @@ pub fn validate_delegation_query_request(
         validate_delegation_id(id)?;
     }
     if matches!(request.limit, Some(0)) {
-        return Err(SdkError::InvalidPayload(
-            "limit must be a positive integer".to_owned(),
+        return Err(SdkError::protocol(
+            "invalid_request",
+            "limit must be a positive integer",
         ));
     }
     Ok(())
@@ -491,16 +567,25 @@ pub fn validate_delegation_revoke_payload(payload: &DelegationRevokePayload) -> 
     validate_https_url(&payload.principal_id, "principal_id")
 }
 
+/// Delegation IDs are unreserved URL characters (`[A-Za-z0-9._~-]{1,128}`)
+/// and never a dot segment: no percent-encoding, no look-alikes.
 pub fn validate_delegation_id(value: &str) -> Result<()> {
-    validate_non_empty(value, "delegation id")?;
-    if matches!(value, "." | "..") {
-        return fail("delegation id cannot be a dot segment");
+    let valid = (1..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'))
+        && !matches!(value, "." | "..");
+    if valid {
+        Ok(())
+    } else {
+        fail("delegation id must match [A-Za-z0-9._~-]{1,128} and not be a dot segment")
     }
-    Ok(())
 }
 
 pub fn validate_delegation_envelope(envelope: &Envelope<DelegationPayload>) -> Result<()> {
     verify_envelope(envelope)?;
+    // Delegation events carry only the six Agent Identity event fields.
+    validate_event_fields(&envelope.event, &[])?;
     if envelope.event.protocol != PROTOCOL {
         return Err(SdkError::InvalidEventProtocol {
             expected: PROTOCOL.to_owned(),
@@ -542,7 +627,10 @@ pub fn materialize_delegation_credential(
         DelegationPayload::Revoke(_) => {
             let mut result = previous
                 .ok_or_else(|| {
-                    SdkError::InvalidPayload("revocation requires previous credential".into())
+                    SdkError::protocol(
+                        "credential_not_found",
+                        "revocation requires previous credential",
+                    )
                 })?
                 .clone();
             result.controller = envelope.event.actor.clone();
@@ -550,22 +638,20 @@ pub fn materialize_delegation_credential(
             result.event_id = envelope.hash.clone();
             result.accepted_at = accepted_at;
             result.updated_at = accepted_at;
+            result.checked_at = accepted_at;
             Ok(result)
         }
         DelegationPayload::Grant(payload) => {
             if payload.expires_at.is_some_and(|t| t <= accepted_at) {
-                return fail("grant expired at acceptance");
+                return Err(SdkError::protocol(
+                    "grant_expired",
+                    "grant expired at acceptance",
+                ));
             }
             Ok(DelegationCredential {
                 id: payload.id.clone(),
                 protocol: PROTOCOL.into(),
-                principal: payload.principal.clone(),
-                controller: envelope.event.actor.clone(),
-                owner_controller: previous
-                    .map(|p| p.owner_controller.clone())
-                    .unwrap_or_else(|| envelope.event.actor.clone()),
-                grant_event_id: envelope.hash.clone(),
-                accepted_at,
+                principal_id: payload.principal_id.clone(),
                 subject: payload.subject.clone(),
                 relationship: payload.relationship.clone(),
                 scopes: payload.scopes.clone(),
@@ -574,8 +660,15 @@ pub fn materialize_delegation_credential(
                 not_before: payload.not_before,
                 expires_at: payload.expires_at,
                 status,
-                updated_at: accepted_at,
+                controller: envelope.event.actor.clone(),
+                owner_controller: previous
+                    .map(|p| p.owner_controller.clone())
+                    .unwrap_or_else(|| envelope.event.actor.clone()),
+                grant_event_id: envelope.hash.clone(),
                 event_id: envelope.hash.clone(),
+                accepted_at,
+                updated_at: accepted_at,
+                checked_at: accepted_at,
             })
         }
     }
@@ -605,24 +698,20 @@ pub fn validate_delegation_acceptance(
     check_authority(&envelope.event, document, accepted_at, previous, false)
 }
 
-/// Caller authenticates acceptance evidence and previous state. This checks the
-/// evidence's hash binding and historical policy, not current status or application constraints.
+/// Caller authenticates the accepted record and previous state. This checks
+/// historical policy, not current status or application constraints.
 pub fn validate_historical_delegation(
-    envelope: &Envelope<DelegationPayload>,
-    acceptance: &DelegationAcceptance,
+    record: &DelegationRecord,
     document: &PrincipalDocument,
     resolved_url: &str,
     previous: Option<&DelegationCredential>,
 ) -> Result<()> {
-    validate_delegation_envelope(envelope)?;
-    if acceptance.event_id != envelope.hash {
-        return fail("acceptance hash mismatch");
-    }
+    validate_delegation_envelope(&record.envelope)?;
     validate_principal_resolution(document, resolved_url)?;
     check_authority(
-        &envelope.event,
+        &record.envelope.event,
         document,
-        acceptance.accepted_at,
+        record.accepted_at,
         previous,
         true,
     )
@@ -642,12 +731,21 @@ pub fn validate_controller_enumeration(
         .controllers
         .iter()
         .find(|c| &c.id == actor)
-        .ok_or_else(|| SdkError::InvalidPayload("controller cannot enumerate".into()))?;
-    if now < c.valid_from || c.delegation.is_none() {
-        return fail("controller cannot enumerate");
+        .filter(|c| now >= c.valid_from)
+        .ok_or_else(|| {
+            SdkError::protocol("controller_not_current", "controller cannot enumerate")
+        })?;
+    if c.delegation.is_none() {
+        return Err(SdkError::protocol(
+            "delegation_not_permitted",
+            "controller cannot enumerate",
+        ));
     }
-    if !unrestricted(c) && owner != actor {
-        return fail("controller does not own credential");
+    if !unrestricted(c) && !controller_lineage(document, actor).contains(owner) {
+        return Err(SdkError::protocol(
+            "not_owner_controller",
+            "controller does not own credential",
+        ));
     }
     Ok(())
 }
@@ -661,18 +759,7 @@ pub fn validate_delegation_use(
 ) -> Result<()> {
     validate_origin(audience)?;
     timestamp(now, "now")?;
-    let payload = DelegationGrantPayload {
-        id: credential.id.clone(),
-        principal: credential.principal.clone(),
-        subject: credential.subject.clone(),
-        relationship: credential.relationship.clone(),
-        scopes: credential.scopes.clone(),
-        audiences: credential.audiences.clone(),
-        constraints: credential.constraints.clone(),
-        not_before: credential.not_before,
-        expires_at: credential.expires_at,
-    };
-    validate_delegation_grant_payload(&payload, None)?;
+    validate_delegation_grant_payload(&grant_from_credential(credential), None)?;
     if credential.protocol != PROTOCOL
         || credential.status != DelegationStatus::Active
         || !credential.audiences.iter().any(|a| a == audience)
@@ -684,9 +771,101 @@ pub fn validate_delegation_use(
     Ok(())
 }
 
+/// Verifies a credential under Agent Delegation Section 8 with the online
+/// service-trusting evidence policy: replays its accepted records against the
+/// authoritative principal document — signatures, controller intervals,
+/// ceilings, and ownership lineage — confirms the replay matches the
+/// credential, and then checks use for `audience` at `now`. Relying parties
+/// still enforce scopes and constraints and authenticate the subject.
+pub fn verify_delegation_credential(
+    credential: &DelegationCredential,
+    records: &[DelegationRecord],
+    document: &PrincipalDocument,
+    resolved_url: &str,
+    audience: &str,
+    now: i64,
+) -> DelegationVerdict {
+    let mut reasons = Vec::new();
+    if let Err(error) = replay_matches(credential, records, document, resolved_url) {
+        reasons.push(error.to_string());
+    }
+    let verified = reasons.is_empty();
+    if credential.status != DelegationStatus::Active {
+        let status = serde_json::to_value(credential.status)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        reasons.push(format!("status is {status}"));
+    }
+    if !credential.audiences.iter().any(|a| a == audience) {
+        reasons.push(format!("audience {audience} is not granted"));
+    }
+    if credential.not_before.is_some_and(|t| now < t) {
+        reasons.push("not yet valid".to_owned());
+    }
+    if credential.expires_at.is_some_and(|t| now >= t) {
+        reasons.push("expired".to_owned());
+    }
+    DelegationVerdict {
+        credential: credential.clone(),
+        verified,
+        usable: reasons.is_empty(),
+        reasons,
+    }
+}
+
+fn replay_matches(
+    credential: &DelegationCredential,
+    records: &[DelegationRecord],
+    document: &PrincipalDocument,
+    resolved_url: &str,
+) -> Result<()> {
+    if records.is_empty() {
+        return fail("no accepted records");
+    }
+    let mut replayed: Option<DelegationCredential> = None;
+    for record in records {
+        validate_historical_delegation(record, document, resolved_url, replayed.as_ref())?;
+        replayed = Some(materialize_delegation_credential(
+            &record.envelope,
+            DelegationStatus::Active,
+            record.accepted_at,
+            replayed.as_ref(),
+        )?);
+    }
+    let r = replayed.expect("at least one record");
+    if r.id != credential.id
+        || r.principal_id != credential.principal_id
+        || r.subject != credential.subject
+        || r.event_id != credential.event_id
+        || r.grant_event_id != credential.grant_event_id
+        || r.owner_controller != credential.owner_controller
+        || r.controller != credential.controller
+        || (r.status == DelegationStatus::Revoked)
+            != (credential.status == DelegationStatus::Revoked)
+    {
+        return fail("credential does not match its accepted records");
+    }
+    Ok(())
+}
+
+fn grant_from_credential(credential: &DelegationCredential) -> DelegationGrantPayload {
+    DelegationGrantPayload {
+        id: credential.id.clone(),
+        principal_id: credential.principal_id.clone(),
+        subject: credential.subject.clone(),
+        relationship: credential.relationship.clone(),
+        scopes: credential.scopes.clone(),
+        audiences: credential.audiences.clone(),
+        constraints: credential.constraints.clone(),
+        not_before: credential.not_before,
+        expires_at: credential.expires_at,
+    }
+}
+
 fn event_identity(event: &Event<DelegationPayload>) -> (&str, &str) {
     match &event.payload {
-        DelegationPayload::Grant(p) => (&p.id, &p.principal.id),
+        DelegationPayload::Grant(p) => (&p.id, &p.principal_id),
         DelegationPayload::Revoke(p) => (&p.id, &p.principal_id),
     }
 }
@@ -698,12 +877,25 @@ fn check_previous(
     if let Some(previous) = previous {
         previous.owner_controller.public_key_bytes()?;
         timestamp(previous.accepted_at, "previous.accepted_at")?;
-        if previous.id != id || previous.principal.id != principal || previous.protocol != PROTOCOL
+        let same_subject = match &event.payload {
+            DelegationPayload::Grant(p) => p.subject == previous.subject,
+            DelegationPayload::Revoke(_) => true,
+        };
+        if previous.id != id
+            || previous.principal_id != principal
+            || previous.protocol != PROTOCOL
+            || !same_subject
         {
-            return fail("previous credential identity mismatch");
+            return Err(SdkError::protocol(
+                "credential_identity_mismatch",
+                "credential principal, subject, and protocol are immutable",
+            ));
         }
     } else if event.kind == DELEGATION_REVOKE {
-        return fail("revocation requires previous credential");
+        return Err(SdkError::protocol(
+            "credential_not_found",
+            "revocation requires previous credential",
+        ));
     }
     Ok(())
 }
@@ -732,23 +924,37 @@ fn check_authority(
         _ => return fail("event type does not match payload"),
     }
     if event_identity(event).1 != document.id {
-        return fail("principal mismatch");
+        return Err(SdkError::protocol(
+            "principal_not_canonical",
+            "principal mismatch",
+        ));
     }
     let c = document
         .controllers
         .iter()
         .chain(document.retired_controllers.iter().filter(|_| historical))
         .find(|c| c.id == event.actor)
-        .ok_or_else(|| SdkError::InvalidPayload("actor has no delegation authority".into()))?;
+        .ok_or_else(|| {
+            SdkError::protocol(
+                "controller_not_current",
+                "actor is not a controller of the principal",
+            )
+        })?;
     if c.delegation.is_none() {
-        return fail("actor has no delegation authority");
+        return Err(SdkError::protocol(
+            "delegation_not_permitted",
+            "actor has no delegation authority",
+        ));
     }
     for time in [event.created_at, accepted_at] {
         if time < c.valid_from
             || c.retired_at.is_some_and(|t| time >= t)
             || c.invalid_from.is_some_and(|t| time >= t)
         {
-            return fail("outside controller authority interval");
+            return Err(SdkError::protocol(
+                "controller_not_current",
+                "outside controller authority interval",
+            ));
         }
     }
     check_previous(event, previous)?;
@@ -756,13 +962,21 @@ fn check_authority(
         if accepted_at < previous.accepted_at {
             return fail("acceptance order reversed");
         }
-        if !unrestricted(c) && previous.owner_controller != event.actor {
-            return fail("controller does not own credential");
+        if !unrestricted(c)
+            && !controller_lineage(document, &event.actor).contains(&previous.owner_controller)
+        {
+            return Err(SdkError::protocol(
+                "not_owner_controller",
+                "controller does not own credential",
+            ));
         }
     }
     if let DelegationPayload::Grant(payload) = &event.payload {
         if payload.expires_at.is_some_and(|t| t <= accepted_at) {
-            return fail("grant expired at acceptance");
+            return Err(SdkError::protocol(
+                "grant_expired",
+                "grant expired at acceptance",
+            ));
         }
         if let Some(DelegationAuthority::Restricted(policy)) = &c.delegation {
             if payload.scopes.iter().any(|x| !policy.scopes.contains(x))
@@ -771,7 +985,10 @@ fn check_authority(
                     .iter()
                     .any(|x| !policy.audiences.contains(x))
             {
-                return fail("grant exceeds controller delegation policy");
+                return Err(SdkError::protocol(
+                    "delegation_ceiling_exceeded",
+                    "grant exceeds controller delegation policy",
+                ));
             }
         }
     }
@@ -808,10 +1025,6 @@ fn validate_origin(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_principal_descriptor(principal: &PrincipalDescriptor) -> Result<()> {
-    validate_https_url(&principal.id, "principal.id")
-}
-
 fn validate_https_url(value: &str, field: &str) -> Result<()> {
     let parsed = Url::parse(value)
         .map_err(|_| SdkError::InvalidPayload(format!("{field} must be an HTTPS URL")))?;
@@ -845,11 +1058,7 @@ mod tests {
         let subject = AgentSigner::from_seed([32; 32]);
         let mut payload = DelegationGrantPayload::new(
             "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
-            PrincipalDescriptor {
-                id: "https://api.al.ink/d9c6a99cne5g00a6scn0".to_owned(),
-                kind: Some("person".to_owned()),
-                name: Some("Yan".to_owned()),
-            },
+            "https://api.al.ink/d9c6a99cne5g00a6scn0",
             subject.agent_id(),
             vec!["inbox.screen".to_owned(), "meeting.propose".to_owned()],
             vec!["https://dmsg.net".to_owned()],
@@ -881,6 +1090,10 @@ mod tests {
         assert_eq!(credential.protocol, PROTOCOL);
         assert_eq!(credential.controller, controller.agent_id());
         assert_eq!(credential.subject, subject.agent_id());
+        assert_eq!(
+            credential.principal_id,
+            "https://api.al.ink/d9c6a99cne5g00a6scn0"
+        );
         assert_eq!(credential.event_id, envelope.hash);
     }
 
@@ -905,7 +1118,7 @@ mod tests {
 
         let invalid = DelegationGrantPayload::new(
             "del",
-            PrincipalDescriptor::new("http://example.com"),
+            "http://example.com",
             controller.agent_id(),
             Vec::new(),
             vec!["https://dmsg.net".to_owned()],
@@ -918,7 +1131,7 @@ mod tests {
         let controller = AgentSigner::from_seed([36; 32]);
         let base = DelegationGrantPayload::new(
             "del_1",
-            PrincipalDescriptor::new("https://api.al.ink/d9c6a99cne5g00a6scn0"),
+            "https://api.al.ink/d9c6a99cne5g00a6scn0",
             controller.agent_id(),
             vec!["inbox.screen".to_owned()],
             vec!["https://dmsg.net".to_owned()],
@@ -993,15 +1206,7 @@ mod tests {
             links: Vec::new(),
             protocol: PROTOCOL.into(),
             retired_controllers: vec![],
-            controllers: vec![Controller {
-                id: controller.agent_id(),
-                source: "local".into(),
-                valid_from: 0,
-                name: None,
-                delegation: None,
-                retired_at: None,
-                invalid_from: None,
-            }],
+            controllers: vec![Controller::new(controller.agent_id(), "local", 0)],
             delegation_query_url: None,
             updated_at: 1000,
             extra: BTreeMap::new(),
@@ -1034,15 +1239,7 @@ mod tests {
             links: Vec::new(),
             protocol: PROTOCOL.into(),
             retired_controllers: vec![],
-            controllers: vec![Controller {
-                id: controller.agent_id(),
-                source: "local".into(),
-                valid_from: 0,
-                name: None,
-                delegation: None,
-                retired_at: None,
-                invalid_from: None,
-            }],
+            controllers: vec![Controller::new(controller.agent_id(), "local", 0)],
             delegation_query_url: Some(
                 "https://profiles.example.com/v1/delegations/query".to_owned(),
             ),
@@ -1051,9 +1248,16 @@ mod tests {
         };
         validate_principal_document(&document).unwrap();
 
-        let mut invalid = document;
+        let mut invalid = document.clone();
         invalid.protocol = "old-draft".into();
         assert!(validate_principal_document(&invalid).is_err());
+
+        // A controller with delegation authority needs an authoritative query endpoint.
+        let mut delegating = document;
+        delegating.controllers[0].delegation = Some(DelegationAuthority::Unrestricted("*".into()));
+        validate_principal_document(&delegating).unwrap();
+        delegating.delegation_query_url = None;
+        assert!(validate_principal_document(&delegating).is_err());
     }
 
     #[test]
@@ -1062,7 +1266,7 @@ mod tests {
         for principal_id in ["https://", "https://[::1", "http://example.com"] {
             let payload = DelegationGrantPayload::new(
                 "del",
-                PrincipalDescriptor::new(principal_id),
+                principal_id,
                 signer.agent_id(),
                 vec!["scope".to_owned()],
                 vec!["https://dmsg.net".to_owned()],

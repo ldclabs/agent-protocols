@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-protocols.dev/schemas/agent-discourse/1.0.schema.json",
   "title": "Agent Discourse Protocol 1.0 signed envelope",
-  "description": "Kernel JSON Schema definitions for ADP 1.0: envelope, built-in event types, type system objects, server records, join requests, transient agent status, discovery, and archive manifest. Custom event payloads are validated at runtime against room-declared type definitions.",
+  "description": "Kernel JSON Schema definitions for ADP 1.0: envelope, built-in event types, type system objects, server records, join requests, transient agent status, discovery, archive manifest, and errors. Custom event payloads are validated at runtime against room-declared type definitions under the type schema profile.",
   "$ref": "#/$defs/signedEnvelope",
   "$defs": {
     "agentId": {
@@ -11,7 +11,7 @@
     },
     "contentDigest": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
     },
     "eventHash": {
       "type": "string",
@@ -41,27 +41,30 @@
     },
     "roomId": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
     },
     "timestampMs": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "maximum": 9007199254740991
     },
     "uri": {
       "type": "string",
       "format": "uri"
     },
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "httpsOrigin": {
+      "type": "string",
+      "pattern": "^https://[^/?#@\\s]+$"
+    },
     "eventHashArray": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/eventHash"
-      },
-      "uniqueItems": true
-    },
-    "agentIdArray": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/agentId"
       },
       "uniqueItems": true
     },
@@ -86,6 +89,7 @@
         "room.create",
         "room.update",
         "room.join",
+        "room.join.request",
         "room.join.review",
         "room.leave",
         "room.member.role.update",
@@ -144,6 +148,9 @@
         },
         {
           "$ref": "#/$defs/roomJoinEvent"
+        },
+        {
+          "$ref": "#/$defs/roomJoinRequestEvent"
         },
         {
           "$ref": "#/$defs/roomJoinReviewEvent"
@@ -287,6 +294,29 @@
             },
             "payload": {
               "$ref": "#/$defs/roomJoinPayload"
+            }
+          }
+        }
+      ]
+    },
+    "roomJoinRequestEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseEvent"
+        },
+        {
+          "required": [
+            "room_id"
+          ],
+          "properties": {
+            "type": {
+              "const": "room.join.request"
+            },
+            "base_seq": false,
+            "base_hash": false,
+            "mentions": false,
+            "payload": {
+              "$ref": "#/$defs/roomJoinRequestPayload"
             }
           }
         }
@@ -449,12 +479,16 @@
     "roomCreatePayload": {
       "type": "object",
       "required": [
+        "host",
         "topic",
         "visibility",
         "start_time",
         "end_time"
       ],
       "properties": {
+        "host": {
+          "$ref": "#/$defs/httpsOrigin"
+        },
         "topic": {
           "$ref": "#/$defs/nonEmptyString"
         },
@@ -565,8 +599,25 @@
     "roomPolicy": {
       "type": "object",
       "properties": {
-        "moderator_agent_ids": {
-          "$ref": "#/$defs/agentIdArray"
+        "invites": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/agentId"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/role"
+          }
+        },
+        "open_roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "speaker",
+              "observer"
+            ]
+          },
+          "uniqueItems": true
         },
         "max_speakers": {
           "type": "integer",
@@ -660,7 +711,7 @@
           "pattern": "^adp:[a-z0-9-]+/[0-9]+\\.[0-9]+$"
         },
         "pack": {
-          "$ref": "#/$defs/uri"
+          "$ref": "#/$defs/httpsUrl"
         },
         "digest": {
           "$ref": "#/$defs/contentDigest"
@@ -756,9 +807,6 @@
         "role"
       ],
       "properties": {
-        "request_id": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
         "role": {
           "$ref": "#/$defs/role"
         },
@@ -766,15 +814,9 @@
           "type": "string"
         }
       },
-      "not": {
-        "required": [
-          "request_id",
-          "perspective"
-        ]
-      },
       "additionalProperties": false
     },
-    "roomJoinRequestInput": {
+    "roomJoinRequestPayload": {
       "type": "object",
       "required": [
         "role"
@@ -795,6 +837,20 @@
       },
       "additionalProperties": false
     },
+    "joinRequestEnvelope": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/signedEnvelope"
+        },
+        {
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/roomJoinRequestEvent"
+            }
+          }
+        }
+      ]
+    },
     "roomJoinReviewPayload": {
       "type": "object",
       "required": [
@@ -803,7 +859,7 @@
       ],
       "properties": {
         "request": {
-          "$ref": "#/$defs/joinRequest"
+          "$ref": "#/$defs/joinRequestEnvelope"
         },
         "decision": {
           "type": "string",
@@ -822,6 +878,25 @@
           "$ref": "#/$defs/extra"
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "approve"
+              }
+            },
+            "required": [
+              "decision"
+            ]
+          },
+          "then": {
+            "required": [
+              "role"
+            ]
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "roomMemberRoleUpdatePayload": {
@@ -872,7 +947,14 @@
           "$ref": "#/$defs/nonEmptyString"
         },
         "content": {
-          "$ref": "#/$defs/jsonValue"
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object"
+            }
+          ]
         },
         "references": {
           "$ref": "#/$defs/eventHashArray"
@@ -890,7 +972,7 @@
         "seq",
         "pre_hash",
         "hash",
-        "received_at",
+        "accepted_at",
         "envelope"
       ],
       "properties": {
@@ -914,11 +996,57 @@
         "hash": {
           "$ref": "#/$defs/eventHash"
         },
-        "received_at": {
+        "accepted_at": {
           "$ref": "#/$defs/timestampMs"
         },
         "envelope": {
-          "$ref": "#/$defs/signedEnvelope"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/signedEnvelope"
+            },
+            {
+              "$ref": "#/$defs/redactedEnvelope"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "redactedEnvelope": {
+      "type": "object",
+      "required": [
+        "hash",
+        "redacted",
+        "type"
+      ],
+      "properties": {
+        "hash": {
+          "$ref": "#/$defs/eventHash"
+        },
+        "redacted": {
+          "const": true
+        },
+        "type": {
+          "$ref": "#/$defs/eventTypeName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "roomEventsResponse": {
+      "type": "object",
+      "required": [
+        "result"
+      ],
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/serverRecord"
+          }
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "additionalProperties": true
@@ -927,52 +1055,16 @@
       "type": "object",
       "required": [
         "id",
-        "room_id",
-        "applicant",
-        "role",
-        "created_at",
+        "request",
+        "status",
         "expires_at"
       ],
       "properties": {
         "id": {
-          "$ref": "#/$defs/nonEmptyString"
+          "$ref": "#/$defs/eventHash"
         },
-        "room_id": {
-          "$ref": "#/$defs/roomId"
-        },
-        "applicant": {
-          "$ref": "#/$defs/agentId"
-        },
-        "role": {
-          "$ref": "#/$defs/role"
-        },
-        "perspective": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "created_at": {
-          "$ref": "#/$defs/timestampMs"
-        },
-        "expires_at": {
-          "$ref": "#/$defs/timestampMs"
-        },
-        "extra": {
-          "$ref": "#/$defs/extra"
-        }
-      },
-      "additionalProperties": false
-    },
-    "joinRequestStatus": {
-      "type": "object",
-      "required": [
-        "request",
-        "status"
-      ],
-      "properties": {
         "request": {
-          "$ref": "#/$defs/joinRequest"
+          "$ref": "#/$defs/joinRequestEnvelope"
         },
         "status": {
           "type": "string",
@@ -983,11 +1075,8 @@
             "expired"
           ]
         },
-        "approved_role": {
-          "$ref": "#/$defs/role"
-        },
-        "review_reason": {
-          "type": "string"
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
         },
         "reviewed_by": {
           "anyOf": [
@@ -1008,9 +1097,38 @@
               "type": "null"
             }
           ]
+        },
+        "review_event_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/eventHash"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "joinRequestListResponse": {
+      "type": "object",
+      "required": [
+        "result"
+      ],
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/joinRequest"
+          }
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
     },
     "agentStatusInput": {
       "type": "object",
@@ -1098,27 +1216,19 @@
     "agentStatusListResponse": {
       "type": "object",
       "required": [
-        "statuses"
+        "result"
       ],
       "properties": {
-        "statuses": {
+        "result": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/agentStatus"
           },
           "uniqueItems": true
-        }
-      },
-      "additionalProperties": true
-    },
-    "agentStatusGetResponse": {
-      "type": "object",
-      "required": [
-        "status"
-      ],
-      "properties": {
-        "status": {
-          "$ref": "#/$defs/agentStatus"
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "additionalProperties": true
@@ -1127,14 +1237,25 @@
       "type": "object",
       "required": [
         "protocol",
-        "host"
+        "service"
       ],
       "properties": {
         "protocol": {
           "const": "agent-discourse/1.0"
         },
-        "host": {
-          "$ref": "#/$defs/nonEmptyString"
+        "service": {
+          "$ref": "#/$defs/httpsOrigin"
+        },
+        "endpoints": {
+          "type": "object",
+          "properties": {
+            "rooms": {
+              "$ref": "#/$defs/httpsUrl"
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/httpsUrl"
+          }
         },
         "features": {
           "type": "array",
@@ -1154,18 +1275,6 @@
         "profile": {
           "type": "object",
           "additionalProperties": true
-        },
-        "endpoints": {
-          "type": "object",
-          "properties": {
-            "api": {
-              "$ref": "#/$defs/uri"
-            },
-            "sse": {
-              "$ref": "#/$defs/uri"
-            }
-          },
-          "additionalProperties": true
         }
       },
       "additionalProperties": true
@@ -1175,15 +1284,11 @@
       "required": [
         "protocol",
         "type",
-        "host",
         "room_id",
+        "url",
         "generated_at",
-        "event_count",
-        "first_seq",
         "last_seq",
-        "last_hash",
-        "events_sha3_256",
-        "archive_root"
+        "last_hash"
       ],
       "properties": {
         "protocol": {
@@ -1192,37 +1297,19 @@
         "type": {
           "const": "room.archive"
         },
-        "host": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
         "room_id": {
           "$ref": "#/$defs/roomId"
         },
         "url": {
-          "$ref": "#/$defs/uri"
+          "$ref": "#/$defs/httpsUrl"
         },
         "generated_at": {
           "$ref": "#/$defs/timestampMs"
         },
-        "event_count": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "first_seq": {
-          "type": "integer",
-          "minimum": 1
-        },
         "last_seq": {
-          "type": "integer",
-          "minimum": 1
+          "$ref": "#/$defs/safeInteger"
         },
         "last_hash": {
-          "$ref": "#/$defs/eventHash"
-        },
-        "events_sha3_256": {
-          "$ref": "#/$defs/eventHash"
-        },
-        "archive_root": {
           "$ref": "#/$defs/eventHash"
         },
         "formats": {
@@ -1283,6 +1370,34 @@
         },
         "extra": {
           "$ref": "#/$defs/extra"
+        }
+      },
+      "additionalProperties": false
+    },
+    "errorResponse": {
+      "type": "object",
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "message": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

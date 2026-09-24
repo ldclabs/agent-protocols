@@ -4,7 +4,8 @@
 
 import {
   AgentStatus,
-  MessageCreatePayload,
+  ArchiveRecord,
+  RecordClass,
   Role,
   RoomPolicy,
   RoomResponse,
@@ -13,24 +14,31 @@ import {
   TypeDef,
   Visibility,
   eventType,
+  isRedactedRecord,
+  recordClass,
 } from "../discourse.js";
 import { AgentId } from "../identity.js";
 
 import { LocalConnectorToolName } from "./catalog.js";
 import { isRecord, normalizeHost } from "./internal.js";
 
+export type { DelegationVerdict } from "../delegation.js";
+
 /**
  * Connector sync marker for one room. Connectors key local room state by
  * `(host, room_id)`: ADP room IDs are only recommended to be globally unique
  * and a connector can be configured with multiple hosts. `head_seq` /
  * `head_hash` are the latest locally verified head-advancing record per ADP
- * Section 5.1.
+ * Section 5.1; `presented_seq` / `presented_hash` are the latest head the agent
+ * has been shown with every record before it, the default write base.
  */
 export interface SyncState {
   host: string;
   room_id: string;
   head_seq: number;
   head_hash: string;
+  presented_seq?: number;
+  presented_hash?: string;
   synced_seq: number;
   remote_seq: number;
   subscribed: boolean;
@@ -74,16 +82,22 @@ export interface TimelineItem {
   seq: number;
   event_id: string;
   type: string;
-  kind: string;
-  actor: AgentId;
-  created_at: number;
-  received_at: number;
+  /** The record's ADP class: freshness class for built-ins, registry kind for custom types. */
+  kind: RecordClass;
+  /** Absent on redacted records. */
+  actor?: AgentId;
+  /** Absent on redacted records. */
+  created_at?: number;
+  accepted_at: number;
+  /** Informative excerpt; its derivation is connector-defined. */
   summary: string;
   content_type?: string;
   content?: unknown;
   mentions?: AgentId[];
   references?: string[];
-  payload: unknown;
+  /** Absent on redacted records. */
+  payload?: unknown;
+  redacted?: true;
 }
 
 export type InboxKind =
@@ -118,7 +132,7 @@ export interface InboxItem {
 
 export type HeadMismatchPolicy = "hold" | "reject" | "send_anyway";
 export type HeldDraftKind = "message" | "event";
-export type DraftAction = "revise" | "send_as_is" | "stay_silent" | "send_anyway";
+export type DraftAction = "revise" | "send" | "drop";
 
 export interface HeldDraft {
   id: string;
@@ -133,12 +147,14 @@ export interface HeldDraft {
   options?: DraftAction[];
 }
 
+/** The latest accepted `turn.update`; fields are copied from its payload. */
 export interface ActiveTurn {
-  turn_id: string;
+  turn_id: number;
   speaker: AgentId;
   assigned_seq: number;
-  expires_at?: number | null;
-  instruction?: string;
+  expires_at?: number;
+  intent?: string;
+  topic?: string;
   source_event_id: string;
 }
 
@@ -254,62 +270,87 @@ export function roomSummaryFromResponse(
   };
 }
 
-export function timelineItemFromRecord(record: ServerRecord): TimelineItem {
+/**
+ * Projects a record into a timeline item. `types` is the room's materialized
+ * registry; a custom type missing from it is reported as `message`.
+ */
+export function timelineItemFromRecord(
+  record: ArchiveRecord,
+  types: readonly TypeDef[] = [],
+): TimelineItem {
+  if (isRedactedRecord(record)) {
+    const type = record.envelope.type;
+    return {
+      room_id: record.room_id,
+      seq: record.seq,
+      event_id: record.envelope.hash,
+      type,
+      kind: recordClass(type, types) ?? "message",
+      accepted_at: record.accepted_at,
+      summary: "[redacted]",
+      redacted: true,
+    };
+  }
   const event = record.envelope.event;
   const payload = event.payload;
-  const message = messagePayload(payload);
+  const message = event.type === eventType.MESSAGE_CREATE ? messagePayload(payload) : undefined;
   return {
     room_id: record.room_id,
     seq: record.seq,
     event_id: record.envelope.hash,
     type: event.type,
-    kind: timelineKind(event.type),
+    kind: recordClass(event.type, types) ?? "message",
     actor: event.actor,
     created_at: event.created_at,
-    received_at: record.received_at,
+    accepted_at: record.accepted_at,
     summary: summarizePayload(event.type, payload),
     content_type: message?.content_type,
     content: message?.content,
     mentions: event.mentions ?? [],
-    references: message?.references ?? [],
+    references: referencesOf(payload),
     payload,
   };
 }
 
-function timelineKind(type: string): string {
-  if (type === eventType.MESSAGE_CREATE) return "message";
-  if (type.startsWith("room.")) return "room";
-  if (type.startsWith("type.")) return "type";
-  return "custom";
-}
+/** Maximum summary length in Unicode code points. */
+export const SUMMARY_MAX_CHARS = 160;
+const SUMMARY_FIELDS = ["summary", "title", "instruction", "intent", "question", "reason", "state"];
 
-function summarizePayload(type: string, payload: unknown): string {
+/**
+ * Informative summary shared by the SDK connectors: a string message body, or
+ * the first non-empty summary-like payload field, truncated to 160 code points
+ * with a trailing ellipsis; otherwise the event type.
+ */
+export function summarizePayload(type: string, payload: unknown): string {
   if (type === eventType.MESSAGE_CREATE) {
     const message = messagePayload(payload);
-    if (typeof message?.content === "string") return truncate(message.content, 200);
+    if (typeof message?.content === "string" && message.content.trim() !== "") {
+      return truncate(message.content, SUMMARY_MAX_CHARS);
+    }
   }
   if (isRecord(payload)) {
-    const summary = payload.summary ?? payload.reason ?? payload.title ?? payload.state;
-    if (typeof summary === "string" && summary.trim() !== "") {
-      return truncate(summary, 200);
+    for (const field of SUMMARY_FIELDS) {
+      const value = payload[field];
+      if (typeof value === "string" && value.trim() !== "") {
+        return truncate(value, SUMMARY_MAX_CHARS);
+      }
     }
   }
   return type;
 }
 
-function messagePayload(payload: unknown): MessageCreatePayload | undefined {
+function messagePayload(payload: unknown): { content_type: string; content: unknown } | undefined {
   if (!isRecord(payload)) return undefined;
   if (typeof payload.content_type !== "string") return undefined;
-  return {
-    content_type: payload.content_type,
-    content: payload.content,
-    references: Array.isArray(payload.references)
-      ? payload.references.filter((value): value is string => typeof value === "string")
-      : undefined,
-    extra: isRecord(payload.extra) ? payload.extra : undefined,
-  };
+  return { content_type: payload.content_type, content: payload.content };
 }
 
-function truncate(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}...`;
+function referencesOf(payload: unknown): string[] {
+  if (!isRecord(payload) || !Array.isArray(payload.references)) return [];
+  return payload.references.filter((value): value is string => typeof value === "string");
+}
+
+function truncate(value: string, maxChars: number): string {
+  const chars = [...value];
+  return chars.length <= maxChars ? value : `${chars.slice(0, maxChars - 1).join("")}…`;
 }

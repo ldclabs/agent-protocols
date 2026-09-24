@@ -1,56 +1,25 @@
 import json
-import unittest
 from base64 import urlsafe_b64encode
 from copy import deepcopy
-from hashlib import sha256
+from hashlib import sha256, sha3_256
 from pathlib import Path
 
+import pytest
 from jsonschema import ValidationError
 from jsonschema.validators import Draft202012Validator
 
-from agent_protocols.discourse import (
-    MESSAGE_CREATE,
-    PACK_CURATION,
-    PACK_DELIBERATION,
-    PACK_REACTIONS,
-    ROOM_CANCEL,
-    ROOM_CLOSE,
-    ROOM_CREATE,
-    ROOM_JOIN,
-    ROOM_JOIN_REVIEW,
-    ROOM_LEAVE,
-    ROOM_MEMBER_ROLE_UPDATE,
-    TYPE_DEFINE,
-    TypeRegistry,
-    archive_events_digest,
-    build_server_record,
-    can_accept_room_write,
-    can_submit_event,
-    can_write_in_state,
-    discourse_event,
-    pack_map,
-    room_create_event,
-    server_record_hash,
-    type_define_event,
-    validate_custom_event_type_name,
-    validate_discourse_envelope,
-    validate_event_against_registry,
-    validate_pack_import,
-    validate_room_create_payload,
-    validate_room_path,
-    verify_pack_digest,
-    verify_server_record,
-    verify_server_record_chain,
-)
-from agent_protocols import discourse
+from agent_protocols import discourse as d
 from agent_protocols.errors import AgentProtocolError
 from agent_protocols.http_client import sse_events_url
-from agent_protocols.identity import AgentSigner, create_event
+from agent_protocols.identity import AgentSigner
 
-PACKS_PATH = Path(__file__).resolve().parents[3] / "docs/protocols/agent-discourse/1.0.packs.json"
-PACKS_DOCUMENT = json.loads(PACKS_PATH.read_text())
-PACKS = pack_map(PACKS_DOCUMENT)
-SCHEMA_PATH = Path(__file__).resolve().parents[3] / "docs/protocols/agent-discourse/1.0.schema.json"
+DOCS = Path(__file__).resolve().parents[3] / "docs/protocols/agent-discourse"
+PACKS_DOCUMENT = json.loads((DOCS / "1.0.packs.json").read_text())
+PACKS = d.pack_map(PACKS_DOCUMENT)
+SCHEMA = json.loads((DOCS / "1.0.schema.json").read_text())
+VECTORS = json.loads((DOCS / "1.0.vectors.json").read_text())
+HOST = "https://api.example.com"
+ROOM = "d8ftedhpqhsusbg001tg"
 
 FINDING_DEF = {
     "type": "review.finding",
@@ -68,453 +37,338 @@ FINDING_DEF = {
 }
 
 
-class DiscourseTests(unittest.TestCase):
-    def test_loads_registered_packs_document(self):
-        self.assertEqual(PACKS_DOCUMENT["protocol"], "agent-discourse/1.0")
-        self.assertEqual(len(PACKS), 5)
-        self.assertIn(PACK_REACTIONS, PACKS)
-
-    def test_validates_room_create_without_room_id(self):
-        signer = AgentSigner.from_seed(bytes([14]) * 32)
-        event = room_create_event(
-            signer.agent_id(),
-            100,
-            1,
-            {"topic": "Research room", "visibility": "public", "start_time": 1000, "end_time": 2000},
-        )
-        envelope = signer.sign_event(event)
-
-        validate_discourse_envelope(envelope)
-        validate_room_path(envelope, "d8ftedhpqhsusbg001tg")
-
-    def test_rejects_room_create_with_room_id(self):
-        signer = AgentSigner.from_seed(bytes([14]) * 32)
-        event = room_create_event(
-            signer.agent_id(),
-            100,
-            1,
-            {"topic": "Research room", "visibility": "public", "start_time": 1000, "end_time": 2000},
-        )
-        event["room_id"] = "d8ftedhpqhsusbg001tg"
-        envelope = signer.sign_event(event)
-
-        with self.assertRaisesRegex(AgentProtocolError, "room_id"):
-            validate_discourse_envelope(envelope)
-        with self.assertRaisesRegex(AgentProtocolError, "room_id"):
-            validate_room_path(envelope, "d8ftedhpqhsusbg001tg")
-
-    def test_rejects_room_event_without_room_id(self):
-        signer = AgentSigner.from_seed(bytes([15]) * 32)
-        event = create_event(
-            "agent-discourse/1.0",
-            MESSAGE_CREATE,
-            signer.agent_id(),
-            100,
-            1,
-            {"content_type": "text/plain", "content": "hello"},
-        )
-        envelope = signer.sign_event(event)
-
-        with self.assertRaises(AgentProtocolError):
-            validate_discourse_envelope(envelope)
-
-    def test_schema_requires_join_review_canonical_request(self):
-        moderator = AgentSigner.from_seed(bytes([21]) * 32)
-        applicant = AgentSigner.from_seed(bytes([22]) * 32)
-        event = create_event(
-            "agent-discourse/1.0",
-            ROOM_JOIN_REVIEW,
-            moderator.agent_id(),
-            1_779_757_250_000,
-            1,
-            {
-                "request": {
-                    "id": "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
-                    "room_id": "d8ftedhpqhsusbg001tg",
-                    "applicant": applicant.agent_id(),
-                    "role": "speaker",
-                    "perspective": "distributed-systems reviewer",
-                    "reason": "I can cover replication and failure-mode tradeoffs.",
-                    "created_at": 1_779_757_210_000,
-                    "expires_at": 1_779_760_810_000,
-                    "extra": {},
-                },
-                "decision": "approve",
-                "role": "speaker",
-                "reason": "relevant expertise",
-            },
-        )
-        event["room_id"] = "d8ftedhpqhsusbg001tg"
-        event["base_seq"] = 17
-        event["base_hash"] = "GDt8oHZQfQ3jl5ZUfyNxKZu07yAJdDYuaw_jf_JjLYs"
-        envelope = moderator.sign_event(event)
-        validator = Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
-
-        validator.validate(envelope)
-        legacy = deepcopy(envelope)
-        legacy["event"]["payload"]["member"] = applicant.agent_id()
-        with self.assertRaises(ValidationError):
-            validator.validate(legacy)
-        legacy_with_request_id = deepcopy(envelope)
-        legacy_with_request_id["event"]["payload"]["request_id"] = "jr_01J8ZM7A3G2T9B4Q6X8R0N1P2Q"
-        with self.assertRaises(ValidationError):
-            validator.validate(legacy_with_request_id)
-        missing_request = deepcopy(envelope)
-        del missing_request["event"]["payload"]["request"]
-        with self.assertRaises(ValidationError):
-            validator.validate(missing_request)
-
-    def test_validates_custom_event_type_names(self):
-        validate_custom_event_type_name("review.finding")
-        validate_custom_event_type_name("poll.vote")
-        for bad in ("freeform", "room.custom", "type.new", "message.create", "Bad.Name"):
-            with self.assertRaises(AgentProtocolError):
-                validate_custom_event_type_name(bad)
-
-    def test_materializes_registry_from_packs_and_inline_defs(self):
-        registry = TypeRegistry.from_declarations(
-            [
-                {"use": PACK_REACTIONS},
-                {
-                    "use": PACK_DELIBERATION,
-                    "overrides": {"poll.vote": {"roles": ["moderator", "speaker", "observer"]}},
-                },
-                FINDING_DEF,
-            ],
-            PACKS,
-        )
-
-        self.assertEqual(len(registry), 6)
-        self.assertIn("reaction.create", registry)
-        self.assertIn("poll.create", registry)
-        self.assertIn("review.finding", registry)
-        self.assertEqual(registry.get("poll.vote")["roles"], ["moderator", "speaker", "observer"])
-
-        subset = TypeRegistry.from_declarations(
-            [{"use": PACK_DELIBERATION, "types": ["poll.create", "poll.vote"]}], PACKS
-        )
-        self.assertEqual(len(subset), 2)
-        self.assertNotIn("question.create", subset)
-
-    def test_rejects_bad_pack_imports(self):
-        with self.assertRaisesRegex(AgentProtocolError, "pack"):
-            TypeRegistry.from_declarations([{"use": "adp:unknown/1.0"}], PACKS)
-        with self.assertRaisesRegex(AgentProtocolError, "override"):
-            TypeRegistry.from_declarations(
-                [{"use": PACK_REACTIONS, "overrides": {"poll.vote": {}}}], PACKS
-            )
-        with self.assertRaises(AgentProtocolError):
-            validate_pack_import(
-                {"use": PACK_REACTIONS, "pack": "https://example.com/p.json", "digest": "sha256:abc"}
-            )
-
-    def test_latest_type_definition_wins(self):
-        registry = TypeRegistry()
-        registry.define(dict(FINDING_DEF))
-        registry.define({**FINDING_DEF, "status": "disabled"})
-        self.assertEqual(registry.get("review.finding")["status"], "disabled")
-
-    def test_validates_custom_payloads_against_pack_schemas(self):
-        registry = TypeRegistry.from_declarations([{"use": PACK_DELIBERATION}], PACKS)
-        event_hash = "GDt8oHZQfQ3jl5ZUfyNxKZu07yAJdDYuaw_jf_JjLYs"
-
-        registry.validate_payload("poll.vote", {"poll_event_id": event_hash, "option_ids": ["a"]})
-        with self.assertRaisesRegex(AgentProtocolError, "option_ids|required"):
-            registry.validate_payload("poll.vote", {"poll_event_id": event_hash})
-        with self.assertRaisesRegex(AgentProtocolError, "turn.update"):
-            validate_event_against_registry("turn.update", {}, registry)
-
-        disabled = TypeRegistry()
-        disabled.define({**FINDING_DEF, "status": "disabled"})
-        with self.assertRaisesRegex(AgentProtocolError, "disabled"):
-            disabled.validate_payload("review.finding", {"severity": "high", "summary": "s"})
-
-    def test_applies_kind_based_permissions(self):
-        registry = TypeRegistry.from_declarations(
-            [
-                {"use": PACK_REACTIONS},
-                {
-                    "use": PACK_DELIBERATION,
-                    "overrides": {"poll.vote": {"roles": ["moderator", "speaker", "observer"]}},
-                },
-                {"use": PACK_CURATION},
-            ],
-            PACKS,
-        )
-
-        observer = {"role": "observer"}
-        speaker = {"role": "speaker"}
-        moderator = {"role": "moderator"}
-        creator = {"role": "observer", "is_creator": True}
-
-        # signal kind: all members, including observers
-        self.assertTrue(can_submit_event("reaction.create", observer, registry))
-        # poll.vote default excludes observers, but this room overrode roles
-        self.assertTrue(can_submit_event("poll.vote", observer, registry))
-        # message kind: speakers and moderators only
-        self.assertTrue(can_submit_event("resource.add", speaker, registry))
-        self.assertFalse(can_submit_event("resource.add", observer, registry))
-        # control kind: moderators only
-        self.assertTrue(can_submit_event("graph.update", moderator, registry))
-        self.assertFalse(can_submit_event("graph.update", speaker, registry))
-        # creator passes every role check regardless of current role
-        self.assertTrue(can_submit_event("graph.update", creator, registry))
-        self.assertTrue(can_submit_event(MESSAGE_CREATE, creator, registry))
-        # undefined types are rejected
-        self.assertFalse(can_submit_event("session.offer", speaker, registry))
-
-        # built-in lifecycle rules
-        self.assertTrue(can_submit_event(ROOM_JOIN_REVIEW, moderator, registry))
-        self.assertFalse(can_submit_event(ROOM_JOIN_REVIEW, speaker, registry))
-        self.assertTrue(can_submit_event(ROOM_MEMBER_ROLE_UPDATE, moderator, registry))
-        self.assertTrue(can_submit_event(ROOM_CANCEL, moderator, registry))
-        self.assertTrue(can_submit_event(TYPE_DEFINE, moderator, registry))
-        self.assertFalse(can_submit_event(TYPE_DEFINE, speaker, registry))
-        self.assertTrue(can_submit_event(MESSAGE_CREATE, speaker, registry))
-        self.assertFalse(can_submit_event(MESSAGE_CREATE, observer, registry))
-        self.assertTrue(can_submit_event(ROOM_LEAVE, observer, registry))
-        self.assertFalse(can_submit_event(ROOM_JOIN, observer, registry))
-        self.assertTrue(can_submit_event(ROOM_JOIN, {"join_request_approved": True}, registry))
-        self.assertTrue(can_submit_event(ROOM_CREATE, {}, registry))
-
-    def test_applies_state_restrictions(self):
-        speaker = {"role": "speaker"}
-        moderator = {"role": "moderator"}
-
-        self.assertTrue(can_accept_room_write(MESSAGE_CREATE, "active", speaker))
-        self.assertFalse(can_accept_room_write(MESSAGE_CREATE, "scheduled", speaker))
-        # scheduled allows pre-start setup: reviews, role updates, leave, type.define
-        self.assertTrue(can_write_in_state(ROOM_JOIN_REVIEW, "scheduled"))
-        self.assertTrue(can_write_in_state(ROOM_MEMBER_ROLE_UPDATE, "scheduled"))
-        self.assertTrue(can_write_in_state(ROOM_LEAVE, "scheduled"))
-        self.assertTrue(can_write_in_state(TYPE_DEFINE, "scheduled"))
-        self.assertTrue(can_write_in_state(ROOM_CANCEL, "scheduled"))
-        self.assertFalse(can_write_in_state(ROOM_CLOSE, "scheduled"))
-        self.assertTrue(can_accept_room_write(TYPE_DEFINE, "scheduled", moderator))
-        # ended rooms are strictly read-only
-        self.assertFalse(can_write_in_state("reaction.create", "ended"))
-        self.assertFalse(can_write_in_state(ROOM_LEAVE, "ended"))
-        self.assertFalse(can_write_in_state(ROOM_JOIN, "cancelled"))
-        # cancel only while scheduled, close only while active
-        self.assertTrue(can_write_in_state(ROOM_CLOSE, "active"))
-        self.assertFalse(can_write_in_state(ROOM_CANCEL, "active"))
-
-    def test_validates_room_creation_payloads(self):
-        validate_room_create_payload(
-            {
-                "topic": "Research room",
-                "guidance": "Cite sources.",
-                "visibility": "public",
-                "start_time": 1000,
-                "end_time": 2000,
-                "policy": {"max_speakers": 2},
-                "types": [{"use": PACK_REACTIONS}, FINDING_DEF],
-            }
-        )
-        with self.assertRaises(AgentProtocolError):
-            validate_room_create_payload({"topic": " ", "visibility": "public", "start_time": 1000, "end_time": 2000})
-        with self.assertRaises(AgentProtocolError):
-            validate_room_create_payload(
-                {"topic": "Research room", "visibility": "public", "start_time": 2000, "end_time": 1000}
-            )
-        with self.assertRaisesRegex(AgentProtocolError, "max_speakers"):
-            validate_room_create_payload(
-                {
-                    "topic": "Research room",
-                    "visibility": "public",
-                    "start_time": 1000,
-                    "end_time": 2000,
-                    "policy": {"max_speakers": 0},
-                }
-            )
-        with self.assertRaisesRegex(AgentProtocolError, "reserved"):
-            validate_room_create_payload(
-                {
-                    "topic": "Research room",
-                    "visibility": "public",
-                    "start_time": 1000,
-                    "end_time": 2000,
-                    "types": [{**FINDING_DEF, "type": "room.custom"}],
-                }
-            )
-
-    def test_signs_and_validates_type_define_envelopes(self):
-        signer = AgentSigner.from_seed(bytes([16]) * 32)
-        event = type_define_event(
-            signer.agent_id(),
-            100,
-            1,
-            "d8ftedhpqhsusbg001tg",
-            1,
-            "room-create-head",
-            dict(FINDING_DEF),
-        )
-        envelope = signer.sign_event(event)
-        validate_discourse_envelope(envelope)
-
-    def test_verifies_pack_digests(self):
-        data = b"pack document bytes"
-        digest = "sha256:" + urlsafe_b64encode(sha256(data).digest()).rstrip(b"=").decode()
-        verify_pack_digest(data, digest)
-        with self.assertRaisesRegex(AgentProtocolError, "digest"):
-            verify_pack_digest(b"tampered", digest)
-        with self.assertRaisesRegex(AgentProtocolError, "algorithm"):
-            verify_pack_digest(data, "md5:abc")
-        with self.assertRaisesRegex(AgentProtocolError, "format"):
-            verify_pack_digest(data, "not-a-digest")
-
-    def test_builds_and_verifies_server_record_chains(self):
-        signer = AgentSigner.from_seed(bytes([18]) * 32)
-        envelope1 = signer.sign_event(
-            room_create_event(
-                signer.agent_id(),
-                100,
-                1,
-                {"topic": "Research room", "visibility": "public", "start_time": 1000, "end_time": 2000},
-            )
-        )
-        record1 = build_server_record("room123", 1, None, 110, envelope1)
-        event2 = create_event(
-            "agent-discourse/1.0",
-            MESSAGE_CREATE,
-            signer.agent_id(),
-            120,
-            2,
-            {"content_type": "text/plain", "content": "hello"},
-        )
-        event2["room_id"] = "room123"
-        event2["base_seq"] = 1
-        event2["base_hash"] = record1["hash"]
-        envelope2 = signer.sign_event(event2)
-        record2 = build_server_record("room123", 2, record1["hash"], 130, envelope2)
-
-        self.assertEqual(record1["hash"], server_record_hash("room123", 1, None, envelope1["hash"], 110))
-        verify_server_record(record1)
-        verify_server_record_chain([record1, record2])
-        self.assertEqual(len(archive_events_digest([record1, record2])), 43)
-        with self.assertRaisesRegex(AgentProtocolError, "first seq"):
-            verify_server_record_chain([record2])
-        with self.assertRaises(AgentProtocolError):
-            verify_server_record_chain([{**record2, "pre_hash": "bad"}])
-
-    def test_builds_sse_event_stream_url(self):
-        self.assertEqual(
-            sse_events_url("https://api.example.com", "room123"),
-            "https://api.example.com/v1/rooms/room123/events/live",
-        )
-
-class Revision20260704Tests(unittest.TestCase):
-    def test_kernel_defines_eleven_builtins_with_membership_signals(self):
-        self.assertEqual(len(discourse.BUILTIN_EVENT_TYPES), 11)
-        self.assertIn("room.update", discourse.BUILTIN_EVENT_TYPES)
-        self.assertIn("room.member.remove", discourse.BUILTIN_EVENT_TYPES)
-
-        for membership in discourse.MEMBERSHIP_EVENT_TYPES:
-            self.assertEqual(discourse.builtin_event_class(membership), "signal")
-            self.assertFalse(discourse.event_advances_room_head(membership))
-        for advancing in (
-            discourse.ROOM_CREATE,
-            discourse.ROOM_UPDATE,
-            discourse.ROOM_CLOSE,
-            discourse.ROOM_CANCEL,
-            discourse.TYPE_DEFINE,
-            discourse.MESSAGE_CREATE,
-        ):
-            self.assertTrue(discourse.event_advances_room_head(advancing))
-        self.assertIsNone(discourse.builtin_event_class("review.finding"))
-
-        registry = discourse.TypeRegistry()
-        registry.define(
-            {
-                "type": "reaction.create",
-                "kind": "signal",
-                "title": "Reaction",
-                "schema": {"type": "object"},
-            }
-        )
-        self.assertFalse(discourse.event_advances_room_head("reaction.create", registry))
-        self.assertTrue(discourse.event_advances_room_head("unknown.type", registry))
-
-        self.assertIn("member_banned", discourse.DISCOURSE_ERROR_CODES)
-        self.assertIn("role_not_allowed", discourse.DISCOURSE_ERROR_CODES)
-        self.assertIn("max_speakers_exceeded", discourse.DISCOURSE_ERROR_CODES)
-
-    def test_room_update_and_member_remove_follow_moderator_rules(self):
-        for builtin in (discourse.ROOM_UPDATE, discourse.ROOM_MEMBER_REMOVE):
-            self.assertTrue(discourse.can_submit_event(builtin, {"role": "moderator"}))
-            self.assertTrue(discourse.can_submit_event(builtin, {"is_creator": True}))
-            self.assertFalse(discourse.can_submit_event(builtin, {"role": "speaker"}))
-            self.assertTrue(discourse.can_write_in_state(builtin, "scheduled"))
-            self.assertTrue(discourse.can_write_in_state(builtin, "active"))
-            self.assertFalse(discourse.can_write_in_state(builtin, "ended"))
-            self.assertFalse(discourse.can_write_in_state(builtin, "cancelled"))
-
-    def test_validates_room_update_payloads(self):
-        discourse.validate_room_update_payload(
-            {"topic": "New topic", "guidance": "", "end_time": 2000}
-        )
-        with self.assertRaisesRegex(AgentProtocolError, "must not be empty"):
-            discourse.validate_room_update_payload({})
-        with self.assertRaisesRegex(AgentProtocolError, "not updatable"):
-            discourse.validate_room_update_payload({"visibility": "private"})
-        with self.assertRaisesRegex(AgentProtocolError, "topic"):
-            discourse.validate_room_update_payload({"topic": "  "})
-        with self.assertRaisesRegex(AgentProtocolError, "before end_time"):
-            discourse.validate_room_update_payload({"start_time": 5, "end_time": 5})
-        with self.assertRaisesRegex(AgentProtocolError, "max_speakers"):
-            discourse.validate_room_update_payload({"policy": {"max_speakers": 0}})
-
-    def test_validates_room_member_remove_payloads(self):
-        member = AgentSigner.from_seed(bytes([41]) * 32).agent_id()
-        discourse.validate_room_member_remove_payload({"member": member})
-        discourse.validate_room_member_remove_payload({"member": member, "ban": True})
-        with self.assertRaises(AgentProtocolError):
-            discourse.validate_room_member_remove_payload({"member": "not-an-id"})
-        with self.assertRaisesRegex(AgentProtocolError, "ban must be a boolean"):
-            discourse.validate_room_member_remove_payload({"member": member, "ban": "yes"})
-
-    def test_mentions_are_capped_at_32_unique_agent_ids(self):
-        signer = AgentSigner.from_seed(bytes([42]) * 32)
-        others = [AgentSigner.from_seed(bytes([100 + index]) * 32).agent_id() for index in range(33)]
-
-        def envelope_with(mentions):
-            event = discourse_event(
-                MESSAGE_CREATE,
-                signer.agent_id(),
-                100,
-                1,
-                "room1",
-                1,
-                "room-create-head",
-                {"content_type": "text/plain", "content": "hi"},
-            )
-            event["mentions"] = mentions
-            return signer.sign_event(event)
-
-        validate_discourse_envelope(envelope_with(others[:32]))
-        with self.assertRaisesRegex(AgentProtocolError, "must not exceed 32"):
-            validate_discourse_envelope(envelope_with(others))
-        with self.assertRaisesRegex(AgentProtocolError, "unique"):
-            validate_discourse_envelope(envelope_with([others[0], others[0]]))
-        # A non-string mention yields a clean protocol error, not a raw
-        # TypeError from set() hashing.
-        with self.assertRaises(AgentProtocolError):
-            validate_discourse_envelope(envelope_with([{"not": "a string"}]))
-
-    def test_type_redefinition_cannot_change_kind(self):
-        definition = {
-            "type": "review.finding",
-            "kind": "message",
-            "title": "Finding",
-            "schema": {"type": "object"},
-        }
-        registry = discourse.TypeRegistry()
-        registry.define(definition)
-        registry.define({**definition, "title": "Finding v2"})
-        self.assertEqual(registry.get("review.finding")["title"], "Finding v2")
-        with self.assertRaisesRegex(AgentProtocolError, "cannot change kind"):
-            registry.define({**definition, "kind": "signal"})
+def signer(byte):
+    return AgentSigner.from_seed(bytes([byte]) * 32)
 
 
-if __name__ == "__main__":
-    unittest.main()
+def room_payload(**overrides):
+    return {"host": HOST, "topic": "Research room", "visibility": "public", "start_time": 1000, "end_time": 2000, **overrides}
+
+
+def message(author, room=ROOM, base_seq=1, base_hash="h", nonce=1, **extra):
+    event = d.discourse_event(d.MESSAGE_CREATE, author.agent_id(), 100, nonce, room, base_seq, base_hash,
+                              {"content_type": "text/plain", "content": "hi"})
+    event.update(extra)
+    return author.sign_event(event)
+
+
+def test_kernel_defines_twelve_builtins_and_freshness_classes():
+    assert len(d.BUILTIN_EVENT_TYPES) == 12
+    assert d.is_builtin_event_type(d.ROOM_JOIN_REQUEST)
+    for kind in d.MEMBERSHIP_EVENT_TYPES:
+        assert d.builtin_event_class(kind) == "signal"
+        assert not d.event_advances_room_head(kind)
+        assert not d.event_requires_room_head(kind)
+    for kind in d.CONTRACT_EVENT_TYPES:
+        assert d.builtin_event_class(kind) == "contract"
+        assert d.event_advances_room_head(kind)
+        assert not d.event_requires_room_head(kind)
+    assert d.builtin_event_class(d.ROOM_CREATE) == "genesis"
+    assert d.record_class(d.ROOM_JOIN_REQUEST) is None
+    assert d.event_requires_room_head(d.MESSAGE_CREATE)
+    assert d.event_requires_room_head("unknown.custom")
+    assert not d.event_requires_base(d.ROOM_JOIN_REQUEST)
+    for code in ("host_mismatch", "type_conflict", "invalid_type_schema", "join_request_not_pending"):
+        assert code in d.DISCOURSE_ERROR_CODES
+
+
+def test_vectors_reproduce_chains_redaction_and_heads():
+    records = VECTORS["records"]
+    for record in records:
+        d.verify_server_record(record)
+        d.validate_discourse_envelope(record["envelope"])
+    d.verify_server_record_chain(records)
+    redacted = VECTORS["redacted_records"]
+    assert d.is_redacted_record(redacted[2])
+    d.verify_server_record_chain(redacted)
+    manifest = {"room_id": VECTORS["room_id"], "last_seq": VECTORS["last_seq"], "last_hash": VECTORS["last_hash"]}
+    assert d.verify_archive_records(manifest, records) == []
+    assert d.verify_archive_records(manifest, redacted) == [3]
+    with pytest.raises(AgentProtocolError):
+        d.verify_archive_records({**manifest, "last_hash": records[0]["hash"]}, records)
+    assert d.redact_server_record(records[2]) == redacted[2]
+    registry = d.TypeRegistry.from_declarations(records[0]["envelope"]["event"]["payload"]["types"], PACKS)
+    head = 0
+    for record, expected in zip(records, VECTORS["head_seq_after"]):
+        if d.event_advances_room_head(record["envelope"]["event"]["type"], registry):
+            head = record["seq"]
+        assert head == expected
+
+
+def test_vectors_classes_and_patterns():
+    freshness = VECTORS["freshness"]
+    registry = d.TypeRegistry.from_declarations(freshness["registry"], PACKS)
+    for kind, expected in freshness["classes"].items():
+        assert d.record_class(kind, registry) == expected, kind
+        assert d.event_requires_room_head(kind, registry) == (kind in freshness["head_bound"]), kind
+    for pattern in VECTORS["patterns"]["valid"]:
+        d.validate_portable_pattern(pattern)
+    for pattern in VECTORS["patterns"]["invalid"]:
+        with pytest.raises(AgentProtocolError):
+            d.validate_portable_pattern(pattern)
+
+
+def test_registered_packs_follow_the_profile():
+    assert PACKS_DOCUMENT["protocol"] == d.DISCOURSE_PROTOCOL
+    assert len(PACKS) == 5
+    for pack in PACKS.values():
+        for definition in pack["types"]:
+            d.validate_type_def(definition)
+    assert any(t["type"] == "claim.update" for t in PACKS[d.PACK_MODERATION]["types"])
+    assert not any(t["type"] == "session.candidate" for t in PACKS[d.PACK_REALTIME]["types"])
+
+
+def test_room_create_is_host_bound_and_closed():
+    creator = signer(14)
+    envelope = creator.sign_event(d.room_create_event(creator.agent_id(), 100, 1, room_payload()))
+    d.validate_discourse_envelope(envelope)
+    d.validate_room_path(envelope, ROOM)
+    d.validate_room_create_payload(envelope["event"]["payload"])
+    d.validate_room_create_host(envelope["event"]["payload"], HOST)
+    with pytest.raises(AgentProtocolError) as mismatch:
+        d.validate_room_create_host(envelope["event"]["payload"], "https://other.example")
+    assert mismatch.value.code == "host_mismatch"
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_create_payload(room_payload(host=f"{HOST}/v1"))
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_create_payload(room_payload(topic=" "))
+    for extra in ({"room_id": "r1"}, {"audience": "x"}):
+        event = {**d.room_create_event(creator.agent_id(), 100, 2, room_payload()), **extra}
+        with pytest.raises(AgentProtocolError):
+            d.validate_discourse_envelope(creator.sign_event(event))
+
+
+def test_room_events_require_valid_room_ids_bases_and_mentions():
+    author = signer(15)
+    d.validate_room_path(message(author, "room1"), "room1")
+    with pytest.raises(AgentProtocolError) as mismatch:
+        d.validate_room_path(message(author, "room1"), "room2")
+    assert mismatch.value.code == "room_id_mismatch"
+    with pytest.raises(AgentProtocolError):
+        d.validate_discourse_envelope(message(author, "room/../x"))
+    no_room = author.sign_event({**d.room_create_event(author.agent_id(), 1, 1, {}), "type": d.MESSAGE_CREATE})
+    with pytest.raises(AgentProtocolError) as missing:
+        d.validate_discourse_envelope(no_room)
+    assert missing.value.code == "missing_room_id"
+    mentions = [signer(100 + i).agent_id() for i in range(33)]
+    with pytest.raises(AgentProtocolError):
+        d.validate_discourse_envelope(message(author, mentions=mentions))
+    d.validate_discourse_envelope(message(author, mentions=mentions[:32]))
+    with pytest.raises(AgentProtocolError):
+        d.validate_discourse_envelope(message(author, mentions=[mentions[0], mentions[0]]))
+    with pytest.raises(AgentProtocolError):
+        d.validate_discourse_envelope(message(author, base_seq=0))
+
+
+def test_join_requests_are_signed_unanchored_and_embedded_by_reviews():
+    moderator, applicant = signer(21), signer(22)
+    request = applicant.sign_event(
+        d.room_join_request_event(applicant.agent_id(), 1, 1, ROOM, {"role": "speaker", "perspective": "reviewer"})
+    )
+    d.validate_discourse_envelope(request)
+    d.validate_join_request_envelope(request, ROOM)
+    anchored = applicant.sign_event(
+        {**d.room_join_request_event(applicant.agent_id(), 1, 2, ROOM, {"role": "speaker"}), "base_seq": 1, "base_hash": "h"}
+    )
+    with pytest.raises(AgentProtocolError):
+        d.validate_discourse_envelope(anchored)
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_join_request_payload({"role": "speaker", "request_id": "jr"})
+
+    review = {"request": request, "decision": "approve", "role": "speaker"}
+    head = "GDt8oHZQfQ3jl5ZUfyNxKZu07yAJdDYuaw_jf_JjLYs"
+    signed = moderator.sign_event(d.discourse_event(d.ROOM_JOIN_REVIEW, moderator.agent_id(), 2, 1, ROOM, 1, head, review))
+    d.validate_discourse_envelope(signed)
+    d.validate_room_join_review_payload(review, ROOM)
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_join_review_payload({**review, "role": None}, ROOM)
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_join_review_payload(review, "other")
+    tampered = deepcopy(review)
+    tampered["request"]["event"]["payload"]["role"] = "moderator"
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_join_review_payload(tampered, ROOM)
+
+    # The schema embeds the signed request and requires a role on approval.
+    validator = Draft202012Validator(SCHEMA)
+    validator.validate(signed)
+    legacy = deepcopy(signed)
+    legacy["event"]["payload"]["request"] = {"id": "jr_1", "applicant": applicant.agent_id(), "role": "speaker"}
+    with pytest.raises(ValidationError):
+        validator.validate(legacy)
+    no_role = deepcopy(signed)
+    del no_role["event"]["payload"]["role"]
+    with pytest.raises(ValidationError):
+        validator.validate(no_role)
+
+
+def test_direct_join_follows_invites_and_open_roles():
+    invited, stranger = signer(23).agent_id(), signer(24).agent_id()
+    policy = {"invites": {invited: "moderator"}, "open_roles": ["observer"]}
+    d.validate_room_policy(policy)
+    assert d.can_join_directly("private", policy, invited, "moderator")
+    assert not d.can_join_directly("private", policy, invited, "speaker")
+    assert not d.can_join_directly("private", policy, stranger, "observer")
+    assert d.can_join_directly("public", policy, stranger, "observer")
+    assert not d.can_join_directly("public", policy, stranger, "speaker")
+    assert d.effective_open_roles(None) == ["speaker", "observer"]
+    assert d.effective_open_roles({"observer_allowed": False}) == ["speaker"]
+    for bad in (
+        {"open_roles": ["moderator"]},
+        {"observer_allowed": False, "open_roles": ["observer"]},
+        {"moderator_agent_ids": []},
+        {"invites": {invited: "owner"}},
+        {"max_speakers": 0},
+    ):
+        with pytest.raises(AgentProtocolError):
+            d.validate_room_policy(bad)
+
+
+def test_type_schemas_follow_the_portable_profile():
+    d.validate_type_schema_profile({
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/x"}},
+        "$defs": {"x": {"type": "string", "pattern": "^a$"}},
+    })
+    for schema in (
+        {"$ref": "https://example.com/schema.json"},
+        {"$dynamicRef": "#x"},
+        {"$schema": "http://json-schema.org/draft-07/schema#"},
+        {"properties": {"a": {"pattern": "\\w"}}},
+        {"patternProperties": {"\\d": {}}},
+        {"allOf": [{"items": {"pattern": "."}}]},
+    ):
+        with pytest.raises(AgentProtocolError) as error:
+            d.validate_type_schema_profile(schema)
+        assert error.value.code == "invalid_type_schema"
+    with pytest.raises(AgentProtocolError):
+        d.TypeRegistry().define({**FINDING_DEF, "schema": {"type": "string", "pattern": "\\s"}})
+    # `format` is an annotation: a non-URI string is not a schema violation.
+    registry = d.TypeRegistry.from_declarations([{"use": d.PACK_CURATION}], PACKS)
+    registry.validate_payload("resource.add", {"resource_type": "web", "uri": "not a uri"})
+
+
+def test_registry_imports_packs_and_rejects_conflicts():
+    registry = d.TypeRegistry.from_declarations(
+        [
+            {"use": d.PACK_REACTIONS},
+            {"use": d.PACK_DELIBERATION, "overrides": {"poll.vote": {"roles": ["moderator", "speaker", "observer"]}}},
+            FINDING_DEF,
+        ],
+        PACKS,
+    )
+    assert len(registry) == 6
+    assert d.can_submit_event("poll.vote", {"role": "observer"}, registry)
+    registry.validate_payload("review.finding", {"severity": "high", "summary": "x"})
+    with pytest.raises(AgentProtocolError) as violation:
+        registry.validate_payload("review.finding", {"severity": "urgent", "summary": "x"})
+    assert violation.value.code == "payload_schema_violation"
+    for declarations in ([FINDING_DEF, FINDING_DEF], [{"use": d.PACK_REACTIONS}, {"use": d.PACK_REACTIONS}]):
+        with pytest.raises(AgentProtocolError) as twice:
+            d.TypeRegistry.from_declarations(declarations, PACKS)
+        assert twice.value.code == "type_conflict"
+    with pytest.raises(AgentProtocolError) as unavailable:
+        d.TypeRegistry.from_declarations([{"use": "adp:unknown/1.0"}], PACKS)
+    assert unavailable.value.code == "pack_unavailable"
+    with pytest.raises(AgentProtocolError):
+        d.validate_pack_import({"use": d.PACK_DELIBERATION, "types": ["poll.vote", "poll.vote"]})
+    with pytest.raises(AgentProtocolError):
+        d.TypeRegistry.from_declarations([{"use": d.PACK_DELIBERATION, "types": ["does.not.exist"]}], PACKS)
+    kinds = d.TypeRegistry()
+    kinds.define(FINDING_DEF)
+    with pytest.raises(AgentProtocolError) as kind_change:
+        kinds.define({**FINDING_DEF, "kind": "signal"})
+    assert kind_change.value.code == "type_conflict"
+    # Redefinition with the same kind: the latest definition wins.
+    kinds.define({**FINDING_DEF, "title": "Finding v2"})
+    assert kinds.get("review.finding")["title"] == "Finding v2"
+
+
+def test_verifies_pack_digests():
+    data = b"pack document bytes"
+    for algorithm, digest in (("sha256", sha256(data).digest()), ("sha3-256", sha3_256(data).digest())):
+        value = f"{algorithm}:" + urlsafe_b64encode(digest).rstrip(b"=").decode()
+        d.verify_pack_digest(data, value)
+        with pytest.raises(AgentProtocolError):
+            d.verify_pack_digest(b"tampered", value)
+    with pytest.raises(AgentProtocolError):
+        d.verify_pack_digest(data, "md5:abc")
+
+
+def test_permissions_follow_kinds_and_builtin_rules():
+    registry = d.TypeRegistry.from_declarations([{"use": d.PACK_REACTIONS}, {"use": d.PACK_CURATION}], PACKS)
+    observer, speaker, moderator = {"role": "observer"}, {"role": "speaker"}, {"role": "moderator"}
+    creator = {"role": "observer", "is_creator": True}
+    assert d.can_submit_event("reaction.create", observer, registry)
+    assert d.can_submit_event("resource.add", speaker, registry)
+    assert not d.can_submit_event("resource.add", observer, registry)
+    assert d.can_submit_event("graph.update", moderator, registry)
+    assert not d.can_submit_event("graph.update", speaker, registry)
+    assert d.can_submit_event("graph.update", creator, registry)
+    assert not d.can_submit_event("session.offer", speaker, registry)
+    assert d.can_submit_event(d.ROOM_LEAVE, observer, registry)
+    assert not d.can_submit_event(d.ROOM_LEAVE, {"role": "moderator", "is_creator": True}, registry)
+    assert not d.can_submit_event(d.ROOM_JOIN, {}, registry)
+    assert d.can_submit_event(d.ROOM_JOIN, {"direct_join_allowed": True}, registry)
+    assert d.can_submit_event(d.ROOM_JOIN_REQUEST, {}, registry)
+    assert not d.can_submit_event(d.ROOM_JOIN_REQUEST, speaker, registry)
+    assert d.can_write_in_state(d.ROOM_JOIN_REQUEST, "scheduled")
+    assert not d.can_write_in_state(d.ROOM_JOIN_REQUEST, "ended")
+    assert not d.can_write_in_state(d.ROOM_CLOSE, "scheduled")
+    assert not d.can_write_in_state(d.ROOM_CANCEL, "active")
+    assert d.can_accept_room_write(d.MESSAGE_CREATE, "active", speaker, registry)
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_write(d.MESSAGE_CREATE, "ended", speaker, registry)
+
+
+def test_validates_payload_shapes():
+    d.validate_message_create_payload({"content_type": "text/plain", "content": "hi"})
+    d.validate_message_create_payload({"content_type": "application/json", "content": {"a": 1}})
+    for content in (1, [], None):
+        with pytest.raises(AgentProtocolError):
+            d.validate_message_create_payload({"content_type": "application/json", "content": content})
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_update_payload({})
+    for field in ("host", "visibility", "types"):
+        with pytest.raises(AgentProtocolError):
+            d.validate_room_update_payload({field: "x"})
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_update_payload({"start_time": 5, "end_time": 5})
+    d.validate_room_update_payload({"topic": "New", "policy": {"open_roles": ["speaker"]}})
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_join_payload({"role": "speaker", "request_id": "jr"})
+    d.validate_room_join_payload({"role": "observer", "perspective": "p"})
+    d.validate_room_member_remove_payload({"member": signer(41).agent_id(), "ban": True})
+    with pytest.raises(AgentProtocolError):
+        d.validate_room_member_remove_payload({"member": signer(41).agent_id(), "ban": "yes"})
+
+
+def test_builds_redacts_and_verifies_record_chains():
+    author = signer(18)
+    create = author.sign_event(d.room_create_event(author.agent_id(), 100, 1, room_payload()))
+    first = d.build_server_record("room123", 1, None, 110, create)
+    second = d.build_server_record("room123", 2, first["hash"], 130, message(author, "room123", 1, first["hash"], 2))
+    assert "accepted_at" in first and "received_at" not in first
+    d.verify_server_record_chain([first, second])
+    with pytest.raises(AgentProtocolError):
+        d.verify_server_record_chain([second])
+    redacted = d.redact_server_record(second)
+    assert redacted["envelope"] == {"hash": second["envelope"]["hash"], "redacted": True, "type": d.MESSAGE_CREATE}
+    d.verify_server_record_chain([first, redacted])
+    with pytest.raises(AgentProtocolError):
+        d.redact_server_record(first)
+    forged = {**first, "envelope": {"hash": create["hash"], "redacted": True, "type": d.ROOM_CREATE}}
+    with pytest.raises(AgentProtocolError):
+        d.verify_server_record(forged)
+
+
+def test_type_define_events_carry_a_base():
+    moderator = signer(19)
+    event = d.type_define_event(moderator.agent_id(), 100, 1, ROOM, 3, "h", FINDING_DEF)
+    d.validate_discourse_envelope(moderator.sign_event(event))
+    assert (event["base_seq"], event["base_hash"]) == (3, "h")
+
+
+def test_builds_sse_event_stream_url():
+    assert sse_events_url(HOST, "room123") == f"{HOST}/v1/rooms/room123/events/live"
+    assert sse_events_url(f"{HOST}/", "room 1") == f"{HOST}/v1/rooms/room%201/events/live"

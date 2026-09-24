@@ -2,13 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ArchiveRecord,
+  RoomJoinRequest,
   RoomResponse,
+  ServerRecord,
   buildServerRecord,
   discourseEvent,
+  eventAdvancesRoomHead,
+  eventRequiresRoomHead,
   eventType,
+  redactServerRecord,
   roomCreateEvent,
 } from "./discourse.js";
-import { AgentSigner, withMention } from "./identity.js";
+import * as delegation from "./delegation.js";
+import { AgentSigner, Envelope, withMention } from "./identity.js";
 import {
   HeldDraft,
   InboxItem,
@@ -24,20 +31,24 @@ import {
   TOOL_DELEGATION_GRANT,
   TOOL_DELEGATION_REVOKE,
   TOOL_DRAFTS_LIST,
-  TOOL_DRAFT_DROP,
-  TOOL_DRAFT_GET,
+  TOOL_DRAFT_COMMIT,
   TOOL_INBOX_NEXT,
+  TOOL_JOIN_REQUEST_REVIEW,
   TOOL_PRINCIPAL_RESOLVE,
   TOOL_ROOM_JOIN,
   TOOL_ROOM_MEMBERS_LIST,
   TOOL_ROOM_SEND_MESSAGE,
   TOOL_ROOM_STATE,
+  TOOL_ROOM_SUBMIT_EVENT,
+  TOOL_ROOM_TIMELINE,
   TimelineItem,
   roomSummaryFromResponse,
   standardToolDefinitions,
   syncStateFromRoomResponse,
   timelineItemFromRecord,
 } from "./local-connector.js";
+
+const HOST = "https://api.example.test";
 
 function signer(byte: number): AgentSigner {
   return AgentSigner.fromSeed(new Uint8Array(32).fill(byte));
@@ -46,6 +57,7 @@ function signer(byte: number): AgentSigner {
 function roomResponse(roomId: string, creator: AgentSigner): RoomResponse {
   const envelope = creator.signEvent(
     roomCreateEvent(creator.agentId(), 100, 1, {
+      host: HOST,
       topic: "Room",
       visibility: "public",
       start_time: 1,
@@ -55,7 +67,7 @@ function roomResponse(roomId: string, creator: AgentSigner): RoomResponse {
   return {
     id: roomId,
     status: "active",
-    url: `https://api.example.test/v1/rooms/${roomId}`,
+    url: `${HOST}/v1/rooms/${roomId}`,
     topic: "Room",
     visibility: "public",
     start_time: 1,
@@ -65,83 +77,142 @@ function roomResponse(roomId: string, creator: AgentSigner): RoomResponse {
     seq: 1,
     pre_hash: null,
     hash: "room-create-head",
-    received_at: 100,
+    accepted_at: 100,
     head: { seq: 1, hash: "room-create-head" },
     envelope,
   };
 }
 
-test("standardToolDefinitions includes local connector tools and annotations", () => {
-  const tools = standardToolDefinitions();
-  const names = tools.map((tool) => tool.name);
+/**
+ * A minimal in-memory ADP host: it assigns records, enforces the room head on
+ * head-bound writes, and serves history, the room resource, and join requests.
+ */
+class MockHost {
+  records: ServerRecord[] = [];
+  room: RoomResponse;
+  joinRequests = new Map<string, RoomJoinRequest>();
+  headBoundRejections = 0;
 
-  assert.ok(names.includes(TOOL_ROOM_MEMBERS_LIST));
-  assert.ok(names.includes(TOOL_INBOX_NEXT));
-  assert.ok(names.includes(TOOL_ROOM_JOIN));
-  assert.ok(names.includes(TOOL_ROOM_SEND_MESSAGE));
-  assert.equal(
-    tools.find((tool) => tool.name === TOOL_ROOM_MEMBERS_LIST)?.annotations
-      .readOnlyHint,
-    true,
-  );
-  assert.equal(
-    tools.find((tool) => tool.name === TOOL_ROOM_SEND_MESSAGE)?.annotations
-      .openWorldHint,
-    true,
-  );
-});
+  constructor(readonly roomId: string, readonly creator: AgentSigner, visibility: "public" | "private" = "public", policy = {}) {
+    const envelope = creator.signEvent(roomCreateEvent(creator.agentId(), 100, 1, {
+      host: HOST, topic: "Room", visibility, start_time: 1, end_time: 10 ** 13, policy,
+    }));
+    const record = buildServerRecord(roomId, 1, null, 100, envelope);
+    this.records.push(record);
+    this.room = {
+      id: roomId, status: "active", url: `${HOST}/v1/rooms/${roomId}`, creator: creator.agentId(),
+      topic: "Room", visibility, policy, types: [{ type: "reaction.create", kind: "signal", title: "Reaction", schema: { type: "object" } }],
+      seq: 1, pre_hash: null, hash: record.hash, accepted_at: 100, head: { seq: 1, hash: record.hash }, envelope,
+    };
+  }
 
-test("standardToolDefinitions covers the delegation surface", () => {
-  const tools = standardToolDefinitions();
-  const find = (name: string) => {
-    const tool = tools.find((candidate) => candidate.name === name);
-    assert.ok(tool, `missing tool ${name}`);
-    return tool;
-  };
+  head(): { seq: number; hash: string } {
+    return this.room.head!;
+  }
 
-  // Reads reach other origins, so they are open-world but never writes.
-  for (const name of [
-    TOOL_PRINCIPAL_RESOLVE,
-    TOOL_DELEGATION_CHECK,
-    TOOL_DELEGATIONS_LIST,
+  append(envelope: Envelope<unknown>): ServerRecord {
+    const previous = this.records[this.records.length - 1];
+    const record = buildServerRecord(this.roomId, previous.seq + 1, previous.hash, 1000 + previous.seq, envelope);
+    this.records.push(record);
+    this.room.seq = record.seq;
+    this.room.hash = record.hash;
+    this.room.pre_hash = record.pre_hash;
+    if (eventAdvancesRoomHead(envelope.event.type, this.room.types)) this.room.head = { seq: record.seq, hash: record.hash };
+    return record;
+  }
+
+  fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const path = url.pathname;
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    const base = `/v1/rooms/${this.roomId}`;
+    if (init?.method === "POST" && path === `${base}/join-requests`) {
+      const envelope = JSON.parse(init.body as string) as Envelope<never>;
+      const request: RoomJoinRequest = { id: envelope.hash, request: envelope, status: "pending", expires_at: 10 ** 13 };
+      this.joinRequests.set(request.id, request);
+      return json(request);
+    }
+    if (init?.method === "POST" && path === base) {
+      const envelope = JSON.parse(init.body as string) as Envelope<unknown>;
+      if (eventRequiresRoomHead(envelope.event.type, this.room.types)) {
+        const head = this.head();
+        if (envelope.event.base_seq !== head.seq || envelope.event.base_hash !== head.hash) {
+          this.headBoundRejections += 1;
+          return json({ error: { code: "room_head_mismatch", message: "stale" } }, 409);
+        }
+      }
+      if (envelope.event.type === eventType.ROOM_JOIN_REVIEW) {
+        const payload = envelope.event.payload as { request: Envelope<unknown>; decision: string };
+        const request = this.joinRequests.get(payload.request.hash)!;
+        request.status = payload.decision === "approve" ? "approved" : "rejected";
+      }
+      return json(this.append(envelope));
+    }
+    if (path.startsWith(`${base}/join-requests/`)) {
+      const request = this.joinRequests.get(path.slice(`${base}/join-requests/`.length));
+      return request ? json(request) : json({ error: { code: "join_request_not_found", message: "no" } }, 404);
+    }
+    if (path === `${base}/events`) {
+      const after = Number(url.searchParams.get("after_seq") ?? 0);
+      return json({ result: this.records.filter((record) => record.seq > after) });
+    }
+    if (path === base) return json(this.room);
+    return json({ error: { code: "not_found", message: path } }, 404);
+  }) as typeof fetch;
+}
+
+function connectorFor(active: AgentSigner, host: MockHost): LocalConnector {
+  const connector = new LocalConnector(active, { fetchImpl: host.fetch });
+  connector.addHost({ host: HOST, allowed: true, features: [] });
+  return connector;
+}
+
+function message(author: AgentSigner, host: MockHost, text: string, nonce: number): Envelope<unknown> {
+  const head = host.head();
+  return author.signEvent(discourseEvent(eventType.MESSAGE_CREATE, author.agentId(), 120, nonce, host.roomId, head.seq, head.hash, { content_type: "text/plain", content: text }));
+}
+
+test("the tool catalog is the consolidated 25-tool surface", () => {
+  const names = standardToolDefinitions().map((tool) => tool.name);
+  assert.equal(names.length, 25);
+  assert.equal(new Set(names).size, 25);
+  for (const removed of [
+    "agent_protocols_hosts_list", "agent_protocols_room_open", "agent_protocols_room_member_get",
+    "agent_protocols_agent_status_get", "agent_protocols_agent_status_clear", "agent_protocols_room_unread",
+    "agent_protocols_room_mark_read", "agent_protocols_draft_get", "agent_protocols_draft_drop",
+    "agent_protocols_room_join_request", "agent_protocols_room_join_when_approved", "agent_protocols_host_add",
   ]) {
+    assert.ok(!names.includes(removed as never), removed);
+  }
+  const tools = standardToolDefinitions();
+  const find = (name: string) => tools.find((tool) => tool.name === name)!;
+  assert.equal(find(TOOL_ROOM_MEMBERS_LIST).annotations.readOnlyHint, true);
+  assert.equal(find(TOOL_ROOM_SEND_MESSAGE).annotations.openWorldHint, true);
+  assert.equal(find(TOOL_ROOM_STATE).annotations.readOnlyHint, false);
+  assert.equal(find(TOOL_ROOM_TIMELINE).annotations.readOnlyHint, false);
+  assert.equal(find(TOOL_INBOX_NEXT).annotations.readOnlyHint, false);
+  for (const name of [TOOL_PRINCIPAL_RESOLVE, TOOL_DELEGATION_CHECK, TOOL_DELEGATIONS_LIST]) {
     assert.equal(find(name).annotations.readOnlyHint, true, name);
     assert.equal(find(name).annotations.openWorldHint, true, name);
   }
-
-  // Grant and revoke sign envelopes, so they are neither read-only nor
-  // idempotent.
   for (const name of [TOOL_DELEGATION_GRANT, TOOL_DELEGATION_REVOKE]) {
     assert.equal(find(name).annotations.readOnlyHint, false, name);
     assert.equal(find(name).annotations.idempotentHint, false, name);
-    assert.equal(find(name).annotations.openWorldHint, true, name);
   }
+  const grant = find(TOOL_DELEGATION_GRANT).input_schema as { required: string[]; properties: Record<string, unknown> };
+  assert.ok(grant.required.includes("audiences"));
+  assert.ok(!("delegation_service" in grant.properties));
+  assert.ok((find(TOOL_DELEGATION_CHECK).input_schema.required as string[]).includes("audience"));
+  const banned: RoomMemberStatus = "banned";
+  const removedKind: InboxKind = "room.member.removed";
+  assert.deepEqual([banned, removedKind], ["banned", "room.member.removed"]);
 });
 
 test("syncStateFromRoomResponse and roomSummaryFromResponse derive room views", () => {
-  const creator = AgentSigner.fromSeed(new Uint8Array(32).fill(8));
-  const envelope = creator.signEvent(
-    roomCreateEvent(creator.agentId(), 100, 1, {
-      topic: "Room",
-      visibility: "public",
-      start_time: 1,
-      end_time: 2,
-      tags: ["review"],
-      language: "en",
-    }),
-  );
-  const room = {
-    id: "room1",
-    status: "active" as const,
-    url: "https://api.example.com/v1/rooms/room1",
-    seq: 1,
-    pre_hash: null,
-    hash: "room-create-head",
-    received_at: 101,
-    head: { seq: 1, hash: "room-create-head" },
-    envelope,
-  };
-
+  const room = roomResponse("room1", signer(8));
+  room.envelope!.event.payload.tags = ["review"];
+  room.envelope!.event.payload.language = "en";
+  room.tags = undefined;
   assert.deepEqual(syncStateFromRoomResponse("https://api.example.com/", room), {
     host: "https://api.example.com",
     room_id: "room1",
@@ -153,104 +224,58 @@ test("syncStateFromRoomResponse and roomSummaryFromResponse derive room views", 
     unread_count: 0,
     pending_inbox_count: 0,
   });
-  assert.deepEqual(roomSummaryFromResponse("https://api.example.com/", room), {
-    room_id: "room1",
-    host: "https://api.example.com",
-    topic: "Room",
-    status: "active",
-    visibility: "public",
-    start_time: 1,
-    end_time: 2,
-    tags: ["review"],
-    language: "en",
-    role: undefined,
-    unread_count: 0,
-    pending_inbox_count: 0,
-  });
+  const summary = roomSummaryFromResponse("https://api.example.com/", room);
+  assert.deepEqual([summary.topic, summary.language, summary.tags], ["Room", "en", ["review"]]);
 });
 
-test("timelineItemFromRecord exposes message fields and event-level mentions", () => {
-  const speaker = AgentSigner.fromSeed(new Uint8Array(32).fill(9));
-  const target = AgentSigner.fromSeed(new Uint8Array(32).fill(10));
+test("timelineItemFromRecord exposes message fields, classes, and redaction", () => {
+  const speaker = signer(9);
+  const target = signer(10);
   const event = withMention(
-    discourseEvent(
-      eventType.MESSAGE_CREATE,
-      speaker.agentId(),
-      120,
-      2,
-      "room1",
-      1,
-      "room-create-head",
-      {
-        content_type: "text/plain",
-        content: "please review this",
-        references: ["abc"],
-      },
-    ),
+    discourseEvent(eventType.MESSAGE_CREATE, speaker.agentId(), 120, 2, "room1", 1, "room-create-head", {
+      content_type: "text/plain",
+      content: "please review this",
+      references: ["abc"],
+    }),
     target.agentId(),
   );
-  const envelope = speaker.signEvent(event);
-  const record = buildServerRecord("room1", 2, "room-create-head", 121, envelope);
+  const record = buildServerRecord("room1", 2, "room-create-head", 121, speaker.signEvent(event));
   const item = timelineItemFromRecord(record);
-
-  assert.equal(item.type, eventType.MESSAGE_CREATE);
   assert.equal(item.kind, "message");
-  assert.equal(item.content_type, "text/plain");
+  assert.equal(item.accepted_at, 121);
   assert.equal(item.content, "please review this");
   assert.deepEqual(item.references, ["abc"]);
   assert.deepEqual(item.mentions, [target.agentId()]);
   assert.equal(item.summary, "please review this");
-});
 
-test("connector surface reflects the 2026-07-04 revision", () => {
-  const tools = standardToolDefinitions();
-  const names = tools.map((tool) => tool.name);
+  const redacted = timelineItemFromRecord(redactServerRecord(record));
+  assert.deepEqual([redacted.redacted, redacted.kind, redacted.actor, redacted.payload], [true, "message", undefined, undefined]);
 
-  // The host allowlist is operator configuration; no agent-reachable mutation.
-  assert.ok(!names.some((name) => name === "agent_protocols_host_add"));
-
-  // Static annotations: mark_read-capable timeline reads declare readOnly false.
-  const timeline = tools.find(
-    (tool) => tool.name === "agent_protocols_room_timeline",
-  );
-  assert.equal(timeline?.annotations.readOnlyHint, false);
-  assert.equal(timeline?.annotations.idempotentHint, true);
-  const inboxNext = tools.find((tool) => tool.name === TOOL_INBOX_NEXT);
-  assert.equal(inboxNext?.annotations.readOnlyHint, false);
-
-  // Member status and inbox kinds cover removal and bans.
-  const banned: RoomMemberStatus = "banned";
-  const removedKind: InboxKind = "room.member.removed";
-  assert.equal(banned, "banned");
-  assert.equal(removedKind, "room.member.removed");
+  const long = "界".repeat(200);
+  const longItem = timelineItemFromRecord(buildServerRecord("room1", 2, "h", 1, speaker.signEvent(
+    discourseEvent(eventType.MESSAGE_CREATE, speaker.agentId(), 1, 3, "room1", 1, "h", { content_type: "text/plain", content: long }),
+  )));
+  assert.equal([...longItem.summary].length, 160);
+  assert.ok(longItem.summary.endsWith("…"));
+  const update = timelineItemFromRecord(buildServerRecord("room1", 2, "h", 1, speaker.signEvent(
+    discourseEvent(eventType.ROOM_UPDATE, speaker.agentId(), 1, 4, "room1", 1, "h", { topic: "t" }),
+  )));
+  assert.equal(update.kind, "contract");
 });
 
 test("observed hosts do not bypass the allowlist for signing", () => {
   const connector = new LocalConnector(signer(1));
-  connector.acceptRoomResponse(
-    "https://untrusted.example.test",
-    roomResponse("room1", signer(5)),
-  );
-  assert.equal(
-    connector.state.hosts.get("https://untrusted.example.test")?.allowed,
-    false,
-  );
+  connector.acceptRoomResponse("https://untrusted.example.test", roomResponse("room1", signer(5)));
+  assert.equal(connector.state.hosts.get("https://untrusted.example.test")?.allowed, false);
   assert.throws(
-    () =>
-      connector.signRoomEvent(
-        eventType.MESSAGE_CREATE,
-        { host: "https://untrusted.example.test", roomId: "room1" },
-        undefined,
-        undefined,
-        [],
-        { content_type: "text/plain", content: "hi" },
-      ),
+    () => connector.signRoomEvent(eventType.MESSAGE_CREATE, { host: "https://untrusted.example.test", roomId: "room1" }, undefined, undefined, [], { content_type: "text/plain", content: "hi" }),
     /permission denied/,
   );
 });
 
 test("room views fall back to room.create payload metadata", async () => {
   const connector = new LocalConnector(signer(1));
+  connector.addHost({ host: HOST, allowed: true });
   const room = roomResponse("room1", signer(5));
   const payload = room.envelope!.event.payload;
   payload.agenda = "Review the proposal";
@@ -258,265 +283,168 @@ test("room views fall back to room.create payload metadata", async () => {
   payload.tags = ["review"];
   payload.language = "en";
   room.topic = undefined;
-  room.agenda = undefined;
-  room.guidance = undefined;
   room.visibility = undefined;
   room.start_time = undefined;
   room.end_time = undefined;
   room.tags = [];
-  room.language = undefined;
-  connector.observeRoom("https://api.example.test", room);
+  connector.acceptRoomResponse(HOST, room);
 
-  const state = (await connector.callTool(TOOL_ROOM_STATE, {
-    room_id: "room1",
-    host: "https://api.example.test",
-  })) as { room: RoomStateView };
+  const state = (await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1", host: HOST })) as { room: RoomStateView };
   assert.equal(state.room.topic, "Room");
   assert.equal(state.room.agenda, "Review the proposal");
   assert.equal(state.room.guidance, "Stay concise");
   assert.equal(state.room.visibility, "public");
-  assert.equal(state.room.start_time, 1);
-  assert.equal(state.room.end_time, 2);
   assert.deepEqual(state.room.tags, ["review"]);
   assert.equal(state.room.language, "en");
 });
 
-test("applyRecord materializes members, timeline, and inbox", async () => {
-  const active = signer(1);
-  const speaker = signer(2);
-  const connector = new LocalConnector(active);
-  connector.addHost({
-    host: "https://api.example.test",
-    allowed: true,
-    features: [],
-  });
-  connector.acceptRoomResponse(
-    "https://api.example.test",
-    roomResponse("room1", signer(5)),
-  );
+test("room_state opens and syncs, and the presented head follows what the agent read", async () => {
+  const creator = signer(5), active = signer(1), other = signer(2);
+  const host = new MockHost("room1", creator);
+  host.append(message(other, host, "first", 1));
+  const connector = connectorFor(active, host);
 
-  const joinEnvelope = speaker.signEvent(
-    discourseEvent(
-      eventType.ROOM_JOIN,
-      speaker.agentId(),
-      110,
-      1,
-      "room1",
-      1,
-      "room-create-head",
-      { request_id: "jr1", role: "speaker" },
-    ),
-  );
-  const join = buildServerRecord(
-    "room1",
-    2,
-    "room-create-head",
-    111,
-    joinEnvelope,
-  );
-  connector.applyRecord(join);
+  const opened = (await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1", host: HOST, subscribe: true })) as { sync: SyncState };
+  assert.equal(opened.sync.head_seq, 2);
+  assert.equal(opened.sync.presented_seq, 2, "the first state read is the starting view");
+  assert.equal(opened.sync.subscribed, true);
 
-  // room.join is a membership signal: it does not advance the room head.
-  const afterJoin = (await connector.callTool(TOOL_ROOM_STATE, {
-    room_id: "room1",
-    host: "https://api.example.test",
-  })) as { sync: SyncState };
-  assert.equal(afterJoin.sync.head_seq, 1);
+  // New activity arrives; a status-only read does not present it.
+  host.append(message(other, host, "second", 2));
+  await connector.callTool(TOOL_ROOM_TIMELINE, { room_id: "room1", refresh: true, types: ["message.create"] });
+  let sync = ((await connector.callTool(TOOL_ROOM_MEMBERS_LIST, { room_id: "room1" })) as { sync: SyncState }).sync;
+  assert.deepEqual([sync.head_seq, sync.presented_seq], [3, 2], "a filtered read presents nothing");
 
-  const messageEnvelope = speaker.signEvent(
-    withMention(
-      discourseEvent(
-        eventType.MESSAGE_CREATE,
-        speaker.agentId(),
-        120,
-        2,
-        "room1",
-        1,
-        "room-create-head",
-        { content_type: "text/plain", content: "please review this" },
-      ),
-      active.agentId(),
-    ),
-  );
-  const message = buildServerRecord("room1", 3, join.hash, 121, messageEnvelope);
-  connector.applyRecord(message);
+  // A gap-free timeline read from the presented head presents the new head.
+  const timeline = (await connector.callTool(TOOL_ROOM_TIMELINE, { room_id: "room1", unread_only: true, mark_read: true })) as { items: TimelineItem[]; sync: SyncState; unread_count: number };
+  assert.equal(timeline.sync.presented_seq, 3);
+  assert.equal(timeline.unread_count, 0);
 
-  const members = (await connector.callTool(TOOL_ROOM_MEMBERS_LIST, {
-    room_id: "room1",
-    host: "https://api.example.test",
-    status: "active",
-  })) as { members: RoomMemberView[] };
-  assert.equal(members.members.length, 2);
-
-  const inbox = (await connector.callTool(TOOL_INBOX_NEXT, {
-    room_id: "room1",
-    kinds: ["room.mention"],
-    claim: true,
-  })) as { items: InboxItem[]; pending_count: number };
-  assert.equal(inbox.items.length, 1);
-  assert.equal(inbox.items[0].kind, "room.mention");
-  assert.equal(inbox.pending_count, 0);
+  // A reply without an explicit base is signed against the presented head and extends it.
+  const sent = (await connector.callTool(TOOL_ROOM_SEND_MESSAGE, { room_id: "room1", content: "reply" })) as RoomWriteResult;
+  assert.equal(sent.status, "sent");
+  assert.equal(sent.record?.envelope.event.base_seq, 3);
+  assert.equal(sent.sync.presented_seq, sent.record?.seq);
 });
 
-test("room.send_message holds a draft on head mismatch before submit", async () => {
-  const active = signer(1);
-  const speaker = signer(2);
-  const connector = new LocalConnector(active);
-  connector.acceptRoomResponse(
-    "https://api.example.test",
-    roomResponse("room1", signer(5)),
-  );
+test("a head-bound write against an unread head is held, then committed with send or dropped", async () => {
+  const creator = signer(5), active = signer(1), other = signer(2);
+  const host = new MockHost("room1", creator);
+  const connector = connectorFor(active, host);
+  await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1", host: HOST });
+  // Someone speaks while the agent composes; the connector has not synced it.
+  host.append(message(other, host, "new context", 1));
 
-  const messageEnvelope = speaker.signEvent(
-    discourseEvent(
-      eventType.MESSAGE_CREATE,
-      speaker.agentId(),
-      120,
-      1,
-      "room1",
-      1,
-      "room-create-head",
-      { content_type: "text/plain", content: "new context" },
-    ),
-  );
-  const message = buildServerRecord(
-    "room1",
-    2,
-    "room-create-head",
-    121,
-    messageEnvelope,
-  );
-  connector.applyRecord(message);
+  const held = (await connector.callTool(TOOL_ROOM_SEND_MESSAGE, { room_id: "room1", content: "answer based on old context" })) as RoomWriteResult;
+  assert.equal(held.status, "held");
+  assert.equal(host.headBoundRejections, 1, "the host enforced the head precondition");
+  assert.deepEqual(held.draft?.options, ["revise", "send", "drop"]);
+  assert.equal(held.changes?.length, 1);
+  assert.equal(held.sync.presented_seq, 2, "the held result presents the head its changes reach");
 
-  const result = (await connector.callTool(TOOL_ROOM_SEND_MESSAGE, {
-    room_id: "room1",
-    content: "answer based on old context",
-    base_seq: 1,
-    base_hash: "room-create-head",
-    on_head_mismatch: "hold",
-  })) as RoomWriteResult;
-  assert.equal(result.status, "held");
-  assert.equal(result.draft?.kind, "message");
-  assert.equal(result.draft?.base_seq, 1);
-  assert.equal(result.changes?.length, 1);
-  assert.equal(connector.state.drafts.size, 1);
+  const read = (await connector.callTool(TOOL_DRAFTS_LIST, { draft_id: held.draft!.id })) as { drafts: HeldDraft[]; changes: TimelineItem[] };
+  assert.equal(read.changes.length, 1);
 
-  const draftId = result.draft!.id;
-  const drafts = (await connector.callTool(TOOL_DRAFTS_LIST, {
-    room_id: "room1",
-  })) as { drafts: HeldDraft[] };
-  assert.equal(drafts.drafts.length, 1);
-
-  const draft = (await connector.callTool(TOOL_DRAFT_GET, {
-    draft_id: draftId,
-  })) as { changes: TimelineItem[] };
-  assert.equal(draft.changes.length, 1);
-
-  const dropped = (await connector.callTool(TOOL_DRAFT_DROP, {
-    draft_id: draftId,
-  })) as { status: string };
-  assert.equal(dropped.status, "dropped");
+  const sent = (await connector.callTool(TOOL_DRAFT_COMMIT, { draft_id: held.draft!.id, action: "revise", content: "revised answer" })) as RoomWriteResult;
+  assert.equal(sent.status, "sent");
+  assert.equal(sent.record?.envelope.event.base_seq, 2);
   assert.equal(connector.state.drafts.size, 0);
+
+  host.append(message(other, host, "more", 2));
+  const again = (await connector.callTool(TOOL_ROOM_SEND_MESSAGE, { room_id: "room1", content: "x", on_head_mismatch: "hold" })) as RoomWriteResult;
+  assert.equal(again.status, "held");
+  const dropped = (await connector.callTool(TOOL_DRAFT_COMMIT, { draft_id: again.draft!.id, action: "drop" })) as { status: string };
+  assert.equal(dropped.status, "dropped");
+  await assert.rejects(() => connector.callTool(TOOL_DRAFT_COMMIT, { draft_id: again.draft!.id, action: "send" }), /draft not found/);
+
+  host.append(message(other, host, "even more", 3));
+  const forced = (await connector.callTool(TOOL_ROOM_SEND_MESSAGE, { room_id: "room1", content: "y", on_head_mismatch: "send_anyway" })) as RoomWriteResult;
+  assert.equal(forced.status, "sent");
+  assert.equal(forced.record?.envelope.event.base_seq, 5, "send_anyway re-signed against the latest head");
+  assert.equal(forced.sync.presented_seq, 4, "an automatic rebase does not present records the agent never saw");
 });
 
-test("signal records do not advance the room head", async () => {
-  const connector = new LocalConnector(signer(1));
-  const speaker = signer(2);
-  const room = roomResponse("room1", signer(5));
-  room.types = [
-    {
-      type: "reaction.create",
-      kind: "signal",
-      title: "Reaction",
-      schema: { type: "object" },
-    },
-  ];
-  connector.acceptRoomResponse("https://api.example.test", room);
-
-  const signalEnvelope = speaker.signEvent(
-    discourseEvent(
-      "reaction.create",
-      speaker.agentId(),
-      120,
-      1,
-      "room1",
-      1,
-      "room-create-head",
-      { emoji: "+1" },
-    ),
-  );
-  const signal = buildServerRecord(
-    "room1",
-    2,
-    "room-create-head",
-    121,
-    signalEnvelope,
-  );
-  connector.applyRecord(signal);
-
-  const state = (await connector.callTool(TOOL_ROOM_STATE, {
-    room_id: "room1",
-    host: "https://api.example.test",
-  })) as { sync: SyncState };
-  assert.equal(state.sync.head_seq, 1);
-  assert.equal(state.sync.head_hash, "room-create-head");
-  assert.equal(state.sync.synced_seq, 2);
-  assert.equal(state.sync.remote_seq, 2);
+test("contract writes only anchor, so a busy room cannot hold a moderator's update", async () => {
+  const creator = signer(5), other = signer(2);
+  const host = new MockHost("room1", creator);
+  const connector = connectorFor(creator, host);
+  await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1", host: HOST });
+  host.append(message(other, host, "busy", 1));
+  const result = (await connector.callTool(TOOL_ROOM_SUBMIT_EVENT, {
+    room_id: "room1", type: eventType.ROOM_UPDATE, payload: { end_time: 10 ** 13 + 1 },
+  })) as RoomWriteResult;
+  assert.equal(result.status, "sent");
+  assert.equal(result.record?.envelope.event.base_seq, 1, "anchored on the presented head, not the current one");
+  assert.equal(result.sync.head_seq, 3, "and it still advances the head");
 });
 
-test("rejects non-signal records not based on the room head", () => {
+test("join: direct for open roles and invitees, reviewed and approved otherwise", async () => {
+  const creator = signer(5), applicant = signer(6), invitee = signer(7);
+  const publicRoom = new MockHost("pub1", creator, "public", { open_roles: ["observer"] });
+  const observer = connectorFor(applicant, publicRoom);
+  const joined = (await observer.callTool(TOOL_ROOM_JOIN, { room_id: "pub1", host: HOST, role: "observer", perspective: "watcher" })) as { status: string; member: RoomMemberView };
+  assert.equal(joined.status, "joined");
+  assert.equal(joined.member.perspective, "watcher");
+
+  const privateRoom = new MockHost("priv1", creator, "private", { invites: { [invitee.agentId()]: "speaker" } });
+  const invited = (await connectorFor(invitee, privateRoom).callTool(TOOL_ROOM_JOIN, { room_id: "priv1", host: HOST, role: "speaker" })) as { status: string };
+  assert.equal(invited.status, "joined");
+
+  const outsider = connectorFor(applicant, privateRoom);
+  const pending = (await outsider.callTool(TOOL_ROOM_JOIN, { room_id: "priv1", host: HOST, role: "speaker", perspective: "reviewer", reason: "please" })) as { status: string; join_request: RoomJoinRequest };
+  assert.equal(pending.status, "approval_required");
+  assert.equal(pending.join_request.request.event.type, eventType.ROOM_JOIN_REQUEST);
+  assert.equal(pending.join_request.request.event.base_seq, undefined, "a join request carries no base");
+  const stillPending = (await outsider.callTool(TOOL_ROOM_JOIN, { room_id: "priv1", host: HOST, role: "speaker" })) as { status: string };
+  assert.equal(stillPending.status, "approval_required");
+  assert.equal(privateRoom.joinRequests.size, 1, "a pending request is not re-submitted");
+
+  const moderator = connectorFor(creator, privateRoom);
+  await moderator.callTool(TOOL_ROOM_STATE, { room_id: "priv1", host: HOST });
+  await assert.rejects(() => moderator.callTool(TOOL_JOIN_REQUEST_REVIEW, { room_id: "priv1", request_id: pending.join_request.id, decision: "approve" }), /requires a role/);
+  const review = (await moderator.callTool(TOOL_JOIN_REQUEST_REVIEW, { room_id: "priv1", request_id: pending.join_request.id, decision: "approve", role: "speaker" })) as { record: ServerRecord };
+  assert.equal((review.record.envelope.event.payload as { request: Envelope<unknown> }).request.hash, pending.join_request.id);
+
+  const approved = (await outsider.callTool(TOOL_ROOM_JOIN, { room_id: "priv1", host: HOST, role: "speaker" })) as { status: string; member: RoomMemberView };
+  assert.equal(approved.status, "joined");
+  assert.deepEqual([approved.member.role, approved.member.perspective], ["speaker", "reviewer"]);
+  const inbox = (await outsider.callTool(TOOL_INBOX_NEXT, { kinds: ["room.join.approved"] })) as { items: InboxItem[] };
+  assert.equal(inbox.items.length, 1);
+});
+
+test("signal and redacted records keep the head, contract records advance it", async () => {
   const connector = new LocalConnector(signer(1));
+  connector.addHost({ host: HOST, allowed: true });
   const speaker = signer(2);
   const room = roomResponse("room1", signer(5));
-  room.types = [
-    {
-      type: "reaction.create",
-      kind: "signal",
-      title: "Reaction",
-      schema: { type: "object" },
-    },
-  ];
-  connector.acceptRoomResponse("https://api.example.test", room);
+  room.types = [{ type: "reaction.create", kind: "signal", title: "Reaction", schema: { type: "object" } }];
+  connector.acceptRoomResponse(HOST, room);
 
-  const signalEnvelope = speaker.signEvent(
-    discourseEvent(
-      "reaction.create",
-      speaker.agentId(),
-      120,
-      1,
-      "room1",
-      1,
-      "room-create-head",
-      { emoji: "+1" },
-    ),
-  );
-  const signal = buildServerRecord(
-    "room1",
-    2,
-    "room-create-head",
-    121,
-    signalEnvelope,
-  );
-  const signalHash = signal.hash;
+  const signal = buildServerRecord("room1", 2, "room-create-head", 121, speaker.signEvent(
+    discourseEvent("reaction.create", speaker.agentId(), 120, 1, "room1", 1, "room-create-head", { emoji: "+1" }),
+  ));
   connector.applyRecord(signal);
+  const redactedMessage = redactServerRecord(buildServerRecord("room1", 3, signal.hash, 122, speaker.signEvent(
+    discourseEvent(eventType.MESSAGE_CREATE, speaker.agentId(), 121, 2, "room1", 1, "room-create-head", { content_type: "text/plain", content: "gone" }),
+  )));
+  connector.applyRecord(redactedMessage as ArchiveRecord);
+  let state = (await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1" })) as { sync: SyncState };
+  assert.deepEqual([state.sync.head_seq, state.sync.synced_seq], [3, 3], "a redacted message still advanced the head");
 
-  const staleEnvelope = speaker.signEvent(
-    discourseEvent(
-      eventType.MESSAGE_CREATE,
-      speaker.agentId(),
-      122,
-      2,
-      "room1",
-      2,
-      signalHash,
-      { content_type: "text/plain", content: "based on signal, not room head" },
-    ),
-  );
-  const stale = buildServerRecord("room1", 3, signalHash, 123, staleEnvelope);
-  assert.throws(
-    () => connector.applyRecord(stale),
-    /must match current room head/,
-  );
+  // A stale head-bound record is rejected by the local chain check.
+  const stale = buildServerRecord("room1", 4, redactedMessage.hash, 123, speaker.signEvent(
+    discourseEvent(eventType.MESSAGE_CREATE, speaker.agentId(), 122, 3, "room1", 2, signal.hash, { content_type: "text/plain", content: "stale" }),
+  ));
+  assert.throws(() => connector.applyRecord(stale), /must match current room head/);
+  // A contract record anchored on an older record is accepted and advances the head.
+  const contract = buildServerRecord("room1", 4, redactedMessage.hash, 124, signer(5).signEvent(
+    discourseEvent(eventType.ROOM_UPDATE, signer(5).agentId(), 123, 2, "room1", 1, "room-create-head", { topic: "Sharper topic", guidance: "", policy: {} }),
+  ));
+  connector.applyRecord(contract);
+  state = (await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1" })) as { sync: SyncState; room: RoomStateView };
+  assert.equal(state.sync.head_seq, 4);
+  assert.equal((state as { room: RoomStateView }).room.topic, "Sharper topic");
+  assert.deepEqual((state as { room: RoomStateView }).room.policy, {});
 });
 
 test("member.remove records project removal, bans, and inbox", async () => {
@@ -525,187 +453,114 @@ test("member.remove records project removal, bans, and inbox", async () => {
   const connector = new LocalConnector(active);
   const room = roomResponse("room1", moderator);
   room.creator = moderator.agentId();
-  connector.acceptRoomResponse("https://api.example.test", room);
+  connector.acceptRoomResponse(HOST, room);
 
-  const activeId = connector.agentId();
-  const joinEnvelope = active.signEvent(
-    discourseEvent(
-      eventType.ROOM_JOIN,
-      activeId,
-      110,
-      1,
-      "room1",
-      1,
-      "room-create-head",
-      { role: "speaker" },
-    ),
-  );
-  const join = buildServerRecord(
-    "room1",
-    2,
-    "room-create-head",
-    111,
-    joinEnvelope,
-  );
-  connector.applyHostRecord("https://api.example.test", join);
+  const join = buildServerRecord("room1", 2, "room-create-head", 111, active.signEvent(
+    discourseEvent(eventType.ROOM_JOIN, active.agentId(), 110, 1, "room1", 1, "room-create-head", { role: "speaker" }),
+  ));
+  connector.applyHostRecord(HOST, join);
+  const remove = buildServerRecord("room1", 3, join.hash, 121, moderator.signEvent(
+    discourseEvent(eventType.ROOM_MEMBER_REMOVE, moderator.agentId(), 120, 2, "room1", 1, "room-create-head", { member: active.agentId(), ban: true, reason: "spam" }),
+  ));
+  connector.applyHostRecord(HOST, remove);
 
-  const removeEnvelope = moderator.signEvent(
-    discourseEvent(
-      eventType.ROOM_MEMBER_REMOVE,
-      moderator.agentId(),
-      120,
-      2,
-      "room1",
-      1,
-      "room-create-head",
-      { member: activeId, ban: true, reason: "spam" },
-    ),
-  );
-  const remove = buildServerRecord("room1", 3, join.hash, 121, removeEnvelope);
-  connector.applyHostRecord("https://api.example.test", remove);
-
-  const members = (await connector.callTool(TOOL_ROOM_MEMBERS_LIST, {
-    room_id: "room1",
-    host: "https://api.example.test",
-    status: "banned",
-  })) as { members: RoomMemberView[] };
+  const members = (await connector.callTool(TOOL_ROOM_MEMBERS_LIST, { room_id: "room1", host: HOST, status: "banned" })) as { members: RoomMemberView[] };
   assert.equal(members.members.length, 1);
   assert.equal(members.members[0].left_seq, 3);
+  const one = (await connector.callTool(TOOL_ROOM_MEMBERS_LIST, { room_id: "room1", agent_id: active.agentId(), include_recent_activity: true })) as { members: RoomMemberView[]; recent: TimelineItem[] };
+  assert.equal(one.members.length, 1);
+  assert.equal(one.recent.length, 1);
 
-  const inbox = (await connector.callTool(TOOL_INBOX_NEXT, {
-    room_id: "room1",
-    kinds: ["room.member.removed"],
-  })) as { items: InboxItem[] };
-  assert.equal(inbox.items.length, 1);
-  assert.equal(inbox.items[0].kind, "room.member.removed");
+  const inbox = (await connector.callTool(TOOL_INBOX_NEXT, { room_id: "room1", kinds: ["room.member.removed"], claim: true })) as { items: InboxItem[]; pending_count: number };
   assert.equal(inbox.items[0].reason, "member_banned");
-});
-
-test("room.update records advance the head and revise the contract", async () => {
-  const connector = new LocalConnector(signer(1));
-  const moderator = signer(5);
-  connector.acceptRoomResponse(
-    "https://api.example.test",
-    roomResponse("room1", moderator),
-  );
-
-  const updateEnvelope = moderator.signEvent(
-    discourseEvent(
-      eventType.ROOM_UPDATE,
-      moderator.agentId(),
-      120,
-      2,
-      "room1",
-      1,
-      "room-create-head",
-      {
-        topic: "Sharper topic",
-        guidance: "",
-        end_time: 5000,
-        // An all-default policy is still an explicit revision, stored verbatim.
-        policy: {},
-      },
-    ),
-  );
-  const update = buildServerRecord(
-    "room1",
-    2,
-    "room-create-head",
-    121,
-    updateEnvelope,
-  );
-  connector.applyHostRecord("https://api.example.test", update);
-
-  const state = (await connector.callTool(TOOL_ROOM_STATE, {
-    room_id: "room1",
-    host: "https://api.example.test",
-  })) as { room: RoomStateView; sync: SyncState };
-  assert.equal(state.sync.head_seq, 2);
-  assert.equal(state.room.topic, "Sharper topic");
-  assert.equal(state.room.guidance, undefined);
-  assert.equal(state.room.end_time, 5000);
-  assert.deepEqual(state.room.policy, {});
-  assert.equal(state.sync.pending_inbox_count, 1);
+  assert.equal(inbox.pending_count, 0, "a claimed item is leased");
 });
 
 test("duplicate room ids across hosts require a host input", async () => {
   const creator = signer(5);
   const connector = new LocalConnector(signer(1));
-  connector.acceptRoomResponse(
-    "https://a.example.test",
-    roomResponse("room1", creator),
-  );
-  connector.acceptRoomResponse(
-    "https://b.example.test",
-    roomResponse("room1", creator),
-  );
-
-  await assert.rejects(
-    connector.callTool(TOOL_ROOM_MEMBERS_LIST, { room_id: "room1" }),
-    /more than one host/,
-  );
-  const listed = (await connector.callTool(TOOL_ROOM_MEMBERS_LIST, {
-    room_id: "room1",
-    host: "https://b.example.test",
-  })) as { sync: SyncState };
+  connector.acceptRoomResponse("https://a.example.test", roomResponse("room1", creator));
+  connector.acceptRoomResponse("https://b.example.test", roomResponse("room1", creator));
+  await assert.rejects(connector.callTool(TOOL_ROOM_MEMBERS_LIST, { room_id: "room1" }), /more than one host/);
+  const listed = (await connector.callTool(TOOL_ROOM_MEMBERS_LIST, { room_id: "room1", host: "https://b.example.test" })) as { sync: SyncState };
   assert.equal(listed.sync.host, "https://b.example.test");
 });
 
-test("delegation connector checks policy, ownership and service before signing or posting", async () => {
+test("delegation writes derive the service from the principal and check policy and ownership first", async () => {
   const active = signer(61), other = signer(62);
-  const host = "https://api.example.test", principalId = `${host}/p`;
+  const principalId = `${HOST}/p`;
   let policy: unknown = { scopes: ["draft"], audiences: ["https://dmsg.net"] };
   let previous: unknown;
   let readStatus = 404;
   const posts: unknown[] = [];
-  let credentialReads = 0;
-  const credentialReadUrls: string[] = [];
+  const reads: string[] = [];
   let signatures = 0;
-  let requestJwtSignatures = 0;
   const signEvent = active.signEvent.bind(active);
   active.signEvent = ((event) => { signatures++; return signEvent(event); }) as typeof active.signEvent;
-  const signRequestJwt = active.signRequestJwt.bind(active);
-  active.signRequestJwt = ((claims) => { requestJwtSignatures++; return signRequestJwt(claims); }) as typeof active.signRequestJwt;
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url === principalId) return new Response(JSON.stringify({
       id: principalId, protocol: "agent-delegation/1.0", updated_at: Date.now(),
-      delegation_query_url: `${host}/v1/delegations/query`,
+      delegation_query_url: `${HOST}/v1/delegations/query`,
       controllers: [{ id: active.agentId(), source: "local", valid_from: 0, ...(policy === undefined ? {} : { delegation: policy }) }],
     }));
+    if (url.endsWith("/.well-known/agent-delegation")) return new Response("{}", { status: 404 });
     if (init?.method === "POST") { posts.push(JSON.parse(init.body as string)); return new Response("{}"); }
-    credentialReads++;
-    credentialReadUrls.push(url);
+    reads.push(url);
     return new Response(JSON.stringify(previous ?? {}), { status: readStatus });
   }) as typeof fetch;
   const connector = new LocalConnector(active, { fetchImpl });
-  const input = { delegation_service: `${host}/`, principal_id: principalId, id: "del/opaque", subject: other.agentId(), scopes: ["draft"], audiences: ["https://dmsg.net"] };
+  const input = { principal_id: principalId, id: "del.opaque", subject: other.agentId(), scopes: ["draft"], audiences: ["https://dmsg.net"] };
   await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input), /permission denied/);
-  await assert.rejects(() => connector.callTool(TOOL_DELEGATIONS_LIST, { delegation_service: host }), /permission denied/);
-  assert.equal(credentialReads, 0, "unapproved services were never read");
-  assert.equal(posts.length, 0, "unapproved services were never posted to");
-  assert.equal(signatures, 0, "unapproved services received no event signatures");
-  assert.equal(requestJwtSignatures, 0, "unapproved services received no request JWT signatures");
-  connector.addHost({ host, allowed: true, features: [] });
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATIONS_LIST, { delegation_service: HOST }), /permission denied/);
+  assert.deepEqual([reads.length, posts.length, signatures], [0, 0, 0], "unapproved services were never read, posted to, or signed for");
+  connector.addHost({ host: HOST, allowed: true, features: [] });
   await connector.callTool(TOOL_DELEGATION_GRANT, input);
-  assert.equal(credentialReadUrls[0], `${host}/v1/delegations/del%2Fopaque`);
+  assert.equal(reads[0], `${HOST}/v1/delegations/del.opaque`);
   assert.equal(posts.length, 1);
   assert.deepEqual((posts[0] as { event: { payload: unknown } }).event.payload, {
-    id: "del/opaque", principal: { id: principalId }, subject: other.agentId(), scopes: ["draft"], audiences: ["https://dmsg.net"],
+    id: "del.opaque", principal_id: principalId, subject: other.agentId(), scopes: ["draft"], audiences: ["https://dmsg.net"],
   });
   await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, { ...input, audiences: ["https://tokenlist.ing"] }));
   policy = undefined;
   await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input));
   policy = { scopes: ["draft"], audiences: ["https://dmsg.net"] };
   readStatus = 200;
-  previous = { id: "del/opaque", principal: { id: principalId }, protocol: "agent-delegation/1.0", accepted_at: 1, owner_controller: other.agentId() };
-  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input));
-  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_REVOKE, input));
+  previous = { id: "del.opaque", principal_id: principalId, subject: other.agentId(), protocol: "agent-delegation/1.0", accepted_at: 1, owner_controller: other.agentId() };
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input), /own/);
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_REVOKE, input), /own/);
   readStatus = 503;
   await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input));
-  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, { ...input, delegation_service: `${host}/untrusted` }));
   assert.equal(posts.length, 1, "denied writes were never submitted");
   assert.equal(signatures, 1, "denied writes were never signed");
-  const tool = standardToolDefinitions().find(t => t.name === TOOL_DELEGATION_GRANT)!;
-  assert.ok((tool.input_schema.required as string[]).includes("audiences"));
+});
+
+test("delegation_check verifies each candidate for the requested audience", async () => {
+  const controller = signer(71), subject = signer(72);
+  const principalId = `${HOST}/p`;
+  const document: delegation.PrincipalDocument = {
+    id: principalId, protocol: delegation.DELEGATION_PROTOCOL, updated_at: 1000, delegation_query_url: `${HOST}/v1/delegations/query`,
+    controllers: [{ id: controller.agentId(), source: "local", valid_from: 0, delegation: { scopes: ["draft"], audiences: ["https://dmsg.net"] } }],
+  };
+  const envelope = controller.signEvent(delegation.delegationGrantEvent(controller.agentId(), 500, 1, {
+    id: "del", principal_id: principalId, subject: subject.agentId(), scopes: ["draft"], audiences: ["https://dmsg.net"],
+  }));
+  const credential = delegation.materializeDelegationCredential(envelope, { acceptedAt: 600 });
+  const forged = { ...credential, id: "forged", scopes: ["draft"], grant_event_id: "x" };
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url === principalId) return new Response(JSON.stringify(document));
+    if (url.endsWith("/.well-known/agent-delegation")) return new Response("{}", { status: 404 });
+    if (url === `${HOST}/v1/delegations/query`) return new Response(JSON.stringify({ result: [credential, forged] }));
+    if (url === `${HOST}/v1/delegations/del/events`) return new Response(JSON.stringify({ result: [{ envelope, accepted_at: 600 }] }));
+    if (url === `${HOST}/v1/delegations/forged/events`) return new Response(JSON.stringify({ result: [{ envelope, accepted_at: 600 }] }));
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+  const connector = new LocalConnector(subject, { fetchImpl });
+  connector.addHost({ host: HOST, allowed: true });
+  const result = (await connector.callTool(TOOL_DELEGATION_CHECK, { principal_id: principalId, audience: "https://dmsg.net" })) as { delegations: delegation.DelegationVerdict[] };
+  assert.deepEqual(result.delegations.map((v) => [v.credential.id, v.verified, v.usable]), [["del", true, true], ["forged", false, false]]);
+  const other = (await connector.callTool(TOOL_DELEGATION_CHECK, { principal_id: principalId, audience: "https://tokenlist.ing" })) as { delegations: delegation.DelegationVerdict[] };
+  assert.deepEqual([other.delegations[0].verified, other.delegations[0].usable], [true, false]);
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_CHECK, { principal_id: principalId }), /audience is required/);
 });
