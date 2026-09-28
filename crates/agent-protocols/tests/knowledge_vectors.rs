@@ -653,12 +653,14 @@ fn duplicate_events_are_rejected_in_batch_and_search() {
         candidates: ids.clone(),
         ranking: json!({"mode":"semantic","id":"test"}),
         coverage: json!({"exhaustive":false,"reasons":["approximate"]}),
-        ..Default::default()
+        explanations: BTreeMap::from([(ids[0].clone(), "top hit".to_owned())]),
     };
     let mut search = store
         .search(&request, &selection, &["semantic".into()], now)
         .unwrap();
     assert!(search.get("next_cursor").is_none());
+    assert_eq!(search["result"][0]["explanation"], "top hit");
+    assert!(search["result"][1].get("explanation").is_none());
     search["result"][1] = search["result"][0].clone();
     assert_eq!(
         validate_knowledge_search_response(&search, &request, SERVICE)

@@ -733,14 +733,21 @@ impl KnowledgeClient {
         self.discovery = Some(document);
         Ok(())
     }
-    pub async fn discover(&mut self) -> Result<Value> {
+    /// Fetch and validate the discovery document without installing it.
+    pub async fn protocol(&self) -> Result<Value> {
         let document = self
             .send(
                 self.inner
                     .get(format!("{}/.well-known/agent-knowledge", self.origin)),
             )
             .await?;
-        self.set_discovery(document.clone())?;
+        crate::knowledge::validate_knowledge_discovery(&document, &self.origin)?;
+        Ok(document)
+    }
+    /// Fetch, validate and install the discovery document.
+    pub async fn discover(&mut self) -> Result<Value> {
+        let document = self.protocol().await?;
+        self.discovery = Some(document.clone());
         Ok(document)
     }
     fn endpoint(&self, key: &str) -> Result<String> {

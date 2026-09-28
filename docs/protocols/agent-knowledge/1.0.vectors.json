@@ -9420,33 +9420,6 @@
       }
     },
     {
-      "name": "missing explanation",
-      "layer": "search-contract",
-      "accepted": [
-        "text_publication",
-        "text_regional",
-        "text_assessment",
-        "text_retraction"
-      ],
-      "request": {
-        "text": "alpha",
-        "mode": "lexical"
-      },
-      "candidates": [
-        "text_publication",
-        "text_regional",
-        "text_assessment",
-        "text_retraction"
-      ],
-      "expected": "invalid_response",
-      "response_changes": [
-        {
-          "op": "remove",
-          "path": "/result/0/explanation"
-        }
-      ]
-    },
-    {
       "name": "empty explanation",
       "layer": "search-contract",
       "accepted": [

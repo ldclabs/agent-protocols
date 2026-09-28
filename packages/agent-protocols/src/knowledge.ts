@@ -200,7 +200,7 @@ export interface KnowledgeCoverage {
 }
 export interface KnowledgeSearchHit {
   record: KnowledgeRecord;
-  explanation: string;
+  explanation?: string;
   [key: string]: unknown;
 }
 export interface KnowledgeSearchResponse extends KnowledgeScope {
@@ -1109,16 +1109,13 @@ export class KnowledgeStore {
   }
   /** Withhold from public reads; the record still answers exact retries and resolves dependencies. */
   hide(id: string): void {
-    validateKnowledgeId(id, "invalid_request");
     if (this.records.has(id)) this.hidden.add(id);
   }
   unhide(id: string): void {
-    validateKnowledgeId(id, "invalid_request");
     this.hidden.delete(id);
   }
   /** Drop content and record; the sequence high-water mark is preserved. */
   prune(id: string): void {
-    validateKnowledgeId(id, "invalid_request");
     this.records.delete(id);
     this.hidden.delete(id);
   }
@@ -1232,12 +1229,14 @@ export class KnowledgeStore {
     )
       throw protocolError("invalid_response", "false exhaustive coverage");
     const response: KnowledgeSearchResponse = {
-      result: ids.slice(0, limit).map((id) => ({
-        record: structuredClone(this.records.get(id)!),
-        explanation:
-          selection.explanations?.[id] ??
-          `Selected by ranking configuration ${selection.ranking.id}`,
-      })),
+      result: ids.slice(0, limit).map((id) => {
+        const hit: KnowledgeSearchHit = {
+          record: structuredClone(this.records.get(id)!),
+        };
+        const explanation = selection.explanations?.[id];
+        if (explanation !== undefined) hit.explanation = explanation;
+        return hit;
+      }),
       ...this.scope(this.highWater, this.now()),
       ranking: structuredClone(selection.ranking),
       coverage: structuredClone(selection.coverage),

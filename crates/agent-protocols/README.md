@@ -148,7 +148,7 @@ set supplied to it; retrieval alone does not establish current lifecycle status,
 scientific truth, or profile conformance.
 
 With `http-client`, `KnowledgeClient::new(origin)?` provides public reads without a
-signer, `discover`, `event`, `query`, `query_all`, `batch`, `search`, and `submit`.
+signer, `protocol`, `discover`, `event`, `query`, `query_all`, `batch`, `search`, and `submit`.
 Search requires advertised discovery. `query_all` returns the records and the
 checkpoint, or `SdkError::PageLimitExceeded` when its page budget ends first.
 Submissions optionally accept an Identity request JWT; it authenticates the

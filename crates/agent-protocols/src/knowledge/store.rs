@@ -522,13 +522,11 @@ impl KnowledgeStore {
             .iter()
             .take(limit)
             .map(|id| {
-                let explanation = selection.explanations.get(id).cloned().unwrap_or_else(|| {
-                    format!(
-                        "Selected by ranking configuration {}",
-                        string(&selection.ranking["id"])
-                    )
-                });
-                json!({"record": self.records[id], "explanation": explanation})
+                let mut hit = json!({"record": self.records[id]});
+                if let Some(explanation) = selection.explanations.get(id) {
+                    hit["explanation"] = json!(explanation);
+                }
+                hit
             })
             .collect();
         let mut response = self.scope(self.seq, now)?;

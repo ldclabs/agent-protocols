@@ -206,10 +206,15 @@ test("search returns one page and cannot overclaim coverage", () => {
     candidates,
     ranking: { mode: "lexical", id: "reverse-v1" },
     coverage: { exhaustive: false, reasons: ["candidate_limit"] },
+    explanations: { [candidates[0]]: "top hit" },
   });
   assert.deepEqual(
     page.result.map((hit) => hit.record.envelope.hash),
     candidates.slice(0, 2),
+  );
+  assert.deepEqual(
+    page.result.map((hit) => hit.explanation),
+    ["top hit", undefined],
   );
   assert.equal("next_cursor" in page, false);
   k.validateKnowledgeSearchResponse(page, request, service);

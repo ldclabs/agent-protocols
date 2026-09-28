@@ -112,19 +112,9 @@ pub struct KnowledgeRetractPayload {
     pub extra: Option<BTreeMap<String, Value>>,
 }
 
-/// Extensible service receipt. Envelope stays raw until boundary validation,
-/// preventing serde from silently dropping unknown envelope members.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct KnowledgeAcceptanceRecord {
-    pub envelope: Value,
-    pub seq: u64,
-    pub accepted_at: i64,
-    #[serde(default, flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
 /// Caller-ranked candidates for one ranked-search page. Candidates must be
 /// visible and satisfy the request's exact filters; no ranking model is implied.
+/// `explanations` are optional per-hit texts keyed by event ID.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KnowledgeSearchSelection {
     pub candidates: Vec<String>,

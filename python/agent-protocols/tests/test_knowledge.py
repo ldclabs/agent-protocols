@@ -39,9 +39,10 @@ def test_schema_is_packaged_and_constants_match_spec():
     source = Path(__file__).resolve().parents[3] / 'docs/protocols/agent-knowledge/1.0.schema.json'
     assert files('agent_protocols').joinpath('knowledge.schema.json').read_bytes() == source.read_bytes()
     definitions = json.loads(source.read_bytes())['$defs']
-    assert list(k.KNOWLEDGE_RELATIONS) == definitions['relation']['properties']['relation']['enum']
-    assert list(k.KNOWLEDGE_KINDS) == definitions['publishPayload']['properties']['kind']['enum']
-    assert list(k.KNOWLEDGE_VERDICTS) == definitions['assessPayload']['properties']['verdict']['enum']
+    assert list(k.KNOWLEDGE_EVENT_TYPES) == definitions['eventType']['enum']
+    assert list(k.KNOWLEDGE_RELATIONS) == definitions['relationKind']['enum']
+    assert list(k.KNOWLEDGE_KINDS) == definitions['kind']['enum']
+    assert list(k.KNOWLEDGE_VERDICTS) == definitions['verdict']['enum']
     assert list(k.KNOWLEDGE_SEARCH_MODES) == definitions['searchMode']['enum']
 
 
@@ -188,8 +189,10 @@ def test_search_is_one_page_of_caller_ranked_candidates():
     ids = [item['hash'] for item in reversed(items)]
     page = store.search({'text': 'cache', 'mode': 'lexical', 'limit': 2}, candidates=ids,
                         ranking={'mode': 'lexical', 'id': 'test-v1'},
-                        coverage={'exhaustive': False, 'reasons': ['candidate_limit']})
+                        coverage={'exhaustive': False, 'reasons': ['candidate_limit']},
+                        explanations={ids[0]: 'top hit'})
     assert [hit['record']['envelope']['hash'] for hit in page['result']] == ids[:2]
+    assert [hit.get('explanation') for hit in page['result']] == ['top hit', None]
     assert 'next_cursor' not in page
     k.validate_knowledge_search_response(page, {'text': 'cache', 'mode': 'lexical', 'limit': 2}, ORIGIN)
     assert code(lambda: store.search({'text': 'cache', 'mode': 'lexical', 'limit': 2}, candidates=ids,

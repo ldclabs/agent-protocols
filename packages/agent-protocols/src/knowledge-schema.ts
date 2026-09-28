@@ -63,6 +63,49 @@ export const KNOWLEDGE_SCHEMA = {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$(?![\\s\\S])"
     },
+    "eventType": {
+      "enum": [
+        "knowledge.publish",
+        "knowledge.assess",
+        "knowledge.retract"
+      ]
+    },
+    "kind": {
+      "enum": [
+        "question",
+        "hypothesis",
+        "definition",
+        "observation",
+        "inference",
+        "procedure",
+        "resource",
+        "negative_result",
+        "synthesis",
+        "collection"
+      ]
+    },
+    "relationKind": {
+      "enum": [
+        "derived_from",
+        "addresses",
+        "tests",
+        "extends",
+        "supports",
+        "contradicts",
+        "supersedes",
+        "contains"
+      ]
+    },
+    "verdict": {
+      "enum": [
+        "supports",
+        "challenges",
+        "reproduced",
+        "not_reproduced",
+        "applied",
+        "inconclusive"
+      ]
+    },
     "context": {
       "type": "object",
       "required": [
@@ -179,16 +222,7 @@ export const KNOWLEDGE_SCHEMA = {
       ],
       "properties": {
         "relation": {
-          "enum": [
-            "derived_from",
-            "addresses",
-            "tests",
-            "extends",
-            "supports",
-            "contradicts",
-            "supersedes",
-            "contains"
-          ]
+          "$ref": "#/$defs/relationKind"
         },
         "target": {
           "$ref": "#/$defs/eventHash"
@@ -212,18 +246,7 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/httpsUrl"
         },
         "kind": {
-          "enum": [
-            "question",
-            "hypothesis",
-            "definition",
-            "observation",
-            "inference",
-            "procedure",
-            "resource",
-            "negative_result",
-            "synthesis",
-            "collection"
-          ]
+          "$ref": "#/$defs/kind"
         },
         "title": {
           "$ref": "#/$defs/nonEmptyString"
@@ -387,14 +410,7 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/eventHash"
         },
         "verdict": {
-          "enum": [
-            "supports",
-            "challenges",
-            "reproduced",
-            "not_reproduced",
-            "applied",
-            "inconclusive"
-          ]
+          "$ref": "#/$defs/verdict"
         },
         "summary": {
           "$ref": "#/$defs/nonEmptyString"
@@ -806,40 +822,16 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/agentId"
         },
         "type": {
-          "enum": [
-            "knowledge.publish",
-            "knowledge.assess",
-            "knowledge.retract"
-          ]
+          "$ref": "#/$defs/eventType"
         },
         "kind": {
-          "enum": [
-            "question",
-            "hypothesis",
-            "definition",
-            "observation",
-            "inference",
-            "procedure",
-            "resource",
-            "negative_result",
-            "synthesis",
-            "collection"
-          ]
+          "$ref": "#/$defs/kind"
         },
         "target": {
           "$ref": "#/$defs/eventHash"
         },
         "relation": {
-          "enum": [
-            "derived_from",
-            "addresses",
-            "tests",
-            "extends",
-            "supports",
-            "contradicts",
-            "supersedes",
-            "contains"
-          ]
+          "$ref": "#/$defs/relationKind"
         },
         "tag": {
           "$ref": "#/$defs/tag"
@@ -851,14 +843,7 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/language"
         },
         "verdict": {
-          "enum": [
-            "supports",
-            "challenges",
-            "reproduced",
-            "not_reproduced",
-            "applied",
-            "inconclusive"
-          ]
+          "$ref": "#/$defs/verdict"
         },
         "created_from": {
           "$ref": "#/$defs/timestampMs"
@@ -877,40 +862,16 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/agentId"
         },
         "type": {
-          "enum": [
-            "knowledge.publish",
-            "knowledge.assess",
-            "knowledge.retract"
-          ]
+          "$ref": "#/$defs/eventType"
         },
         "kind": {
-          "enum": [
-            "question",
-            "hypothesis",
-            "definition",
-            "observation",
-            "inference",
-            "procedure",
-            "resource",
-            "negative_result",
-            "synthesis",
-            "collection"
-          ]
+          "$ref": "#/$defs/kind"
         },
         "target": {
           "$ref": "#/$defs/eventHash"
         },
         "relation": {
-          "enum": [
-            "derived_from",
-            "addresses",
-            "tests",
-            "extends",
-            "supports",
-            "contradicts",
-            "supersedes",
-            "contains"
-          ]
+          "$ref": "#/$defs/relationKind"
         },
         "tag": {
           "$ref": "#/$defs/tag"
@@ -922,14 +883,7 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/language"
         },
         "verdict": {
-          "enum": [
-            "supports",
-            "challenges",
-            "reproduced",
-            "not_reproduced",
-            "applied",
-            "inconclusive"
-          ]
+          "$ref": "#/$defs/verdict"
         },
         "created_from": {
           "$ref": "#/$defs/timestampMs"
@@ -1075,8 +1029,7 @@ export const KNOWLEDGE_SCHEMA = {
     "searchHit": {
       "type": "object",
       "required": [
-        "record",
-        "explanation"
+        "record"
       ],
       "properties": {
         "record": {

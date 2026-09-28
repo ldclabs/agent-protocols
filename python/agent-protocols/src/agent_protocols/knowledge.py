@@ -50,18 +50,6 @@ _READ_ONLY = ("q", "cursor", "limit", "after_seq")
 _VALIDATORS = {name: Draft202012Validator({"$ref": "#/$defs/" + name, "$defs": SCHEMA["$defs"]}, format_checker=FormatChecker()) for name in SCHEMA["$defs"]}
 
 
-class KnowledgeContext(TypedDict):
-    scope: str
-    conditions: list[str]
-    limitations: list[str]
-
-
-class KnowledgeAcceptanceRecord(TypedDict):
-    envelope: Envelope
-    accepted_at: int
-    seq: int
-
-
 def fail(code: str, message: str, data: dict | None = None) -> None:
     raise AgentProtocolError(code, message, data)
 
@@ -78,13 +66,6 @@ def _json_value(value: Any, code: str) -> None:
         parse_strict_json(json.dumps(value, ensure_ascii=False))
     except (AgentProtocolError, ValueError, TypeError, OverflowError) as exc:
         fail(code, "value violates strict I-JSON: " + str(exc))
-
-
-def _is_safe_integer(value: Any, minimum: int = 0, maximum: int = MAX_SAFE_NONCE) -> bool:
-    # JSON's number model and JCS treat 1 and 1.0 identically. Reject bools,
-    # fractions and nonfinite/out-of-range values before Python int conversion.
-    return (type(value) in (int, float) and minimum <= value <= maximum
-            and value == int(value))
 
 
 def _identity_envelope(item: Envelope) -> Envelope:
@@ -620,19 +601,16 @@ class KnowledgeStore:
 
     def hide(self, event_id: str) -> None:
         """Withhold from public reads; the record still answers exact retries and resolves dependencies."""
-        validate_knowledge_id(event_id, 'invalid_request')
         with self._lock:
             if event_id in self._records:
                 self._hidden.add(event_id)
 
     def unhide(self, event_id: str) -> None:
-        validate_knowledge_id(event_id, 'invalid_request')
         with self._lock:
             self._hidden.discard(event_id)
 
     def prune(self, event_id: str) -> None:
         """Drop content and record while preserving the sequence high-water mark."""
-        validate_knowledge_id(event_id, 'invalid_request')
         with self._lock:
             self._records.pop(event_id, None)
             self._hidden.discard(event_id)
@@ -712,7 +690,7 @@ class KnowledgeStore:
                 fail('invalid_response', 'false exhaustive coverage')
             response = {
                 'result': [{'record': copy.deepcopy(self._records[event_id]),
-                            'explanation': explanations.get(event_id, 'Selected by ranking configuration ' + str(ranking.get('id', '')))}
+                            **({'explanation': explanations[event_id]} if event_id in explanations else {})}
                            for event_id in ids[:limit]],
                 **self._scope(self._seq, now),
                 'ranking': copy.deepcopy(dict(ranking)), 'coverage': copy.deepcopy(dict(coverage)),
@@ -721,6 +699,12 @@ class KnowledgeStore:
             if response['ranking']['mode'] != request['mode']:
                 fail('invalid_response', 'ranking mode differs from requested mode')
             return response
+
+
+class KnowledgeContext(TypedDict):
+    scope: str
+    conditions: list[str]
+    limitations: list[str]
 
 
 class KnowledgeEvidenceRequired(TypedDict):
@@ -802,6 +786,12 @@ class KnowledgeRetractRequired(TypedDict):
 
 class KnowledgeRetractPayload(KnowledgeRetractRequired, total=False):
     extra: dict[str, Any]
+
+
+class KnowledgeAcceptanceRecord(TypedDict):
+    envelope: Envelope
+    accepted_at: int
+    seq: int
 
 
 __all__ = [
