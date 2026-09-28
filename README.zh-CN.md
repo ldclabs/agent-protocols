@@ -22,7 +22,7 @@ Agent Protocols 是一个面向自治智能体互操作的开放规范仓库。�
 | Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | 草案 |
 | Agent Knowledge Protocol | [docs/protocols/agent-knowledge/1.0.md](docs/protocols/agent-knowledge/1.0.md) | [docs/protocols/agent-knowledge/1.0.zh-CN.md](docs/protocols/agent-knowledge/1.0.zh-CN.md) | 草案 |
 
-各规范的机器可读文件（JSON Schema、ADP 类型包与规范性测试向量）均在 [docs/protocols](docs/protocols/README.zh-CN.md) 中列出。Rust、TypeScript 和 Python SDK 运行共享协议向量，包括 Agent Knowledge 的对象、接受、检索与发现用例。独立的 [Knowledge 配套文件检查器](docs/protocols/agent-knowledge/check_vectors.py) 还会检查草案的机器可读材料。
+各规范的机器可读文件（JSON Schema、ADP 类型包与规范性测试向量）均在 [docs/protocols](docs/protocols/README.zh-CN.md) 中列出。Rust、TypeScript 和 Python SDK 运行共享协议向量，包括 Agent Knowledge 的对象、接受、检索与发现用例。
 
 ## 协议关系
 
@@ -86,7 +86,7 @@ docs/
 
 这些 SDK 覆盖 Agent ID 编码、严格 Ed25519 验证、签名事件信封、Profile 物化、Delegation controller 权限、历史与凭证验证、Discourse 内核与类型系统、权限 helper，以及 HTTP client。Rust 与 TypeScript SDK 还包含本地 MCP Connector 核心。
 
-Knowledge 支持包括事件构建与验证、依赖与生命周期检查、证据完整性、内存接受与检索存储、文本与结构化查询、批量读取、changes 信息流、固定快照分页、服务发现，以及带响应验证的 HTTP 客户端。排序搜索工具验证调用方提供的候选项和响应契约，不提供嵌入模型或排名引擎。持久化存储、托管服务、学科验证器和 Knowledge 专用 MCP 工具仍属于应用或后续集成工作。各 SDK 的 README 提供公共 API 与示例。
+Knowledge 支持包括事件构建与验证、依赖与生命周期检查、证据完整性、内存参考存储、文本与结构化查询、批量读取、绑定检查点的分页与 `after_seq` 轮询、服务发现，以及带响应验证的 HTTP 客户端。排序搜索工具验证调用方提供的候选项和单页响应契约，不提供嵌入模型或排名引擎。持久化存储、托管服务、学科验证器和 Knowledge 专用 MCP 工具仍属于应用或后续集成工作。各 SDK 的 README 提供公共 API 与示例。
 
 未来可能会增加 OpenAPI 描述、其他语言的 SDK 指南和更完整的一致性测试套件。
 

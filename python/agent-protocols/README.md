@@ -8,7 +8,7 @@ Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Agent 
 - `agent_protocols.profile`: `profile.update` payload helpers, delegation discovery hints, validation, succession checks, materialization.
 - `agent_protocols.delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, authority, acceptance, historical, and use checks, `verify_delegation_credential` over the latest grant record, and `audit_delegation_history` for auditors.
 - `agent_protocols.discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
-- `agent_protocols.knowledge`: signed research contributions, known-set lifecycle views, evidence and profile bindings, bounded in-memory storage, exact queries, frozen search, discovery, and response validation.
+- `agent_protocols.knowledge`: signed research contributions, known-set lifecycle views, evidence and profile bindings, in-memory storage, exact queries with checkpoint-bound pagination, single-page ranked search, discovery, and response validation.
 - `agent_protocols.http_client`: optional requests-based Profile, Delegation, Discourse, and Knowledge clients. Install with `agent-protocols[http]`. Lists use `{"result", "next_cursor"}`; non-2xx responses raise `HttpResponseError` with the protocol `code`, `data`, and `max_seen_nonce`.
 
 ## Example
@@ -77,8 +77,8 @@ The suite includes both `unittest.TestCase` classes and pytest functions. Runnin
 `agent_protocols.knowledge` implements Agent Knowledge 1.0: signed publications,
 assessments and retractions; strict payload and dependency validation; deterministic
 known-set lifecycle views; evidence byte verification; and exact query, batch,
-changes, ranked-search and discovery contracts. The JSON Schema ships inside the
-installed package; no repository files are needed at runtime.
+ranked-search and discovery contracts. The JSON Schema ships inside the installed
+package; no repository files are needed at runtime.
 
 ```python
 from agent_protocols import (
@@ -90,7 +90,6 @@ signer = AgentSigner.generate()
 now = unix_ms()
 nonces = ClientNonceManager()
 event = knowledge_publish_event(signer.agent_id(), now, nonces.next_nonce(now), {
-    "visibility": "public",
     "license": "https://creativecommons.org/licenses/by/4.0/",
     "kind": "observation",
     "title": "Cache keys must preserve language",
@@ -109,45 +108,46 @@ store = KnowledgeStore("https://knowledge.example.com")
 record = store.submit(envelope)
 page = store.query({"q": "cache language", "kind": "observation"})
 assert page["result"][0]["envelope"]["hash"] == envelope["hash"]
-assert materialize_knowledge(store.retained)[envelope["hash"]]["status"] == "active"
+assert materialize_knowledge(store.known_envelopes())[envelope["hash"]]["status"] == "active"
 ```
 
 `validate_knowledge_envelope` checks signatures and core object rules;
-`validate_knowledge_dependencies` checks locally validated target envelopes.
-`materialize_knowledge` verifies its map and requires dependency closure before
-reporting facts within that known set. `knowledge_evidence_status` verifies exact,
-complete representation bytes without fetching resources. Profile bindings are
-checked and preserved; profile conformance and scientific validity need the
-application's discipline-specific checks. Nothing is automatically fetched or run.
+`validate_knowledge_dependencies` checks target rules against already validated
+envelopes. `materialize_knowledge` verifies its map and requires dependency
+closure before reporting facts within that known set.
+`verify_knowledge_evidence(digest, representation)` compares complete decoded
+representation bytes without fetching resources; pass `None` when they could not
+be obtained. Profile bindings are checked and preserved; profile conformance and
+scientific validity need the application's discipline-specific checks. Nothing is
+automatically fetched or run.
 
-`KnowledgeStore` is a bounded, synchronized **in-memory** service component. It
-preserves exact retry receipts, freezes query/search candidates, rejects expired or
-incompatible cursors, and distinguishes hiding from pruning. `changes` includes all
-three event types and historical imports. Pass a shared `nonce_store` and shared
-`lock` when other protocol handlers accept writes at the same service. Imports
-never consume live nonces. Applications supply durable storage, restoration of the
-sequence high-water mark, admission policy, and hosting. The included store is not
-a durable server and does not automatically restore records after a restart.
+`KnowledgeStore` is a synchronized **in-memory** reference component. Knowledge
+events are portable objects: `submit` rejects only `created_at` beyond
+`future_skew_ms` (300 s by default), never consults an Identity nonce cache, and
+resolves dependencies against every retained envelope, including hidden ones. It
+preserves exact retry receipts, applies `max_envelope_bytes` and an optional
+`admit` hook, and distinguishes hiding from pruning. Query cursors are stateless:
+they encode the checkpoint, snapshot time, last returned `seq`, and a request
+digest, and incompatible cursors fail with `invalid_cursor`. Poll for new records
+with `after_seq` set to a completed checkpoint. Applications supply durable
+storage, restoration of the sequence high-water mark, and hosting.
 
-Ranked search is opt-in through `search_modes`. Lexical search can enumerate all
-portable matches; applications can supply ordered `candidates`, a versioned
-`ranking`, honest `coverage`, and optional `explanations` for semantic or hybrid
-search. A snapshot preserves that selection despite later admissions or ranking
-changes. Pagination storage has configurable capacity and expiry.
+`search` returns one page of application-ranked `candidates` with a versioned
+`ranking`, honest `coverage`, and optional `explanations`; it refuses candidates
+that violate the exact filters and false exhaustive coverage.
 
 Install `agent-protocols[http]` to use `agent_protocols.http_client.KnowledgeClient`.
 `KnowledgeClient.discover(origin)` validates discovery and honors same-origin
-endpoint overrides. `event`, `query`, `batch`, `changes`, and `search` are public
-reads without a signer. `submit` and advertised `import_event` accept an optional
-origin-bound request JWT; an importer may differ from the event's author. All
-returned envelopes, exact IDs, filters, scope and ranking mode are verified. Raw
-response JSON is parsed strictly and redirects are disabled. Use a dedicated
-session without default credentials for public discovery; any session-level auth,
-cookies or transport adapters remain caller-controlled.
+endpoint overrides. `event`, `query`, `batch`, and `search` are public reads
+without a signer. `submit` accepts an optional origin-bound request JWT; the
+caller may differ from the event's author. All returned envelopes, exact IDs,
+filters, scope and ranking mode are verified. Raw response JSON is parsed strictly
+and redirects are disabled. Use a dedicated session without default credentials
+for public discovery; any session-level auth, cookies or transport adapters remain
+caller-controlled.
 
-Use `client.iter_pages("query", request)`, `iter_pages("search", request)`, or
-`iter_pages("changes", request)` to reject cross-page scope/configuration drift,
-repeated IDs, cursor loops and ordering regressions. Persist a changes checkpoint
-only after consuming every page. `KnowledgePageTracker` exposes that completed
-checkpoint for callers implementing their own transport. Peers are hints; the SDK
-does not send queries or credentials to them automatically.
+Use `client.query_pages(request)` to reject cross-page scope drift, repeated IDs,
+and ordering regressions. Persist the checkpoint only after consuming every page;
+`KnowledgePageTracker` exposes that completed checkpoint for callers implementing
+their own transport. Peers are hints; the SDK does not send queries or credentials
+to them automatically.

@@ -3,7 +3,7 @@ export const KNOWLEDGE_SCHEMA = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-protocols.dev/schemas/agent-knowledge/1.0.schema.json",
   "title": "Agent Knowledge Protocol 1.0",
-  "description": "Structural definitions for signed Knowledge events, read requests and service responses. Signature verification, canonical encodings, strict JSON, parsed URLs, profile-digest uniqueness, same-origin discovery, text token/scalar rules, timestamp comparisons, request-bound snapshots, complete enumeration, batch partitions, ranked candidate stability, dependency resolution, authority, lifecycle views and live/import acceptance remain normative semantic checks. Profile data conformance is separate from core validity. Recommended service quotas are not protocol validity limits.",
+  "description": "Structural definitions for signed Knowledge events, read requests and service responses. Signature verification, canonical encodings, strict JSON, parsed URLs, profile-digest uniqueness, same-origin discovery, text term rules, timestamp comparisons, cursor binding, complete enumeration, batch partitions, dependency resolution, target rules, lifecycle views and acceptance remain semantic checks. Profile data conformance is separate from core validity. Recommended service limits are not protocol validity limits.",
   "$ref": "#/$defs/signedEnvelope",
   "$defs": {
     "agentId": {
@@ -26,6 +26,11 @@ export const KNOWLEDGE_SCHEMA = {
     "nonce": {
       "type": "integer",
       "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0,
       "maximum": 9007199254740991
     },
     "nonEmptyString": {
@@ -194,7 +199,6 @@ export const KNOWLEDGE_SCHEMA = {
     "publishPayload": {
       "type": "object",
       "required": [
-        "visibility",
         "license",
         "kind",
         "title",
@@ -204,9 +208,6 @@ export const KNOWLEDGE_SCHEMA = {
         "basis"
       ],
       "properties": {
-        "visibility": {
-          "const": "public"
-        },
         "license": {
           "$ref": "#/$defs/httpsUrl"
         },
@@ -231,8 +232,7 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/nonEmptyString"
         },
         "language": {
-          "type": "string",
-          "pattern": "^(?:[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*|und)$(?![\\s\\S])"
+          "$ref": "#/$defs/language"
         },
         "context": {
           "$ref": "#/$defs/context"
@@ -266,9 +266,6 @@ export const KNOWLEDGE_SCHEMA = {
           },
           "minItems": 0,
           "uniqueItems": true
-        },
-        "learned_at": {
-          "$ref": "#/$defs/timestampMs"
         },
         "extra": {
           "$ref": "#/$defs/extra"
@@ -375,7 +372,6 @@ export const KNOWLEDGE_SCHEMA = {
     "assessPayload": {
       "type": "object",
       "required": [
-        "visibility",
         "license",
         "target",
         "verdict",
@@ -384,9 +380,6 @@ export const KNOWLEDGE_SCHEMA = {
         "basis"
       ],
       "properties": {
-        "visibility": {
-          "const": "public"
-        },
         "license": {
           "$ref": "#/$defs/httpsUrl"
         },
@@ -465,15 +458,11 @@ export const KNOWLEDGE_SCHEMA = {
     "retractPayload": {
       "type": "object",
       "required": [
-        "visibility",
         "license",
         "target",
         "reason"
       ],
       "properties": {
-        "visibility": {
-          "const": "public"
-        },
         "license": {
           "$ref": "#/$defs/httpsUrl"
         },
@@ -660,12 +649,6 @@ export const KNOWLEDGE_SCHEMA = {
             "query": {
               "$ref": "#/$defs/endpointUrl"
             },
-            "changes": {
-              "$ref": "#/$defs/endpointUrl"
-            },
-            "import": {
-              "$ref": "#/$defs/endpointUrl"
-            },
             "batch": {
               "$ref": "#/$defs/endpointUrl"
             },
@@ -707,50 +690,10 @@ export const KNOWLEDGE_SCHEMA = {
           },
           "maxItems": 32,
           "uniqueItems": true
-        },
-        "collection_scope": {
-          "$ref": "#/$defs/collectionScope"
         }
       },
       "additionalProperties": true,
       "allOf": [
-        {
-          "if": {
-            "required": [
-              "features"
-            ],
-            "properties": {
-              "features": {
-                "contains": {
-                  "const": "import"
-                }
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "endpoints"
-            ],
-            "properties": {
-              "endpoints": {
-                "required": [
-                  "import"
-                ]
-              }
-            }
-          },
-          "else": {
-            "properties": {
-              "endpoints": {
-                "not": {
-                  "required": [
-                    "import"
-                  ]
-                }
-              }
-            }
-          }
-        },
         {
           "if": {
             "required": [
@@ -840,7 +783,7 @@ export const KNOWLEDGE_SCHEMA = {
     },
     "language": {
       "type": "string",
-      "pattern": "^(?:[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*|und)$(?![\\s\\S])"
+      "pattern": "^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$(?![\\s\\S])"
     },
     "queryText": {
       "type": "string",
@@ -994,6 +937,9 @@ export const KNOWLEDGE_SCHEMA = {
         "created_before": {
           "$ref": "#/$defs/timestampMs"
         },
+        "after_seq": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
         "q": {
           "$ref": "#/$defs/queryText"
         },
@@ -1008,7 +954,7 @@ export const KNOWLEDGE_SCHEMA = {
         }
       },
       "additionalProperties": false,
-      "description": "Parsed core query; HTTP integers must first be parsed from decimal digits, and duplicate parameters rejected. Timestamp ordering and text semantics are additional checks."
+      "description": "Parsed core query; HTTP integers must first be parsed from decimal digits and duplicate parameters rejected. Timestamp ordering, text rules and cursor binding are additional checks."
     },
     "queryResponse": {
       "type": "object",
@@ -1030,7 +976,7 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/httpsOrigin"
         },
         "checkpoint": {
-          "$ref": "#/$defs/timestampMs"
+          "$ref": "#/$defs/nonNegativeInteger"
         },
         "as_of": {
           "$ref": "#/$defs/timestampMs"
@@ -1088,7 +1034,7 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/httpsOrigin"
         },
         "checkpoint": {
-          "$ref": "#/$defs/timestampMs"
+          "$ref": "#/$defs/nonNegativeInteger"
         },
         "as_of": {
           "$ref": "#/$defs/timestampMs"
@@ -1122,9 +1068,6 @@ export const KNOWLEDGE_SCHEMA = {
           "minimum": 1,
           "maximum": 100,
           "default": 20
-        },
-        "cursor": {
-          "$ref": "#/$defs/nonEmptyString"
         }
       },
       "additionalProperties": false
@@ -1133,15 +1076,11 @@ export const KNOWLEDGE_SCHEMA = {
       "type": "object",
       "required": [
         "record",
-        "rank",
         "explanation"
       ],
       "properties": {
         "record": {
           "$ref": "#/$defs/acceptanceRecord"
-        },
-        "rank": {
-          "$ref": "#/$defs/nonce"
         },
         "explanation": {
           "$ref": "#/$defs/nonEmptyString"
@@ -1237,13 +1176,10 @@ export const KNOWLEDGE_SCHEMA = {
           "$ref": "#/$defs/httpsOrigin"
         },
         "checkpoint": {
-          "$ref": "#/$defs/timestampMs"
+          "$ref": "#/$defs/nonNegativeInteger"
         },
         "as_of": {
           "$ref": "#/$defs/timestampMs"
-        },
-        "next_cursor": {
-          "$ref": "#/$defs/nonEmptyString"
         },
         "ranking": {
           "$ref": "#/$defs/ranking"
@@ -1286,38 +1222,12 @@ export const KNOWLEDGE_SCHEMA = {
             }
           }
         }
-      ]
-    },
-    "collectionScope": {
-      "type": "object",
-      "required": [],
-      "properties": {
-        "description": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "tags": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/tag"
-          },
-          "uniqueItems": true
-        },
-        "languages": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/language"
-          },
-          "uniqueItems": true
-        },
-        "profiles": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/eventHash"
-          },
-          "uniqueItems": true
-        }
-      },
-      "additionalProperties": true
+      ],
+      "not": {
+        "required": [
+          "next_cursor"
+        ]
+      }
     }
   }
 };

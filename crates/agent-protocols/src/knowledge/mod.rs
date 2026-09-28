@@ -2,7 +2,9 @@
 //!
 //! JSON boundary APIs preserve complete signed values. Typed payloads preserve
 //! absent versus explicitly empty optional fields; application data stays opaque.
-//! Core validation never fetches URLs, executes procedures, or certifies truth.
+//! Knowledge events are immutable, portable objects: acceptance never consults
+//! a live-write nonce cache. Core validation never fetches URLs, executes
+//! procedures, or certifies truth.
 
 mod store;
 mod types;
@@ -21,6 +23,7 @@ use std::sync::{Mutex, OnceLock};
 pub const PROTOCOL: &str = "agent-knowledge/1.0";
 pub const SCHEMA_JSON: &str = include_str!("schema.json");
 pub const EVENT_TYPES: [&str; 3] = ["knowledge.publish", "knowledge.assess", "knowledge.retract"];
+pub const SEARCH_MODES: [&str; 3] = ["lexical", "semantic", "hybrid"];
 pub const KNOWLEDGE_ERROR_CODES: [&str; 6] = [
     "missing_dependency",
     "invalid_target",
@@ -29,6 +32,12 @@ pub const KNOWLEDGE_ERROR_CODES: [&str; 6] = [
     "query_unavailable",
     "unsupported_search_mode",
 ];
+/// Default allowance for `created_at` ahead of the receiver clock.
+pub const DEFAULT_FUTURE_SKEW_MS: i64 = 300_000;
+pub const DEFAULT_MAX_ENVELOPE_BYTES: usize = 262_144;
+/// Relationships that may point at an assessment as well as a publication.
+const ASSESSMENT_RELATIONS: [&str; 3] = ["derived_from", "supports", "contradicts"];
+
 pub(crate) fn fail(code: &'static str, message: impl Into<String>) -> SdkError {
     SdkError::protocol(code, message)
 }
@@ -126,15 +135,13 @@ pub fn parse_knowledge_read_json(text: &str) -> Result<Value> {
     identity::parse_strict_json(text).map_err(|e| fail("invalid_request", e.to_string()))
 }
 
-pub fn validate_knowledge_digest(value: &str) -> Result<()> {
+/// Require a canonical unpadded base64url encoding of exactly 32 bytes.
+pub fn validate_knowledge_id(value: &str) -> Result<()> {
     let bytes = URL_SAFE_NO_PAD
         .decode(value)
-        .map_err(|_| fail("invalid_event", "invalid digest encoding"))?;
+        .map_err(|_| fail("invalid_event", "invalid ID encoding"))?;
     if bytes.len() != 32 || URL_SAFE_NO_PAD.encode(&bytes) != value {
-        return Err(fail(
-            "invalid_event",
-            "digest must canonically encode 32 bytes",
-        ));
+        return Err(fail("invalid_event", "ID must canonically encode 32 bytes"));
     }
     Ok(())
 }
@@ -162,45 +169,43 @@ pub(crate) fn https_url(value: &str) -> Result<url::Url> {
     Ok(parsed)
 }
 
-/// Validate structure, strict I-JSON, Identity hash/signature, URLs, timestamps,
-/// canonical references and profile binding uniqueness. No dependency fetching.
+pub(crate) fn sha3_id(bytes: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes))
+}
+
+/// Validate structure, strict I-JSON, Identity hash/signature, URLs, canonical
+/// IDs and profile binding uniqueness. Dependencies are checked separately.
 pub fn validate_knowledge_envelope(value: &Value) -> Result<Envelope<Value>> {
     identity::parse_strict_json(&serde_json::to_string(value)?)?;
     validate_knowledge_schema(value, "signedEnvelope")?;
     let envelope: Envelope<Value> = serde_json::from_value(normalized_json(value))
         .map_err(|e| fail("invalid_event", e.to_string()))?;
     identity::verify_envelope(&envelope)?;
-    validate_knowledge_digest(&envelope.hash)?;
+    validate_knowledge_id(&envelope.hash)?;
     let p = &envelope.event.payload;
     https_url(string(&p["license"]))?;
     for evidence in arr(&p["evidence"]) {
         https_url(string(&evidence["url"]))?;
         if let Some(digest) = evidence.get("digest") {
-            validate_knowledge_digest(string(digest))?;
+            validate_knowledge_id(string(digest))?;
         }
     }
     let mut profiles = BTreeSet::new();
     for binding in arr(&p["profiles"]) {
         https_url(string(&binding["profile"]["url"]))?;
         let digest = string(&binding["profile"]["digest"]);
-        validate_knowledge_digest(digest)?;
+        validate_knowledge_id(digest)?;
         if !profiles.insert(digest) {
             return Err(fail("invalid_event", "duplicate profile digest"));
         }
     }
     for target in knowledge_dependencies(value) {
-        validate_knowledge_digest(&target)?;
-    }
-    if p.get("learned_at")
-        .and_then(KnowledgeInteger::knowledge_i64)
-        .is_some_and(|t| t > envelope.event.created_at)
-    {
-        return Err(fail("invalid_event", "learned_at exceeds created_at"));
+        validate_knowledge_id(&target)?;
     }
     Ok(envelope)
 }
 
-/// Sorted, deduplicated direct dependencies. Call after common validation.
+/// Sorted, distinct direct dependencies. Call after common validation.
 pub fn knowledge_dependencies(value: &Value) -> Vec<String> {
     let p = &value["event"]["payload"];
     if value["event"]["type"] == "knowledge.publish" {
@@ -215,24 +220,22 @@ pub fn knowledge_dependencies(value: &Value) -> Vec<String> {
     }
 }
 
-/// Unresolved IDs are available separately for HTTP `error.data.missing`.
-pub fn missing_knowledge_dependencies(
-    value: &Value,
-    retained: &BTreeMap<String, Value>,
-) -> Vec<String> {
-    knowledge_dependencies(value)
-        .into_iter()
-        .filter(|id| !retained.contains_key(id))
-        .collect()
-}
-
-/// Resolve references against locally retained, already validated envelopes.
+/// Check target rules against retained envelopes that already passed validation.
 pub fn validate_knowledge_dependencies(
     value: &Value,
     retained: &BTreeMap<String, Value>,
 ) -> Result<()> {
-    validate_knowledge_envelope(value)?;
-    let missing = missing_knowledge_dependencies(value, retained);
+    check_dependencies(value, |id| retained.get(id))
+}
+
+pub(crate) fn check_dependencies<'a>(
+    value: &Value,
+    lookup: impl Fn(&str) -> Option<&'a Value>,
+) -> Result<()> {
+    let missing: Vec<_> = knowledge_dependencies(value)
+        .into_iter()
+        .filter(|id| lookup(id).is_none())
+        .collect();
     if !missing.is_empty() {
         return Err(SdkError::protocol_with_data(
             "missing_dependency",
@@ -247,18 +250,11 @@ pub fn validate_knowledge_dependencies(
         vec![json!({"relation": event["type"], "target": event["payload"]["target"]})]
     };
     for link in links {
-        let original = &retained[string(&link["target"])];
-        let checked = validate_knowledge_envelope(original)?;
-        if checked.hash != string(&link["target"]) {
-            return Err(fail(
-                "invalid_target",
-                "dependency map key does not match hash",
-            ));
-        }
-        let target = &original["event"];
+        let target = &lookup(string(&link["target"])).expect("resolved above")["event"];
         let relation = string(&link["relation"]);
         let allowed = target["type"] == "knowledge.publish"
-            || (relation == "knowledge.retract" && target["type"] == "knowledge.assess");
+            || (target["type"] == "knowledge.assess"
+                && (relation == "knowledge.retract" || ASSESSMENT_RELATIONS.contains(&relation)));
         if !allowed
             || (relation == "addresses" && target["payload"]["kind"] != "question")
             || (relation == "tests" && target["payload"]["kind"] != "hypothesis")
@@ -284,9 +280,12 @@ pub fn validate_knowledge_dependencies(
 /// Deterministic known-set lifecycle view. Rejects unvalidated or open sets.
 pub fn materialize_knowledge(retained: &BTreeMap<String, Value>) -> Result<Value> {
     for (id, item) in retained {
+        validate_knowledge_envelope(item)?;
         if string(&item["hash"]) != id {
             return Err(fail("invalid_event", "known-set key differs from hash"));
         }
+    }
+    for item in retained.values() {
         validate_knowledge_dependencies(item, retained)?;
     }
     let withdrawn: BTreeSet<&str> = retained
@@ -364,24 +363,22 @@ pub fn validate_typed_knowledge_envelope<P: Serialize>(envelope: &Envelope<P>) -
     validate_knowledge_envelope(&serde_json::to_value(envelope)?).map(|_| ())
 }
 
-/// Digest verification over complete decoded representation bytes, never text.
+/// Compare a digest with complete representation bytes (after transfer and
+/// content decoding, before text conversion). Pass `None` bytes when the
+/// complete representation could not be obtained. Nothing is fetched.
 pub fn verify_knowledge_evidence(
     digest: Option<&str>,
     bytes: Option<&[u8]>,
-    fetched: bool,
-    complete: bool,
-) -> EvidenceStatus {
-    let Some(digest) = digest.filter(|_| fetched) else {
-        return EvidenceStatus::Unchecked;
+) -> Result<EvidenceStatus> {
+    let Some(digest) = digest else {
+        return Ok(EvidenceStatus::Unchecked);
     };
-    let Some(bytes) = bytes.filter(|_| complete) else {
-        return EvidenceStatus::Unavailable;
-    };
-    if URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes)) == digest {
-        EvidenceStatus::Matched
-    } else {
-        EvidenceStatus::Mismatched
-    }
+    validate_knowledge_id(digest)?;
+    Ok(match bytes {
+        None => EvidenceStatus::Unavailable,
+        Some(bytes) if sha3_id(bytes) == digest => EvidenceStatus::Matched,
+        Some(_) => EvidenceStatus::Mismatched,
+    })
 }
 
 /// Portable ASCII-only case folding; Unicode normalization is not performed.
@@ -428,12 +425,12 @@ pub fn knowledge_text_matches(item: &Value, text: &str) -> Result<bool> {
         .all(|term| fields.iter().any(|field| field.contains(term))))
 }
 
-pub fn validate_knowledge_filters(filters: &Value) -> Result<()> {
+fn validate_filters(filters: &Value) -> Result<()> {
     validate_knowledge_schema(filters, "searchFilters")
         .map_err(|e| fail("invalid_request", e.to_string()))?;
     for key in ["actor", "target", "profile"] {
         if let Some(value) = filters.get(key) {
-            validate_knowledge_digest(
+            validate_knowledge_id(
                 string(value)
                     .strip_prefix("did:agent:")
                     .unwrap_or(string(value)),
@@ -456,23 +453,18 @@ pub fn validate_knowledge_query(request: &Value) -> Result<()> {
     validate_knowledge_schema(request, "queryRequest")
         .map_err(|e| fail("invalid_request", e.to_string()))?;
     let mut filters = request.clone();
-    for key in ["q", "cursor", "limit"] {
+    for key in ["q", "cursor", "limit", "after_seq"] {
         filters.as_object_mut().unwrap().remove(key);
     }
-    validate_knowledge_filters(&filters)?;
+    validate_filters(&filters)?;
     if let Some(q) = request.get("q") {
         knowledge_text_terms(string(q), true)?;
     }
     Ok(())
 }
 
+/// Parse decoded HTTP parameter pairs; duplicate names remain observable.
 pub fn parse_knowledge_query(parameters: &[(String, String)]) -> Result<Value> {
-    parse_parameters(parameters, false)
-}
-pub fn parse_knowledge_changes(parameters: &[(String, String)]) -> Result<Value> {
-    parse_parameters(parameters, true)
-}
-fn parse_parameters(parameters: &[(String, String)], changes: bool) -> Result<Value> {
     let mut request = serde_json::Map::new();
     for (key, text) in parameters {
         if request.contains_key(key) {
@@ -480,7 +472,7 @@ fn parse_parameters(parameters: &[(String, String)], changes: bool) -> Result<Va
         }
         let value = if matches!(
             key.as_str(),
-            "created_from" | "created_before" | "limit" | "after"
+            "created_from" | "created_before" | "limit" | "after_seq"
         ) {
             if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
                 return Err(fail(
@@ -505,39 +497,11 @@ fn parse_parameters(parameters: &[(String, String)], changes: bool) -> Result<Va
         request.insert(key.clone(), value);
     }
     let request = Value::Object(request);
-    if changes {
-        validate_knowledge_changes_request(&request)?;
-    } else {
-        validate_knowledge_query(&request)?;
-    }
+    validate_knowledge_query(&request)?;
     Ok(request)
 }
 
-pub fn validate_knowledge_changes_request(request: &Value) -> Result<()> {
-    let obj = request
-        .as_object()
-        .ok_or_else(|| fail("invalid_request", "changes request must be object"))?;
-    if obj
-        .keys()
-        .any(|k| !["after", "limit", "cursor"].contains(&k.as_str()))
-    {
-        return Err(fail("invalid_request", "unknown changes parameter"));
-    }
-    if request.get("after").is_some_and(|v| {
-        v.knowledge_u64()
-            .is_none_or(|n| n > identity::MAX_SAFE_NONCE)
-    }) || request
-        .get("limit")
-        .is_some_and(|v| v.knowledge_u64().is_none_or(|n| !(1..=1000).contains(&n)))
-        || request
-            .get("cursor")
-            .is_some_and(|v| v.as_str().is_none_or(str::is_empty))
-    {
-        return Err(fail("invalid_request", "malformed changes parameter"));
-    }
-    Ok(())
-}
-
+/// Exact filter and text predicate; `after_seq`, `limit` and `cursor` are not payload filters.
 pub fn knowledge_query_matches(item: &Value, filters: &Value) -> Result<bool> {
     let e = &item["event"];
     let p = &e["payload"];
@@ -608,11 +572,12 @@ pub fn knowledge_query_matches(item: &Value, filters: &Value) -> Result<bool> {
     Ok(true)
 }
 
+/// Validate an unsigned search request; an unadvertised mode is never substituted.
 pub fn validate_knowledge_search_request(request: &Value, modes: &[String]) -> Result<()> {
     identity::parse_strict_json(&serde_json::to_string(request)?)
         .map_err(|e| fail("invalid_request", e.to_string()))?;
     if let Some(mode) = request["mode"].as_str() {
-        if !["lexical", "semantic", "hybrid"].contains(&mode) || !modes.iter().any(|m| m == mode) {
+        if !SEARCH_MODES.contains(&mode) || !modes.iter().any(|m| m == mode) {
             return Err(fail(
                 "unsupported_search_mode",
                 "explicit mode is not supported",
@@ -622,7 +587,7 @@ pub fn validate_knowledge_search_request(request: &Value, modes: &[String]) -> R
     validate_knowledge_schema(request, "searchRequest")
         .map_err(|e| fail("invalid_request", e.to_string()))?;
     knowledge_text_terms(string(&request["text"]), request["mode"] == "lexical")?;
-    validate_knowledge_filters(request.get("filters").unwrap_or(&json!({})))
+    validate_filters(request.get("filters").unwrap_or(&json!({})))
 }
 
 pub fn validate_knowledge_batch_request(request: &Value) -> Result<Vec<String>> {
@@ -631,8 +596,7 @@ pub fn validate_knowledge_batch_request(request: &Value) -> Result<Vec<String>> 
     arr(&request["hashes"])
         .iter()
         .map(|v| {
-            validate_knowledge_digest(string(v))
-                .map_err(|e| fail("invalid_request", e.to_string()))?;
+            validate_knowledge_id(string(v)).map_err(|e| fail("invalid_request", e.to_string()))?;
             Ok(string(v).to_owned())
         })
         .collect()

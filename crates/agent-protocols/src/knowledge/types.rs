@@ -14,7 +14,6 @@ wire_enum!(KnowledgeVerdict { Supports => "supports", Challenges => "challenges"
 wire_enum!(EvidenceRole { Source => "source", Input => "input", Output => "output", Environment => "environment", Validation => "validation" });
 wire_enum!(EvidenceStatus { Unchecked => "unchecked", Matched => "matched", Mismatched => "mismatched", Unavailable => "unavailable" });
 wire_enum!(SearchMode { Lexical => "lexical", Semantic => "semantic", Hybrid => "hybrid" });
-wire_enum!(PublicVisibility { Public => "public" });
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -65,7 +64,6 @@ pub struct KnowledgeProfileBinding {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgePublishPayload {
-    pub visibility: PublicVisibility,
     pub license: String,
     pub kind: KnowledgeKind,
     pub title: String,
@@ -84,14 +82,11 @@ pub struct KnowledgePublishPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profiles: Option<Vec<KnowledgeProfileBinding>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub learned_at: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<BTreeMap<String, Value>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeAssessPayload {
-    pub visibility: PublicVisibility,
     pub license: String,
     pub target: String,
     pub verdict: KnowledgeVerdict,
@@ -110,7 +105,6 @@ pub struct KnowledgeAssessPayload {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeRetractPayload {
-    pub visibility: PublicVisibility,
     pub license: String,
     pub target: String,
     pub reason: String,
@@ -129,77 +123,12 @@ pub struct KnowledgeAcceptanceRecord {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// Profile validation is separate from core binding validity. A caller must
-/// supply its discipline's validator and verify all normative dependencies.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProfileStatus {
-    Unavailable,
-    Unchecked,
-    Conformant,
-    Nonconformant,
-}
-
-/// Run an explicitly supplied profile validator only after artifact integrity
-/// and normative dependency integrity are established. No network or execution.
-pub fn validate_knowledge_profile<F>(
-    binding: &KnowledgeProfileBinding,
-    artifact: Option<&[u8]>,
-    dependencies_verified: bool,
-    validator: Option<F>,
-) -> crate::Result<ProfileStatus>
-where
-    F: FnOnce(&[u8], &BTreeMap<String, Value>) -> crate::Result<bool>,
-{
-    super::validate_knowledge_schema(&serde_json::to_value(binding)?, "profileBinding")?;
-    super::https_url(&binding.profile.url)?;
-    super::validate_knowledge_digest(&binding.profile.digest)?;
-    let Some(validator) = validator else {
-        return Ok(ProfileStatus::Unchecked);
-    };
-    let Some(artifact) = artifact else {
-        return Ok(ProfileStatus::Unavailable);
-    };
-    if super::verify_knowledge_evidence(Some(&binding.profile.digest), Some(artifact), true, true)
-        != EvidenceStatus::Matched
-        || !dependencies_verified
-    {
-        return Ok(ProfileStatus::Unavailable);
-    }
-    Ok(if validator(artifact, &binding.data)? {
-        ProfileStatus::Conformant
-    } else {
-        ProfileStatus::Nonconformant
-    })
-}
-
-/// Local validation metadata bound to one signed event and exact profile.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct KnowledgeProfileResult {
-    pub event_id: String,
-    pub profile_digest: String,
-    pub status: ProfileStatus,
-}
-
-pub fn validate_knowledge_event_profile<F>(
-    envelope: &Value,
-    digest: &str,
-    artifact: Option<&[u8]>,
-    dependencies_verified: bool,
-    validator: Option<F>,
-) -> crate::Result<KnowledgeProfileResult>
-where
-    F: FnOnce(&[u8], &BTreeMap<String, Value>) -> crate::Result<bool>,
-{
-    super::validate_knowledge_envelope(envelope)?;
-    let binding = super::arr(&envelope["event"]["payload"]["profiles"])
-        .iter()
-        .find(|b| b["profile"]["digest"] == digest)
-        .ok_or_else(|| super::fail("invalid_request", "event does not declare this profile"))?;
-    let binding: KnowledgeProfileBinding = serde_json::from_value(binding.clone())?;
-    Ok(KnowledgeProfileResult {
-        event_id: super::string(&envelope["hash"]).to_owned(),
-        profile_digest: digest.to_owned(),
-        status: validate_knowledge_profile(&binding, artifact, dependencies_verified, validator)?,
-    })
+/// Caller-ranked candidates for one ranked-search page. Candidates must be
+/// visible and satisfy the request's exact filters; no ranking model is implied.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KnowledgeSearchSelection {
+    pub candidates: Vec<String>,
+    pub ranking: Value,
+    pub coverage: Value,
+    pub explanations: BTreeMap<String, String>,
 }

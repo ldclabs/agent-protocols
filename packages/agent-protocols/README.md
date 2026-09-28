@@ -62,9 +62,9 @@ The local connector derives the delegation service from the principal's `delegat
 ## Agent Knowledge
 
 The `agent-protocols/knowledge` entry point implements Agent Knowledge 1.0
-objects, dependency validation, deterministic views, evidence and profile
-verification states, discovery and retrieval contracts, and an in-memory service
-engine. `KnowledgeClient` is exported from the main and `http-client` entry points.
+objects, dependency validation, deterministic views, evidence verification,
+discovery and retrieval contracts, and an in-memory service engine.
+`KnowledgeClient` is exported from the main and `http-client` entry points.
 
 ```ts
 import { AgentSigner, KnowledgeClient, knowledgePublishEvent } from "agent-protocols";
@@ -72,7 +72,6 @@ import { AgentSigner, KnowledgeClient, knowledgePublishEvent } from "agent-proto
 const signer = AgentSigner.generate();
 const now = Date.now();
 const envelope = signer.signEvent(knowledgePublishEvent(signer.agentId(), now, now, {
-  visibility: "public",
   license: "https://creativecommons.org/licenses/by/4.0/",
   kind: "observation",
   title: "Cache keys must include language",
@@ -84,40 +83,43 @@ const envelope = signer.signEvent(knowledgePublishEvent(signer.agentId(), now, n
 const client = await KnowledgeClient.discover("https://knowledge.example.com");
 await client.submit(envelope);
 
-// Reads require no signer, JWT, publication, or nonce allocation.
+// Reads require no signer, JWT, or publication.
+let checkpoint = 0;
 for await (const page of client.queryPages({ q: "cache language", kind: "observation" })) {
-  console.log(page.service, page.checkpoint, page.as_of, page.result);
+  console.log(page.service, page.checkpoint, page.result);
+  checkpoint = page.checkpoint;
 }
+// Later: poll for newly accepted records with { after_seq: checkpoint }.
 ```
 
-`KnowledgeStore({ service, clock? })` provides `submit`, explicit historical
-`import`, `event`, `batch`, `query`, `changes`, and `search`. Historical imports
-never affect live nonce state. Pass the same `nonceStore` to all protocol
-services at one origin to enforce the shared actor-wide nonce maximum. Exact retries retain the original acceptance
-record, including when hidden. `hide` / `unhide` preserve history; `prune` removes
-the record while retaining sequence and nonce high-water state. Input/output
-objects are copied. Query and search cursors freeze their selection, effective
-request, scope and ranking metadata, while respecting later removal. Snapshot
-count, lifetime and record budgets are configurable; expired or evicted cursors
-fail explicitly. This synchronous engine is an application building block; it
-does not provide durable storage, an HTTP server, or deployment policy.
+`KnowledgeStore({ service, clock?, futureSkewMs?, maxEnvelopeBytes?, admit? })`
+provides `submit`, `event`, `batch`, `query`, and `search`. Knowledge events are
+portable objects: acceptance rejects only `created_at` beyond the future-skew
+allowance (300 s by default), never consults an Identity nonce cache, and resolves
+dependencies against every retained envelope, including hidden ones. Exact retries
+return the original acceptance record, including when hidden. `hide` / `unhide`
+preserve history; `prune` removes the record while retaining the sequence
+high-water mark. Input and output objects are copied. Query cursors are stateless:
+they encode the checkpoint, snapshot time, last returned `seq`, and a digest of the
+effective request, so a mismatched or foreign cursor fails with `invalid_cursor`
+and no read state is retained. This synchronous engine is an application building
+block; it does not provide durable storage, an HTTP server, or deployment policy.
 
-Ranked `search` accepts application-selected candidate IDs, a ranking configuration
-and honest coverage metadata. It verifies exact filters and lexical matches and
-preserves candidate ranks across pages. Embedding models and ranking algorithms
-are application choices. The HTTP client requires discovery to advertise import
-and ranked search; it rejects mode substitution, mismatched scopes, malformed
-batches, invalid signatures, duplicate cross-page IDs and snapshot drift. Redirects
-are disabled and ambient credentials omitted. Write/import JWTs are optional and
-must be bound to the receiving origin; import credentials identify the caller,
+Ranked `search` returns one page of application-selected candidate IDs with a
+ranking configuration and honest coverage metadata; it verifies exact filters and
+lexical matches and refuses false exhaustive coverage. Embedding models and ranking
+algorithms are application choices. The HTTP client requires discovery to
+advertise ranked search; it rejects mode substitution, mismatched scopes,
+malformed batches, invalid signatures, and cross-page drift (`KnowledgePageTracker`).
+Redirects are disabled and ambient credentials omitted. Submission JWTs are
+optional and must be bound to the receiving origin; they identify the caller,
 which can differ from the signed publisher.
 
-`materializeKnowledge` requires a validated, dependency-closed known set. Its
-active/retracted facts are local to that set. `verifyKnowledgeEvidence` checks
-complete decoded representation bytes; `knowledgeProfileResult` requires pinned
-profile bytes, verified normative dependencies and all profile checks before
-reporting conformance. Neither helper fetches artifacts or executes methods.
-Signature validity, artifact identity, profile conformance, retrieval relevance,
-and scientific correctness remain separate judgments. The native TypeScript
-conformance suite executes all 64 signed fixtures and 435 layered protocol cases,
-with additional HTTP, isolation, pruning and pagination regressions.
+`materializeKnowledge` requires a validated, dependency-closed known set, and its
+active/retracted facts are local to that set. `verifyKnowledgeEvidence(digest,
+bytes)` compares complete decoded representation bytes; pass `null` when they
+could not be obtained. It never fetches artifacts or executes methods. Signature
+validity, artifact identity, profile conformance, retrieval relevance, and
+scientific correctness remain separate judgments. The native TypeScript
+conformance suite executes every signed fixture and layered protocol case, with
+additional HTTP, isolation, pruning, and pagination regressions.

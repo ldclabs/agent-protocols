@@ -88,13 +88,27 @@ fn model(v: &Value, case: &Value) -> KnowledgeStore {
     let mut store = KnowledgeStore::new(SERVICE).unwrap();
     for name in array(&case["accepted"]) {
         store
-            .import(&envelope(v, name), v["now"].as_i64().unwrap())
+            .submit(&envelope(v, name), v["now"].as_i64().unwrap())
             .unwrap();
     }
     for name in array(&case["hidden"]) {
         store.hide(&id(v, name));
     }
     store
+}
+fn selection(v: &Value, case: &Value, request: &Value) -> KnowledgeSearchSelection {
+    KnowledgeSearchSelection {
+        candidates: names(v, &case["candidates"]),
+        ranking: case
+            .get("ranking")
+            .cloned()
+            .unwrap_or(json!({"mode":request["mode"],"id":"fixture-v1"})),
+        coverage: case
+            .get("coverage")
+            .cloned()
+            .unwrap_or(json!({"exhaustive":true,"reasons":[]})),
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -106,9 +120,9 @@ fn bundled_schema_matches_normative_source() {
 }
 
 #[test]
-fn all_64_signature_fixtures() {
+fn all_signature_fixtures() {
     let v = vectors();
-    assert_eq!(v["fixtures"].as_object().unwrap().len(), 64);
+    assert_eq!(v["fixtures"].as_object().unwrap().len(), 63);
     for (name, fixture) in v["fixtures"].as_object().unwrap() {
         let raw = &fixture["envelope"];
         let e: Envelope = serde_json::from_value(raw.clone()).unwrap();
@@ -165,16 +179,12 @@ fn object_and_known_set_cases() {
     let v = vectors();
     for case in array(&v["object_cases"]) {
         let store = model(&v, case);
-        let retained = store.visible_envelopes();
+        let retained = store.known_envelopes();
         let item = envelope(&v, &case["fixture"]);
         let result = validate_knowledge_envelope(&item)
             .and_then(|_| validate_knowledge_dependencies(&item, &retained));
         assert_outcome(&result, &case["expected"], case);
         if text(&case["expected"]) == "missing_dependency" {
-            assert_eq!(
-                json!(missing_knowledge_dependencies(&item, &retained)),
-                case["missing"]
-            );
             assert_eq!(
                 result.unwrap_err().data(),
                 Some(&json!({"missing":case["missing"]}))
@@ -190,7 +200,7 @@ fn object_and_known_set_cases() {
                 let mut unresolved = Vec::new();
                 for name in pending {
                     let before = format!("{store:?}");
-                    match store.import(&envelope(&v, &name), v["now"].as_i64().unwrap()) {
+                    match store.submit(&envelope(&v, &name), v["now"].as_i64().unwrap()) {
                         Ok(_) => (),
                         Err(e) => {
                             assert_eq!(e.code(), Some("missing_dependency"));
@@ -203,7 +213,7 @@ fn object_and_known_set_cases() {
                 assert!(pending.len() < old, "dependency deadlock");
             }
             assert_eq!(
-                materialize_knowledge(&store.visible_envelopes()).unwrap(),
+                materialize_knowledge(&store.known_envelopes()).unwrap(),
                 case["expected"],
                 "{}",
                 text(&case["name"])
@@ -226,6 +236,7 @@ fn acceptance_and_evidence_cases() {
     let v = vectors();
     for case in array(&v["acceptance_cases"]) {
         let mut store = KnowledgeStore::new(SERVICE).unwrap();
+        let mut receipts = BTreeMap::new();
         for step in array(&case["steps"]) {
             if let Some(name) = step.get("withhold") {
                 store.hide(&id(&v, name));
@@ -234,25 +245,19 @@ fn acceptance_and_evidence_cases() {
             let item = envelope(&v, &step["fixture"]);
             let now = step["now"].as_i64().unwrap();
             let before = format!("{store:?}");
-            let actor = serde_json::from_value(item["event"]["actor"].clone()).unwrap();
-            let max_before = store.max_nonce(&actor, now);
-            let result = store.accept(
-                &item,
-                if step["mode"] == "live" {
-                    KnowledgeAcceptanceMode::Live
-                } else {
-                    KnowledgeAcceptanceMode::Import
-                },
-                now,
-            );
+            let result = store.submit(&item, now);
             let outcome = match &result {
-                Ok(a) => {
-                    if a.resubmission {
+                Ok(record) => match receipts.get(text(&item["hash"])) {
+                    Some(original) => {
+                        assert_eq!(record, original, "retry must return the original record");
                         "resubmission"
-                    } else {
+                    }
+                    None => {
+                        assert_eq!(record["accepted_at"], step["now"]);
+                        receipts.insert(text(&item["hash"]).to_owned(), record.clone());
                         "accepted"
                     }
-                }
+                },
                 Err(e) => e.code().unwrap_or("unmapped_error"),
             };
             assert_eq!(
@@ -263,11 +268,7 @@ fn acceptance_and_evidence_cases() {
                 text(&step["fixture"]),
                 result
             );
-            if let Ok(a) = &result {
-                assert_eq!(a.record["seq"], step["seq"]);
-            } else {
-                assert_eq!(store.checkpoint(), step["seq"].as_u64().unwrap());
-            }
+            assert_eq!(store.checkpoint(), step["seq"].as_u64().unwrap());
             if outcome != "accepted" {
                 assert_eq!(
                     format!("{store:?}"),
@@ -275,25 +276,11 @@ fn acceptance_and_evidence_cases() {
                     "rejection/retry changed state"
                 );
             }
-            if let Ok(a) = result {
-                if !a.resubmission {
-                    assert_eq!(a.record["accepted_at"], step["now"]);
-                }
-            }
-            if step["mode"] == "import" {
-                assert_eq!(store.max_nonce(&actor, now), max_before);
-            }
-            assert_eq!(json!(store.max_nonce(&actor, now)), step["live_max"]);
         }
     }
     for case in array(&v["evidence_cases"]) {
         let raw = case["representation_hex"].as_str().map(bytes);
-        let result = verify_knowledge_evidence(
-            case["digest"].as_str(),
-            raw.as_deref(),
-            case["fetched"].as_bool().unwrap_or(true),
-            case["complete"].as_bool().unwrap_or(false),
-        );
+        let result = verify_knowledge_evidence(case["digest"].as_str(), raw.as_deref()).unwrap();
         assert_eq!(
             serde_json::to_value(result).unwrap(),
             case["expected"],
@@ -379,32 +366,17 @@ fn batch_and_search_cases() {
         assert_eq!(format!("{store:?}"), before);
     }
     for case in array(&v["search_cases"]) {
-        let mut store = model(&v, case);
-        let before = store.visible_envelopes();
-        let checkpoint = store.checkpoint();
+        let store = model(&v, case);
+        let before = format!("{store:?}");
         let result = (|| -> Result<()> {
             let request = if let Some(raw) = case["raw_json"].as_str() {
                 parse_knowledge_read_json(raw)?
             } else {
                 case["request"].clone()
             };
-            let ranking = case
-                .get("ranking")
-                .cloned()
-                .unwrap_or(json!({"mode":request["mode"],"id":"fixture-v1"}));
-            let coverage = case
-                .get("coverage")
-                .cloned()
-                .unwrap_or(json!({"exhaustive":true,"reasons":[]}));
+            validate_knowledge_search_request(&request, &modes(case))?;
             let response = mutate(
-                store.search(
-                    &request,
-                    &names(&v, &case["candidates"]),
-                    &ranking,
-                    &coverage,
-                    &modes(case),
-                    now,
-                )?,
+                store.search(&request, &selection(&v, case, &request), &modes(case), now)?,
                 &case["response_changes"],
             );
             validate_knowledge_search_response(&response, &request, SERVICE)?;
@@ -421,88 +393,40 @@ fn batch_and_search_cases() {
             Ok(())
         })();
         assert_outcome(&result, &case["expected"], case);
-        assert_eq!(store.visible_envelopes(), before);
-        assert_eq!(store.checkpoint(), checkpoint);
+        assert_eq!(format!("{store:?}"), before);
     }
 }
 
 #[test]
-fn snapshot_and_discovery_cases() {
+fn pagination_and_discovery_cases() {
     let v = vectors();
-    for case in array(&v["query_snapshot_cases"]) {
+    for case in array(&v["pagination_cases"]) {
         let mut store = model(&v, case);
         let mut now = v["now"].as_i64().unwrap();
         let mut previous = Value::Null;
-        let mut tracker = None;
-        let search = case["operation"] == "search";
+        let mut tracker = KnowledgePageTracker::new(SERVICE).unwrap();
         for step in array(&case["steps"]) {
             for name in array(&step["add"]) {
                 store
-                    .import(&envelope(&v, name), v["now"].as_i64().unwrap())
+                    .submit(&envelope(&v, name), v["now"].as_i64().unwrap())
                     .unwrap();
             }
             for name in array(&step["hide"]) {
                 store.hide(&id(&v, name));
             }
-            for name in array(&step["reveal"]) {
-                store.unhide(&id(&v, name)).unwrap();
-            }
             now += step["advance_ms"].as_i64().unwrap_or(0);
-            if step["expire"] == true {
-                store.expire_cursors();
-            }
             let result = (|| -> Result<()> {
-                let mut request = if search {
-                    let r = step["request"].clone();
-                    validate_knowledge_search_request(&r, &modes(case))?;
-                    r
-                } else {
-                    parse_knowledge_query(&parameters(&step["parameters"]))?
-                };
+                let mut request = parse_knowledge_query(&parameters(&step["parameters"]))?;
                 if step["continue"] == true {
                     request["cursor"] = previous["next_cursor"].clone();
                 } else {
-                    tracker = Some(KnowledgePageValidator::new(
-                        SERVICE,
-                        if search {
-                            KnowledgeReadOperation::Search
-                        } else {
-                            KnowledgeReadOperation::Query
-                        },
-                        &request,
-                    )?);
+                    tracker = KnowledgePageTracker::new(SERVICE)?;
                 }
-                let response = if search {
-                    store.search(
-                        &request,
-                        &names(&v, step.get("candidates").unwrap_or(&case["candidates"])),
-                        step.get("ranking").unwrap_or(&case["ranking"]),
-                        step.get("coverage").unwrap_or(&case["coverage"]),
-                        &modes(case),
-                        now,
-                    )?
-                } else {
-                    store.query_available(
-                        &request,
-                        now,
-                        step["available"].as_bool().unwrap_or(true),
-                    )?
-                };
-                let response = mutate(response, &step["response_changes"]);
-                tracker
-                    .as_mut()
-                    .unwrap()
-                    .validate_page(&response, &request)?;
+                let response = mutate(store.query(&request, now)?, &step["response_changes"]);
+                tracker.accept(&request, &response)?;
                 let hashes: Vec<_> = array(&response["result"])
                     .iter()
-                    .map(|r| {
-                        text(if search {
-                            &r["record"]["envelope"]["hash"]
-                        } else {
-                            &r["envelope"]["hash"]
-                        })
-                        .to_owned()
-                    })
+                    .map(|r| text(&r["envelope"]["hash"]).to_owned())
                     .collect();
                 assert_eq!(
                     hashes,
@@ -516,17 +440,6 @@ fn snapshot_and_discovery_cases() {
                     "{}",
                     text(&case["name"])
                 );
-                if search {
-                    assert_eq!(
-                        json!(array(&response["result"])
-                            .iter()
-                            .map(|h| h["rank"].clone())
-                            .collect::<Vec<_>>()),
-                        step["ranks"]
-                    );
-                    assert_eq!(response["ranking"], case["ranking"]);
-                    assert_eq!(response["coverage"], case["coverage"]);
-                }
                 previous = response;
                 Ok(())
             })();
@@ -602,7 +515,7 @@ fn typed_roundtrip_and_builders_preserve_signed_data() {
 }
 
 #[test]
-fn changes_pruning_and_page_guards() {
+fn pruning_cursors_and_page_guards() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();
     let mut store = model(
@@ -610,55 +523,68 @@ fn changes_pruning_and_page_guards() {
         &json!({"accepted":["original","branch_left","branch_right"]}),
     );
     let request = json!({"limit":1});
-    let first = store.changes(&request, now).unwrap();
-    let mut tracker =
-        KnowledgePageValidator::new(SERVICE, KnowledgeReadOperation::Changes, &request).unwrap();
-    tracker.validate_page(&first, &request).unwrap();
-    let next = json!({"limit":1,"cursor":first["next_cursor"]});
-    let second = store.changes(&next, now + 1).unwrap();
-    tracker.validate_page(&second, &next).unwrap();
-    assert!(store
-        .changes(&json!({"after":store.checkpoint()+1}), now)
-        .is_err());
-    let original = envelope(&v, &json!("original"));
-    store.hide(text(&original["hash"]));
-    assert!(store.event(text(&original["hash"])).is_err());
-    let retry = store.import(&original, now).unwrap();
-    assert!(retry.resubmission);
-    assert!(store.event(text(&original["hash"])).is_err());
-    store.prune(text(&original["hash"]));
-    let fresh = store.import(&original, now).unwrap();
-    assert_eq!(fresh.record["seq"], 4);
-    assert!(!fresh.resubmission);
-    let request = json!({"limit":1});
-    let mut tracker =
-        KnowledgePageValidator::new(SERVICE, KnowledgeReadOperation::Query, &request).unwrap();
     let first = store.query(&request, now).unwrap();
-    tracker.validate_page(&first, &request).unwrap();
+    let mut tracker = KnowledgePageTracker::new(SERVICE).unwrap();
+    tracker.accept(&request, &first).unwrap();
+    assert_eq!(tracker.checkpoint(), None);
+    let original = envelope(&v, &json!("original"));
+    let hash = text(&original["hash"]).to_owned();
+    store.hide(&hash);
+    assert!(store.event(&hash).is_err());
+    assert_eq!(store.submit(&original, now).unwrap()["seq"], 1);
+    store.prune(&hash);
+    assert_eq!(store.submit(&original, now).unwrap()["seq"], 4);
     let next = json!({"limit":1,"cursor":first["next_cursor"]});
-    let mut second = store.query(&next, now).unwrap();
-    second["result"] = first["result"].clone();
-    assert!(tracker.validate_page(&second, &next).is_err());
-    assert!(materialize_knowledge(&BTreeMap::from([(
-        text(&original["hash"]).into(),
-        original
-    )]))
-    .is_ok());
+    let mut second = store.query(&next, now + 1).unwrap();
+    let mut replay = second.clone();
+    replay["result"] = first["result"].clone();
+    assert!(tracker.clone().accept(&next, &replay).is_err());
+    tracker.accept(&next, &second).unwrap();
+    let last = json!({"limit":1,"cursor":second["next_cursor"]});
+    second = store.query(&last, now + 2).unwrap();
+    tracker.accept(&last, &second).unwrap();
+    assert!(tracker.is_complete());
+    assert_eq!(tracker.checkpoint(), Some(3));
+    let poll = store.query(&json!({"after_seq":3}), now).unwrap();
+    assert_eq!(poll["result"][0]["seq"], 4);
+    assert_eq!(
+        store
+            .query(&json!({"after_seq":5}), now)
+            .unwrap_err()
+            .code(),
+        Some("invalid_request")
+    );
+    for cursor in ["x", "1.2.3", &format!("{}x", text(&first["next_cursor"]))] {
+        assert_eq!(
+            store
+                .query(&json!({"limit":1,"cursor":cursor}), now)
+                .unwrap_err()
+                .code(),
+            Some("invalid_cursor")
+        );
+    }
+    assert_eq!(
+        KnowledgeStore::new(SERVICE)
+            .unwrap()
+            .query(&next, now)
+            .unwrap_err()
+            .code(),
+        Some("invalid_cursor")
+    );
+    assert!(materialize_knowledge(&BTreeMap::from([(hash, original)])).is_ok());
 }
 
 #[test]
-fn integral_json_numbers_shared_nonces_and_bounded_snapshots() {
-    use agent_protocols::identity::{MemoryNonceStore, NonceStore};
+fn integral_json_numbers_and_store_limits() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();
     let mut store = KnowledgeStore::new(SERVICE).unwrap();
     let mut original = envelope(&v, &json!("original"));
     original["event"]["nonce"] = json!(original["event"]["nonce"].as_u64().unwrap() as f64);
     original["event"]["created_at"] = json!(now as f64);
-    // Event timestamp in this fixture is already `now`; JCS hashes 1 and 1.0
-    // identically and protocol JSON integer semantics accept both.
+    // JCS hashes 1 and 1.0 identically and protocol JSON integers accept both.
     validate_knowledge_envelope(&original).unwrap();
-    store.import(&original, now).unwrap();
+    store.submit(&original, now).unwrap();
     let page = store
         .query(&json!({"limit":1.0,"created_from":0.0}), now)
         .unwrap();
@@ -667,117 +593,55 @@ fn integral_json_numbers_shared_nonces_and_bounded_snapshots() {
     floated["result"][0]["seq"] = json!(1.0);
     floated["result"][0]["accepted_at"] = json!(now as f64);
     validate_knowledge_query_response(&floated, &json!({"limit":1.0}), SERVICE).unwrap();
-    let mut tracker =
-        KnowledgePageValidator::new(SERVICE, KnowledgeReadOperation::Query, &json!({"limit":1}))
-            .unwrap();
-    tracker
-        .validate_page(&floated, &json!({"limit":1.0}))
-        .unwrap();
-    assert!(tracker.validate_page(&floated, &Value::Null).is_err());
-    let mut shared = MemoryNonceStore::new();
-    let actor = serde_json::from_value(original["event"]["actor"].clone()).unwrap();
-    shared.check_and_update(&actor, 100, now, 600000).unwrap();
-    let mut second = KnowledgeStore::new(SERVICE).unwrap();
+    let mut tracker = KnowledgePageTracker::new(SERVICE).unwrap();
+    tracker.accept(&json!({"limit":1.0}), &floated).unwrap();
+    assert_eq!(tracker.checkpoint(), Some(1));
+    let mut small = KnowledgeStore::new(SERVICE).unwrap();
+    small.max_envelope_bytes = 100;
     assert_eq!(
-        second
-            .accept_with_nonce_store(&original, KnowledgeAcceptanceMode::Live, now, &mut shared)
-            .unwrap_err()
-            .code(),
-        Some("nonce_not_greater")
+        small.submit(&original, now).unwrap_err().code(),
+        Some("payload_too_large")
     );
-    assert_eq!(second.checkpoint(), 0);
-    second
-        .accept_with_nonce_store(&original, KnowledgeAcceptanceMode::Import, now, &mut shared)
-        .unwrap();
-    assert_eq!(shared.max_nonce(&actor, now), Some(100));
-    let mut invalid = KnowledgeStore::new(SERVICE).unwrap();
-    invalid.nonce_ttl_ms = 1;
-    assert!(invalid.submit(&original, now).is_err());
-    assert_eq!(invalid.max_nonce(&actor, now), None);
-    store
-        .import(&envelope(&v, &json!("branch_left")), now)
-        .unwrap();
-    store.max_snapshots = 1;
-    store.snapshot_ttl_ms = 10;
-    let first = store.query(&json!({"limit":1}), now).unwrap();
-    let second = store.query(&json!({"limit":1}), now).unwrap();
-    assert!(store
-        .query(&json!({"limit":1,"cursor":first["next_cursor"]}), now)
-        .is_err());
-    assert!(store
-        .query(&json!({"limit":1,"cursor":second["next_cursor"]}), now + 10)
-        .is_err());
+    let mut closed = KnowledgeStore::new(SERVICE).unwrap();
+    closed.set_admission(|_| Err(agent_protocols::SdkError::PermissionDenied));
+    assert_eq!(
+        closed.submit(&original, now).unwrap_err().code(),
+        Some("permission_denied")
+    );
+    assert_eq!(closed.checkpoint(), 0);
 }
 
 #[test]
-fn profile_conformance_is_scoped_and_requires_material() {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use sha3::{Digest, Sha3_256};
-    let artifact = b"profile rules";
-    let digest = URL_SAFE_NO_PAD.encode(Sha3_256::digest(artifact));
-    let binding = KnowledgeProfileBinding {
-        profile: KnowledgeProfileReference {
-            url: "https://example.com/profile".into(),
-            digest: digest.clone(),
-        },
-        data: BTreeMap::new(),
-    };
-    type Validator = fn(&[u8], &BTreeMap<String, Value>) -> Result<bool>;
-    let yes: Validator = |_, _| Ok(true);
-    let no: Validator = |_, _| Ok(false);
-    assert_eq!(
-        validate_knowledge_profile(&binding, Some(artifact), true, None::<Validator>).unwrap(),
-        ProfileStatus::Unchecked
-    );
-    assert_eq!(
-        validate_knowledge_profile(&binding, None, true, Some(yes)).unwrap(),
-        ProfileStatus::Unavailable
-    );
-    assert_eq!(
-        validate_knowledge_profile(&binding, Some(b"wrong"), true, Some(yes)).unwrap(),
-        ProfileStatus::Unavailable
-    );
-    assert_eq!(
-        validate_knowledge_profile(&binding, Some(artifact), false, Some(yes)).unwrap(),
-        ProfileStatus::Unavailable
-    );
-    assert_eq!(
-        validate_knowledge_profile(&binding, Some(artifact), true, Some(no)).unwrap(),
-        ProfileStatus::Nonconformant
-    );
+fn relationships_may_cite_or_dispute_assessments() {
     let v = vectors();
-    let mut payload = envelope(&v, &json!("original"))["event"]["payload"].clone();
-    payload["profiles"] = json!([binding]);
-    let signer = AgentSigner::from_seed([61; 32]);
-    let item = serde_json::to_value(
-        signer
-            .sign_event(identity::Event::new(
-                PROTOCOL,
-                "knowledge.publish",
-                signer.agent_id(),
-                v["now"].as_i64().unwrap(),
-                1,
-                payload,
-            ))
-            .unwrap(),
-    )
-    .unwrap();
-    let report =
-        validate_knowledge_event_profile(&item, &digest, Some(artifact), true, Some(yes)).unwrap();
-    assert_eq!(report.status, ProfileStatus::Conformant);
-    assert_eq!(report.event_id, text(&item["hash"]));
-    assert_eq!(report.profile_digest, digest);
+    let known: BTreeMap<String, Value> = ["original", "assessment", "retract_original"]
+        .iter()
+        .map(|name| (id(&v, &json!(name)), envelope(&v, &json!(name))))
+        .collect();
+    for (name, expected) in [
+        ("derived_from_assessment", None),
+        ("contradicts_assessment", None),
+        ("supports_retraction", Some("invalid_target")),
+    ] {
+        let result = validate_knowledge_dependencies(&envelope(&v, &json!(name)), &known);
+        assert_eq!(
+            result
+                .err()
+                .and_then(|e| e.code().map(str::to_owned))
+                .as_deref(),
+            expected
+        );
+    }
 }
 
 #[test]
-fn duplicate_service_sequences_are_rejected_within_and_across_pages() {
+fn duplicate_events_are_rejected_in_batch_and_search() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();
-    let mut store = model(&v, &json!({"accepted":["original","branch_left"]}));
+    let store = model(&v, &json!({"accepted":["original","branch_left"]}));
     let ids = names(&v, &json!(["original", "branch_left"]));
-    let request = json!({"hashes":ids});
-    let mut batch = store.batch(&request, now).unwrap();
-    batch["result"][1]["seq"] = batch["result"][0]["seq"].clone();
+    let mut batch = store.batch(&json!({"hashes":ids}), now).unwrap();
+    batch["result"][1] = batch["result"][0].clone();
     assert_eq!(
         validate_knowledge_batch_response(&batch, &ids, SERVICE)
             .unwrap_err()
@@ -785,34 +649,21 @@ fn duplicate_service_sequences_are_rejected_within_and_across_pages() {
         Some("invalid_response")
     );
     let request = json!({"mode":"semantic","text":"research"});
-    let ranking = json!({"mode":"semantic","id":"test"});
-    let coverage = json!({"exhaustive":false,"reasons":["approximate"]});
-    let modes = vec!["semantic".into()];
+    let selection = KnowledgeSearchSelection {
+        candidates: ids.clone(),
+        ranking: json!({"mode":"semantic","id":"test"}),
+        coverage: json!({"exhaustive":false,"reasons":["approximate"]}),
+        ..Default::default()
+    };
     let mut search = store
-        .search(&request, &ids, &ranking, &coverage, &modes, now)
+        .search(&request, &selection, &["semantic".into()], now)
         .unwrap();
-    search["result"][1]["record"]["seq"] = search["result"][0]["record"]["seq"].clone();
+    assert!(search.get("next_cursor").is_none());
+    search["result"][1] = search["result"][0].clone();
     assert_eq!(
         validate_knowledge_search_response(&search, &request, SERVICE)
             .unwrap_err()
             .code(),
-        Some("invalid_response")
-    );
-    let request = json!({"mode":"semantic","text":"research","limit":1});
-    let mut tracker =
-        KnowledgePageValidator::new(SERVICE, KnowledgeReadOperation::Search, &request).unwrap();
-    let first = store
-        .search(&request, &ids, &ranking, &coverage, &modes, now)
-        .unwrap();
-    tracker.validate_page(&first, &request).unwrap();
-    let mut next = request.clone();
-    next["cursor"] = first["next_cursor"].clone();
-    let mut second = store
-        .search(&next, &ids, &ranking, &coverage, &modes, now)
-        .unwrap();
-    second["result"][0]["record"]["seq"] = first["result"][0]["record"]["seq"].clone();
-    assert_eq!(
-        tracker.validate_page(&second, &next).unwrap_err().code(),
         Some("invalid_response")
     );
 }

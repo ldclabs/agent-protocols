@@ -7,8 +7,6 @@ import {
   validateKnowledgeQueryResponse,
   validateKnowledgeBatchRequest,
   validateKnowledgeBatchResponse,
-  validateKnowledgeChangesRequest,
-  validateKnowledgeChangesResponse,
   validateKnowledgeSearchRequest,
   validateKnowledgeSearchResponse,
   validateKnowledgeDiscovery,
@@ -18,8 +16,6 @@ import {
   type KnowledgeEndpoints,
   type KnowledgeQuery,
   type KnowledgeQueryResponse,
-  type KnowledgeChangesRequest,
-  type KnowledgeChangesResponse,
   type KnowledgeBatchResponse,
   type KnowledgeSearchRequest,
   type KnowledgeSearchResponse,
@@ -592,7 +588,7 @@ export class HttpResponseError extends Error {
   }
 }
 
-/** Public reads require no signer. Discovery controls optional import/search capabilities. */
+/** Public reads require no signer. Discovery controls the optional search capability. */
 export class KnowledgeClient {
   readonly service: string;
   private readonly endpoints: KnowledgeEndpoints;
@@ -608,10 +604,9 @@ export class KnowledgeClient {
     this.metadata =
       discovery === undefined ? undefined : structuredClone(discovery);
     this.endpoints = {
-      events: `${service}/knowledge/events`,
-      query: `${service}/knowledge/query`,
-      batch: `${service}/knowledge/batch`,
-      changes: `${service}/knowledge/changes`,
+      events: `${service}/v1/knowledge/events`,
+      query: `${service}/v1/knowledge/query`,
+      batch: `${service}/v1/knowledge/batch`,
       ...discovery?.endpoints,
     };
   }
@@ -630,12 +625,10 @@ export class KnowledgeClient {
     validateKnowledgeDiscovery(value, this.service);
     return value;
   }
-  async event(hash: string): Promise<KnowledgeRecord> {
-    validateKnowledgeId(hash, "invalid_request");
-    const result = await this.request(
-      addQuery(this.endpoints.events, { hash }),
-    );
-    validateKnowledgeRecord(result, hash);
+  async event(id: string): Promise<KnowledgeRecord> {
+    validateKnowledgeId(id, "invalid_request");
+    const result = await this.request(`${this.endpoints.events}/${id}`);
+    validateKnowledgeRecord(result, id);
     return result;
   }
   async submit(
@@ -648,21 +641,6 @@ export class KnowledgeClient {
     validateKnowledgeRecord(result, envelope.hash);
     return result;
   }
-  async import(
-    envelope: KnowledgeEnvelope,
-    jwt?: string,
-  ): Promise<KnowledgeRecord> {
-    if (!this.metadata?.features?.includes("import") || !this.endpoints.import)
-      throw protocolError(
-        "invalid_request",
-        "service has not advertised import",
-      );
-    envelope = structuredClone(envelope);
-    validateKnowledgeEnvelope(envelope);
-    const result = await this.request(this.endpoints.import, envelope, jwt);
-    validateKnowledgeRecord(result, envelope.hash);
-    return result;
-  }
   async query(request: KnowledgeQuery = {}): Promise<KnowledgeQueryResponse> {
     request = structuredClone(request);
     validateKnowledgeQuery(request);
@@ -672,23 +650,38 @@ export class KnowledgeClient {
     validateKnowledgeQueryResponse(result, request, this.service);
     return result;
   }
+  /**
+   * Validated pages of one checkpoint-bound enumeration. Persist the checkpoint
+   * as the next `after_seq` only after iteration completes.
+   */
+  async *queryPages(
+    request: KnowledgeQuery = {},
+  ): AsyncGenerator<KnowledgeQueryResponse> {
+    request = structuredClone(request);
+    if (request.cursor !== undefined)
+      throw protocolError(
+        "invalid_request",
+        "queryPages must start without a cursor",
+      );
+    const tracker = new KnowledgePageTracker(this.service);
+    let cursor: string | undefined;
+    do {
+      const current = {
+        ...request,
+        ...(cursor === undefined ? {} : { cursor }),
+      };
+      const response = await this.query(current);
+      tracker.accept(current, response);
+      cursor = response.next_cursor;
+      yield response;
+    } while (cursor !== undefined);
+  }
   async batch(hashes: string[]): Promise<KnowledgeBatchResponse> {
     hashes = [...hashes];
     const request = { hashes };
     validateKnowledgeBatchRequest(request);
     const result = await this.request(this.endpoints.batch, request);
     validateKnowledgeBatchResponse(result, hashes, this.service);
-    return result;
-  }
-  async changes(
-    request: KnowledgeChangesRequest = {},
-  ): Promise<KnowledgeChangesResponse> {
-    request = structuredClone(request);
-    validateKnowledgeChangesRequest(request);
-    const result = await this.request(
-      addQuery(this.endpoints.changes, { ...request }),
-    );
-    validateKnowledgeChangesResponse(result, request);
     return result;
   }
   async search(
@@ -707,59 +700,6 @@ export class KnowledgeClient {
     const result = await this.request(this.endpoints.search, request);
     validateKnowledgeSearchResponse(result, request, this.service);
     return result;
-  }
-  /** Iteration validates scope, filter binding, sequence ordering and deduplication across all pages. */
-  async *queryPages(
-    request: KnowledgeQuery = {},
-  ): AsyncGenerator<KnowledgeQueryResponse> {
-    request = structuredClone(request);
-    const tracker = new KnowledgePageTracker("query", this.service);
-    let cursor = request.cursor;
-    do {
-      const current = {
-        ...request,
-        ...(cursor === undefined ? {} : { cursor }),
-      };
-      const response = await this.query(current);
-      tracker.accept(current, response);
-      cursor = response.next_cursor;
-      yield response;
-    } while (cursor !== undefined);
-  }
-  async *searchPages(
-    request: KnowledgeSearchRequest,
-  ): AsyncGenerator<KnowledgeSearchResponse> {
-    request = structuredClone(request);
-    const tracker = new KnowledgePageTracker("search", this.service);
-    let cursor = request.cursor;
-    do {
-      const current = {
-        ...request,
-        ...(cursor === undefined ? {} : { cursor }),
-      };
-      const response = await this.search(current);
-      tracker.accept(current, response);
-      cursor = response.next_cursor;
-      yield response;
-    } while (cursor !== undefined);
-  }
-  /** Persist a checkpoint only after this iteration completes; interrupted scans must replay from the old checkpoint. */
-  async *changesPages(
-    request: KnowledgeChangesRequest = {},
-  ): AsyncGenerator<KnowledgeChangesResponse> {
-    request = structuredClone(request);
-    const tracker = new KnowledgePageTracker("changes", this.service);
-    let cursor = request.cursor;
-    do {
-      const current = {
-        ...request,
-        ...(cursor === undefined ? {} : { cursor }),
-      };
-      const response = await this.changes(current);
-      tracker.accept(current, response);
-      cursor = response.next_cursor;
-      yield response;
-    } while (cursor !== undefined);
   }
   private async request(
     url: string,

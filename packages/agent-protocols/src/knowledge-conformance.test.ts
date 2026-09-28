@@ -57,7 +57,7 @@ function outcome(fn: () => void): string {
 function model(accepted: string[] = [], hidden: string[] = []) {
   let clock = vectors.now;
   const store = new k.KnowledgeStore({ service, clock: () => clock });
-  for (const name of accepted) store.import(env(name));
+  for (const name of accepted) store.submit(env(name));
   for (const name of hidden) store.hide(env(name).hash);
   return {
     store,
@@ -67,14 +67,7 @@ function model(accepted: string[] = [], hidden: string[] = []) {
   };
 }
 function state(store: k.KnowledgeStore) {
-  return {
-    checkpoint: store.checkpoint,
-    known: store.knownEnvelopes(),
-    nonces: Object.values(vectors.fixtures).map((f: any) => [
-      f.envelope.event.actor,
-      store.maxNonce(f.envelope.event.actor, vectors.now),
-    ]),
-  };
+  return { checkpoint: store.checkpoint, known: store.knownEnvelopes() };
 }
 
 test("Knowledge bundled schema is identical to normative schema", () =>
@@ -101,10 +94,12 @@ for (const [name, fixture] of Object.entries(vectors.fixtures) as [
 for (const c of vectors.schema_cases)
   test(`Knowledge schema: ${c.name}`, () =>
     assert.equal(
-      k.knowledgeSchemaValid(
-        c.value ?? mutate(env(c.fixture), c.changes),
-        c.definition,
-      ),
+      outcome(() =>
+        k.validateKnowledgeSchema(
+          c.value ?? mutate(env(c.fixture), c.changes),
+          c.definition,
+        ),
+      ) === "valid",
       c.valid,
     ));
 for (const c of vectors.identity_cases)
@@ -156,7 +151,7 @@ for (const c of vectors.view_cases)
           for (const candidate of [...pending]) {
             const before = state(store);
             const result = outcome(() => {
-              store.import(env(candidate));
+              store.submit(env(candidate));
             });
             if (result === "missing_dependency") {
               assert.deepEqual(state(store), before);
@@ -196,9 +191,8 @@ for (const c of vectors.acceptance_cases)
         before = state(store);
       let actual = "";
       try {
-        const record = store.submit(item, step.mode, step.now);
+        const record = store.submit(item, step.now);
         actual = receipts.has(item.hash) ? "resubmission" : "accepted";
-        assert.equal(record.seq, step.seq);
         if (actual === "resubmission")
           assert.deepEqual(record, receipts.get(item.hash));
         else {
@@ -208,18 +202,10 @@ for (const c of vectors.acceptance_cases)
       } catch (error) {
         if (!(error instanceof AgentProtocolError)) throw error;
         actual = error.code;
-        assert.equal(store.checkpoint, step.seq);
-        if (step.max_nonce !== undefined)
-          assert.deepEqual(error.data, { max_nonce: step.max_nonce });
       }
-      assert.equal(actual, step.expected);
+      assert.equal(actual, step.expected, `${c.name}/${step.fixture}`);
+      assert.equal(store.checkpoint, step.seq, `${c.name}/${step.fixture}`);
       if (actual !== "accepted") assert.deepEqual(state(store), before);
-      else if (step.mode === "import")
-        assert.deepEqual(state(store).nonces, before.nonces);
-      assert.equal(
-        store.maxNonce(item.event.actor, step.now) ?? null,
-        step.live_max,
-      );
     }
   });
 for (const c of vectors.evidence_cases)
@@ -228,15 +214,13 @@ for (const c of vectors.evidence_cases)
       k.verifyKnowledgeEvidence(
         c.digest,
         c.representation_hex == null
-          ? undefined
+          ? null
           : Buffer.from(c.representation_hex, "hex"),
-        { fetched: c.fetched, complete: c.complete },
       ),
       c.expected,
     ));
 for (const c of vectors.query_cases)
   test(`Knowledge query: ${c.name}`, () => {
-    const { store } = model(c.accepted);
     assert.equal(
       outcome(() => {
         const request = k.parseKnowledgeQuery(c.parameters);
@@ -327,63 +311,27 @@ for (const c of vectors.search_cases)
     );
     assert.deepEqual(state(store), before);
   });
-for (const c of vectors.query_snapshot_cases)
-  test(`Knowledge snapshot: ${c.name}`, () => {
+for (const c of vectors.pagination_cases)
+  test(`Knowledge pagination: ${c.name}`, () => {
     const { store, advance } = model(c.accepted, c.hidden);
     let previous: any;
     let tracker: k.KnowledgePageTracker;
-    const search = c.operation === "search";
     for (const step of c.steps) {
-      for (const name of step.add ?? []) store.import(env(name));
+      for (const name of step.add ?? []) store.submit(env(name));
       for (const name of step.hide ?? []) store.hide(env(name).hash);
-      for (const name of step.reveal ?? []) store.unhide(env(name).hash);
       advance(step.advance_ms ?? 0);
-      if (step.expire) store.expireSnapshots();
       assert.equal(
         outcome(() => {
-          const request = search
-            ? structuredClone(step.request)
-            : k.parseKnowledgeQuery(step.parameters);
-          if (search)
-            k.validateKnowledgeSearchRequest(
-              request,
-              c.modes ?? ["lexical", "semantic"],
-            );
+          const request = k.parseKnowledgeQuery(step.parameters);
           if (step.continue) request.cursor = previous.next_cursor;
-          else
-            tracker = new k.KnowledgePageTracker(
-              search ? "search" : "query",
-              service,
-            );
-          const response = mutate(
-            search
-              ? store.search(request, {
-                  candidates: (step.candidates ?? c.candidates ?? []).map(
-                    (name: string) => env(name).hash,
-                  ),
-                  ranking: step.ranking ?? c.ranking,
-                  coverage: step.coverage ?? c.coverage,
-                })
-              : store.query(request, step.available ?? true),
-            step.response_changes,
-          );
+          else tracker = new k.KnowledgePageTracker(service);
+          const response = mutate(store.query(request), step.response_changes);
           tracker.accept(request, response);
-          const records = search
-            ? response.result.map((hit: k.KnowledgeSearchHit) => hit.record)
-            : response.result;
           assert.deepEqual(
-            records.map((r: k.KnowledgeRecord) => r.envelope.hash),
+            response.result.map((r: k.KnowledgeRecord) => r.envelope.hash),
             step.matches.map((name: string) => env(name).hash),
           );
           assert.equal(response.next_cursor !== undefined, step.more);
-          if (search) {
-            assert.deepEqual(
-              response.result.map((hit: k.KnowledgeSearchHit) => hit.rank),
-              step.ranks,
-            );
-            assert.deepEqual(response.ranking, c.ranking);
-            assert.deepEqual(response.coverage, c.coverage);
-          }
           previous = response;
         }),
         step.expected,

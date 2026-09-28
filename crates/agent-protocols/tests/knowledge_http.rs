@@ -2,7 +2,7 @@
 use agent_protocols::{
     http_client::KnowledgeClient,
     identity::{unix_secs, AgentSigner, Event, RequestBinding, RequestJwtClaims},
-    knowledge::{KnowledgeStore, PROTOCOL},
+    knowledge::{KnowledgeSearchSelection, KnowledgeStore, PROTOCOL},
 };
 use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
@@ -154,7 +154,7 @@ fn run<F: std::future::Future>(future: F) -> F::Output {
 }
 fn signed() -> Value {
     let signer = AgentSigner::from_seed([33; 32]);
-    let payload = json!({"visibility":"public","license":"https://example.com/license","kind":"question","title":"Alpha?","statement":"Alpha question","language":"en","context":{"scope":"test","conditions":[],"limitations":[]},"basis":"A question from a fixture","extra":{"nested":{"opaque":true}}});
+    let payload = json!({"license":"https://example.com/license","kind":"question","title":"Alpha?","statement":"Alpha question","language":"en","context":{"scope":"test","conditions":[],"limitations":[]},"basis":"A question from a fixture","extra":{"nested":{"opaque":true}}});
     serde_json::to_value(
         signer
             .sign_event(Event::new(
@@ -177,23 +177,15 @@ fn knowledge_https_endpoints_and_unsigned_reads() {
         let item = signed();
         let hash = item["hash"].as_str().unwrap();
         let mut store = KnowledgeStore::new(&server.origin).unwrap();
-        let record = store.import(&item, 1000).unwrap().record;
-        let discovery = json!({"protocol":PROTOCOL,"service":server.origin,"features":["import","ranked-search"],"search_modes":["lexical"],"endpoints":{"events":format!("{}/custom/events",server.origin),"import":format!("{}/custom/import",server.origin),"search":format!("{}/custom/search",server.origin)}});
+        let record = store.submit(&item, 1000).unwrap();
+        let discovery = json!({"protocol":PROTOCOL,"service":server.origin,"features":["ranked-search"],"search_modes":["lexical"],"endpoints":{"events":format!("{}/custom/events",server.origin),"search":format!("{}/custom/search",server.origin)}});
         server.reply(&discovery);
         assert_eq!(client.discover().await.unwrap(), discovery);
         server.reply(&record);
         assert_eq!(client.event(hash).await.unwrap(), record);
-        let live_signer = AgentSigner::from_seed([33; 32]);
+        // Any caller may relay a public signed event; it need not be the actor.
         let caller = AgentSigner::from_seed([34; 32]);
-        let live_token = live_signer
-            .sign_request_jwt(&RequestJwtClaims::new(
-                live_signer.agent_id(),
-                RequestBinding::new(&server.origin),
-                unix_secs(),
-                60,
-            ))
-            .unwrap();
-        let import_token = caller
+        let token = caller
             .sign_request_jwt(&RequestJwtClaims::new(
                 caller.agent_id(),
                 RequestBinding::new(&server.origin),
@@ -206,52 +198,45 @@ fn knowledge_https_endpoints_and_unsigned_reads() {
             item["event"]["actor"].as_str().unwrap()
         );
         server.reply(&record);
-        client.submit(&item, Some(&live_token)).await.unwrap();
-        server.reply(&record);
-        client.import(&item, Some(&import_token)).await.unwrap();
+        client.submit(&item, Some(&token)).await.unwrap();
         let request = json!({"q":"alpha","limit":1.0});
         server.reply(&store.query(&request, 1000).unwrap());
         assert_eq!(
             client.query_all(&request, 3).await.unwrap(),
-            vec![record.clone()]
+            (vec![record.clone()], 1)
         );
         let request = json!({"hashes":[hash]});
         server.reply(&store.batch(&request, 1000).unwrap());
         client.batch(&request).await.unwrap();
-        let request = json!({"after":0});
-        server.reply(&store.changes(&request, 1000).unwrap());
-        client.changes(&request).await.unwrap();
         let request = json!({"mode":"lexical","text":"alpha"});
+        let selection = KnowledgeSearchSelection {
+            candidates: vec![hash.into()],
+            ranking: json!({"mode":"lexical","id":"test"}),
+            coverage: json!({"exhaustive":true,"reasons":[]}),
+            ..Default::default()
+        };
         let search = store
-            .search(
-                &request,
-                &[hash.into()],
-                &json!({"mode":"lexical","id":"test"}),
-                &json!({"exhaustive":true,"reasons":[]}),
-                &["lexical".into()],
-                1000,
-            )
+            .search(&request, &selection, &["lexical".into()], 1000)
             .unwrap();
         server.reply(&search);
         client.search(&request).await.unwrap();
         let requests = server.requests.lock().unwrap();
-        assert_eq!(requests.len(), 8);
-        assert_eq!(requests[1].path, format!("/custom/events?hash={hash}"));
-        assert_eq!(requests[4].path, "/knowledge/query?limit=1&q=alpha");
+        assert_eq!(requests.len(), 6);
+        assert_eq!(requests[1].path, format!("/custom/events/{hash}"));
         assert_eq!(requests[2].method, "POST");
+        assert_eq!(requests[2].path, "/custom/events");
         assert_eq!(
             requests[2].authorization.as_deref(),
-            Some(format!("Bearer {live_token}").as_str())
+            Some(format!("Bearer {token}").as_str())
         );
         assert_eq!(
-            requests[3].authorization.as_deref(),
-            Some(format!("Bearer {import_token}").as_str())
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>(&requests[3].body).unwrap(),
+            serde_json::from_str::<Value>(&requests[2].body).unwrap(),
             item
         );
-        for index in [0, 1, 4, 5, 6, 7] {
+        assert_eq!(requests[3].path, "/v1/knowledge/query?limit=1&q=alpha");
+        assert_eq!(requests[4].path, "/v1/knowledge/batch");
+        assert_eq!(requests[5].path, "/custom/search");
+        for index in [0, 1, 3, 4, 5] {
             assert!(requests[index].authorization.is_none());
         }
     });
@@ -264,7 +249,7 @@ fn knowledge_https_rejects_response_substitution_and_duplicates() {
         let item = signed();
         let hash = item["hash"].as_str().unwrap();
         let mut store = KnowledgeStore::new(&server.origin).unwrap();
-        let record = store.import(&item, 1000).unwrap().record;
+        let record = store.submit(&item, 1000).unwrap();
         let mut wrong = record.clone();
         wrong["envelope"]["event"]["payload"]["title"] = json!("Tampered");
         server.reply(&wrong);
@@ -356,9 +341,8 @@ fn knowledge_authentication_precedes_network_and_success_requires_200() {
         assert!(server.requests.lock().unwrap().is_empty());
         let record = KnowledgeStore::new(&server.origin)
             .unwrap()
-            .import(&item, 1000)
-            .unwrap()
-            .record;
+            .submit(&item, 1000)
+            .unwrap();
         for status in [201, 202, 204] {
             server.raw(status, &record.to_string(), None);
             let error = client

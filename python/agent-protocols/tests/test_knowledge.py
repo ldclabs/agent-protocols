@@ -1,3 +1,4 @@
+import base64
 import copy
 import hashlib
 import json
@@ -7,36 +8,41 @@ from pathlib import Path
 
 import pytest
 from agent_protocols.errors import AgentProtocolError
-from agent_protocols.identity import AgentSigner, MemoryNonceStore, create_event, verify_submission
 from agent_protocols import knowledge as k
+from agent_protocols.identity import AgentSigner, canonical_event_bytes, parse_strict_json
 
 ORIGIN = 'https://knowledge.example.com'
 NOW = 1_800_000_000_000
 SIGNER = AgentSigner.from_seed(bytes([11]) * 32)
+OTHER = AgentSigner.from_seed(bytes([12]) * 32)
 
 
-def payload():
-    return {'visibility': 'public', 'license': 'https://example.com/license', 'kind': 'observation',
-            'title': 'Cache observation', 'statement': 'Cache language matters.', 'language': 'en',
-            'context': {'scope': 'fixture', 'conditions': [], 'limitations': []}, 'basis': 'Two requests.'}
+def payload(**changes):
+    value = {'license': 'https://example.com/license', 'kind': 'observation',
+             'title': 'Cache observation', 'statement': 'Cache language matters.', 'language': 'en',
+             'context': {'scope': 'fixture', 'conditions': [], 'limitations': []}, 'basis': 'Two requests.'}
+    value.update(changes)
+    return value
 
 
-def signed(nonce=1, *, now=NOW):
-    return SIGNER.sign_event(k.knowledge_publish_event(SIGNER.agent_id(), now, nonce, payload()))
+def signed(nonce=1, *, now=NOW, signer=SIGNER, **changes):
+    return signer.sign_event(k.knowledge_publish_event(signer.agent_id(), now, nonce, payload(**changes)))
 
 
-def error(code):
-    return pytest.raises(AgentProtocolError, match='')
+def code(fn):
+    with pytest.raises(AgentProtocolError) as exc:
+        fn()
+    return exc.value.code
 
 
 def test_schema_is_packaged_and_constants_match_spec():
     source = Path(__file__).resolve().parents[3] / 'docs/protocols/agent-knowledge/1.0.schema.json'
     assert files('agent_protocols').joinpath('knowledge.schema.json').read_bytes() == source.read_bytes()
     definitions = json.loads(source.read_bytes())['$defs']
-    assert set(k.KNOWLEDGE_RELATIONS) == set(definitions['relation']['properties']['relation']['enum'])
-    assert set(k.KNOWLEDGE_KINDS) == set(definitions['publishPayload']['properties']['kind']['enum'])
-    assert set(k.KNOWLEDGE_VERDICTS) == set(definitions['assessPayload']['properties']['verdict']['enum'])
-    assert 'invalid_cursor' in k.KNOWLEDGE_ERROR_CODES
+    assert list(k.KNOWLEDGE_RELATIONS) == definitions['relation']['properties']['relation']['enum']
+    assert list(k.KNOWLEDGE_KINDS) == definitions['publishPayload']['properties']['kind']['enum']
+    assert list(k.KNOWLEDGE_VERDICTS) == definitions['assessPayload']['properties']['verdict']['enum']
+    assert list(k.KNOWLEDGE_SEARCH_MODES) == definitions['searchMode']['enum']
 
 
 def test_builder_and_store_detach_all_input_and_output_values():
@@ -47,32 +53,24 @@ def test_builder_and_store_detach_all_input_and_output_values():
     envelope = SIGNER.sign_event(event)
     expected = copy.deepcopy(envelope)
     store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW,
-                             admit=lambda incoming, _: incoming['event']['payload'].update(title='injected'))
+                             admit=lambda incoming: incoming['event']['payload'].update(title='injected'))
     receipt = store.submit(envelope)
     envelope['event']['payload']['title'] = 'injected'
     receipt['envelope']['event']['payload']['title'] = 'also injected'
-    returned = store.records
-    returned.clear()
-    retained = store.retained
-    retained[expected['hash']]['event']['payload']['title'] = 'injected again'
-    assert store.event(expected['hash'])['envelope'] == expected
+    store.known_envelopes()[expected['hash']]['event']['payload']['title'] = 'injected again'
     page = store.query({'limit': 1})
     page['result'][0]['envelope']['event']['payload']['title'] = 'changed response'
     assert store.event(expected['hash'])['envelope'] == expected
 
 
-def test_shared_actor_nonce_with_other_protocol_and_import_no_pollution():
-    nonces = MemoryNonceStore()
-    foreign = SIGNER.sign_event(create_event('other/1.0', 'sample', SIGNER.agent_id(), NOW, 20, {}))
-    verify_submission(foreign, nonces, now_ms=NOW)
-    before = copy.deepcopy(nonces.__dict__)
-    store = k.KnowledgeStore(ORIGIN, nonce_store=nonces, clock=lambda: NOW)
-    with pytest.raises(AgentProtocolError) as exc:
-        store.submit(signed(1))
-    assert exc.value.code == 'nonce_not_greater' and exc.value.data == {'max_nonce': 20}
-    store.import_event(signed(1))
-    assert nonces.__dict__ == before
-    assert store.submit(signed(21))['seq'] == 2
+def test_acceptance_ignores_live_nonce_state_and_accepts_old_events():
+    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
+    assert store.submit(signed(20))['seq'] == 1
+    assert store.submit(signed(5))['seq'] == 2
+    assert store.submit(signed(5, statement='Same nonce, different event.'))['seq'] == 3
+    assert store.submit(signed(1, now=NOW - 10**9))['seq'] == 4
+    assert code(lambda: store.submit(signed(2, now=NOW + k.DEFAULT_FUTURE_SKEW_MS + 1))) == 'timestamp_out_of_window'
+    assert store.submit(signed(3, now=NOW + k.DEFAULT_FUTURE_SKEW_MS))['seq'] == 5
 
 
 def test_hide_retry_prune_and_new_sequence():
@@ -82,209 +80,205 @@ def test_hide_retry_prune_and_new_sequence():
     store.hide(item['hash'])
     assert store.query()['result'] == []
     assert store.batch({'hashes': [item['hash']]})['missing'] == [item['hash']]
-    assert store.submit(item, now_ms=NOW+900_000) == receipt
-    with pytest.raises(AgentProtocolError) as exc:
-        store.event(item['hash'])
-    assert exc.value.code == 'not_found'
+    assert store.submit(item, now_ms=NOW + 900_000) == receipt
+    assert code(lambda: store.event(item['hash'])) == 'not_found'
     store.unhide(item['hash'])
     assert store.event(item['hash']) == receipt
     store.prune(item['hash'])
-    assert store.seq == 1
-    with pytest.raises(AgentProtocolError) as exc:
-        store.submit(item, now_ms=NOW+900_000)
-    assert exc.value.code == 'timestamp_out_of_window'
-    assert store.import_event(item, now_ms=NOW+900_000)['seq'] == 2
+    assert store.checkpoint == 1
+    assert store.submit(item, now_ms=NOW + 900_000)['seq'] == 2
 
 
-def test_exact_receipt_bypasses_limits_admission_and_missing_dependency():
+def test_withheld_dependencies_resolve_and_exact_receipts_bypass_admission():
     first = signed()
-    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW, max_records=2)
+    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
     store.submit(first)
-    p = payload(); p['relations'] = [{'relation': 'derived_from', 'target': first['hash']}]
-    second = SIGNER.sign_event(k.knowledge_publish_event(SIGNER.agent_id(), NOW, 2, p))
-    record = store.submit(second)
     store.hide(first['hash'])
-    store.admit = lambda *_: (_ for _ in ()).throw(AgentProtocolError('permission_denied', 'closed'))
+    second = signed(2, relations=[{'relation': 'derived_from', 'target': first['hash']}])
+    record = store.submit(second)
+    retraction = SIGNER.sign_event(k.knowledge_retract_event(SIGNER.agent_id(), NOW, 3, {
+        'license': 'https://example.com/license', 'target': first['hash'], 'reason': 'mistake'}))
+    assert store.submit(retraction)['seq'] == 3
+    store.admit = lambda _: (_ for _ in ()).throw(AgentProtocolError('permission_denied', 'closed'))
     assert store.submit(second) == record
+    assert code(lambda: store.submit(signed(4))) == 'permission_denied'
+
+
+def test_relationships_may_cite_or_dispute_assessments():
+    original = signed()
+    assessment = OTHER.sign_event(k.knowledge_assess_event(OTHER.agent_id(), NOW, 1, {
+        'license': 'https://example.com/license', 'target': original['hash'], 'verdict': 'supports',
+        'summary': 'Looks right.', 'context': {'scope': 'fixture', 'conditions': [], 'limitations': []},
+        'basis': 'Reran it.'}))
+    known = {original['hash']: original, assessment['hash']: assessment}
+    for relation in ('derived_from', 'supports', 'contradicts'):
+        k.validate_knowledge_dependencies(signed(2, relations=[{'relation': relation, 'target': assessment['hash']}]), known)
+    for relation in ('extends', 'supersedes'):
+        item = signed(2, relations=[{'relation': relation, 'target': assessment['hash']}])
+        assert code(lambda: k.validate_knowledge_dependencies(item, known)) == 'invalid_target'
 
 
 def test_known_set_validation_rejects_unresolved_forged_and_wrong_keys():
     item = signed()
-    p = {'visibility': 'public', 'license': 'https://example.com/license', 'target': item['hash'], 'reason': 'mistake'}
-    withdrawal = SIGNER.sign_event(k.knowledge_retract_event(SIGNER.agent_id(), NOW, 2, p))
-    with pytest.raises(AgentProtocolError) as exc:
-        k.materialize_knowledge({withdrawal['hash']: withdrawal})
-    assert exc.value.code == 'missing_dependency'
+    withdrawal = SIGNER.sign_event(k.knowledge_retract_event(SIGNER.agent_id(), NOW, 2, {
+        'license': 'https://example.com/license', 'target': item['hash'], 'reason': 'mistake'}))
+    assert code(lambda: k.materialize_knowledge({withdrawal['hash']: withdrawal})) == 'missing_dependency'
     with pytest.raises(AgentProtocolError):
         k.materialize_knowledge({'wrong': item})
-    bad = copy.deepcopy(withdrawal); bad['event']['payload']['reason'] = 'forged'
+    bad = copy.deepcopy(withdrawal)
+    bad['event']['payload']['reason'] = 'forged'
     with pytest.raises(AgentProtocolError):
         k.materialize_knowledge({item['hash']: item, bad['hash']: bad})
     assert k.materialize_knowledge({withdrawal['hash']: withdrawal, item['hash']: item})[item['hash']]['status'] == 'retracted'
 
 
-def test_changes_freezes_range_and_handles_hidden_pruned_reimported_ids():
+def test_cursors_bind_checkpoint_and_survive_hide_prune_and_reacceptance():
     store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
     items = [signed(n) for n in range(1, 5)]
-    for item in items[:3]: store.import_event(item)
-    first = store.changes({'limit': 1})
-    tracker = k.KnowledgePageTracker(ORIGIN, 'changes'); tracker.accept(first, {'limit': 1})
+    for item in items[:3]:
+        store.submit(item)
+    tracker = k.KnowledgePageTracker(ORIGIN)
+    first = store.query({'limit': 1})
+    tracker.accept({'limit': 1}, first)
     assert tracker.checkpoint is None
-    store.prune(items[1]['hash']); store.import_event(items[1]); store.import_event(items[3])
+    store.prune(items[1]['hash'])
+    store.submit(items[1])
+    store.submit(items[3])
     request = {'limit': 1, 'cursor': first['next_cursor']}
-    second = store.changes(request); tracker.accept(second, request)
+    second = store.query(request)
+    tracker.accept(request, second)
     assert [record['envelope']['hash'] for record in second['result']] == [items[2]['hash']]
-    assert tracker.checkpoint == 3
-    assert [record['seq'] for record in store.changes({'after': 3})['result']] == [4, 5]
-    with pytest.raises(AgentProtocolError) as exc: store.changes({'after': 6})
-    assert exc.value.code == 'invalid_request'
+    assert tracker.complete and tracker.checkpoint == 3
+    assert [record['seq'] for record in store.query({'after_seq': 3})['result']] == [4, 5]
+    assert code(lambda: store.query({'after_seq': 6})) == 'invalid_request'
+    assert code(lambda: store.query({'limit': 2, 'cursor': first['next_cursor']})) == 'invalid_cursor'
+    assert code(lambda: store.query({'limit': 1, 'cursor': first['next_cursor'] + 'x'})) == 'invalid_cursor'
+    assert code(lambda: k.KnowledgeStore(ORIGIN, clock=lambda: NOW).query(request)) == 'invalid_cursor'
 
 
-def test_snapshot_ttl_capacity_parameter_binding_and_visibility():
-    clock = [NOW]
-    store = k.KnowledgeStore(ORIGIN, clock=lambda: clock[0], max_snapshots=1, snapshot_ttl_ms=20)
-    for n in range(1, 4): store.import_event(signed(n))
-    first = store.query({'limit': 1})
-    store.query({'limit': 2})
-    with pytest.raises(AgentProtocolError) as exc: store.query({'limit': 1, 'cursor': first['next_cursor']})
-    assert exc.value.code == 'invalid_cursor'
-    first = store.query({'limit': 1})
-    with pytest.raises(AgentProtocolError) as exc: store.query({'limit': 2, 'cursor': first['next_cursor']})
-    assert exc.value.code == 'invalid_cursor'
-    clock[0] += 20
-    with pytest.raises(AgentProtocolError) as exc: store.query({'limit': 1, 'cursor': first['next_cursor']})
-    assert exc.value.code == 'invalid_cursor'
-
-
-@pytest.mark.parametrize('mutation', ['scope', 'duplicate', 'request', 'cursor', 'ranking', 'coverage'])
+@pytest.mark.parametrize('mutation', ['scope', 'duplicate', 'request', 'cursor'])
 def test_page_tracker_rejects_cross_page_drift(mutation):
-    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW, search_modes=('lexical',))
-    for n in range(1, 4): store.import_event(signed(n))
-    request = {'mode': 'lexical', 'text': 'cache', 'limit': 1}
-    first = store.search(request)
-    tracker = k.KnowledgePageTracker(ORIGIN, 'search'); tracker.accept(first, request)
+    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
+    for n in range(1, 4):
+        store.submit(signed(n))
+    request = {'q': 'cache', 'limit': 1}
+    first = store.query(request)
+    tracker = k.KnowledgePageTracker(ORIGIN)
+    tracker.accept(request, first)
     request = {**request, 'cursor': first['next_cursor']}
-    second = store.search(request)
-    if mutation == 'scope': second['as_of'] += 1
-    elif mutation == 'duplicate': second['result'][0]['record'] = first['result'][0]['record']
-    elif mutation == 'request': request['text'] = 'Cache'
-    elif mutation == 'cursor': second['next_cursor'] = first['next_cursor']
-    elif mutation == 'ranking': second['ranking']['id'] = 'new-v2'
-    elif mutation == 'coverage': second['coverage'] = {'exhaustive': False, 'reasons': ['timeout']}
-    with pytest.raises(AgentProtocolError) as exc: tracker.accept(second, request)
+    second = store.query(request)
+    if mutation == 'scope':
+        second['as_of'] += 1
+    elif mutation == 'duplicate':
+        second['result'] = first['result']
+    elif mutation == 'request':
+        request['q'] = 'Cache'
+    elif mutation == 'cursor':
+        request['cursor'] = 'other'
+    with pytest.raises(AgentProtocolError) as exc:
+        tracker.accept(request, second)
     assert exc.value.code == 'invalid_response'
 
 
-def test_serialized_concurrent_import_and_retry_acceptance():
+def test_search_is_one_page_of_caller_ranked_candidates():
+    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
+    items = [signed(n) for n in range(1, 4)]
+    for item in items:
+        store.submit(item)
+    ids = [item['hash'] for item in reversed(items)]
+    page = store.search({'text': 'cache', 'mode': 'lexical', 'limit': 2}, candidates=ids,
+                        ranking={'mode': 'lexical', 'id': 'test-v1'},
+                        coverage={'exhaustive': False, 'reasons': ['candidate_limit']})
+    assert [hit['record']['envelope']['hash'] for hit in page['result']] == ids[:2]
+    assert 'next_cursor' not in page
+    k.validate_knowledge_search_response(page, {'text': 'cache', 'mode': 'lexical', 'limit': 2}, ORIGIN)
+    assert code(lambda: store.search({'text': 'cache', 'mode': 'lexical', 'limit': 2}, candidates=ids,
+                                     ranking={'mode': 'lexical', 'id': 'test-v1'},
+                                     coverage={'exhaustive': True, 'reasons': []})) == 'invalid_response'
+    assert code(lambda: store.search({'text': 'cache', 'mode': 'semantic'}, candidates=ids,
+                                     ranking={'mode': 'semantic', 'id': 'test-v1'},
+                                     coverage={'exhaustive': False, 'reasons': ['approximate']},
+                                     modes=['lexical'])) == 'unsupported_search_mode'
+
+
+def test_serialized_concurrent_acceptance_and_retry():
     store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
     items = [signed(n) for n in range(1, 25)]
     with ThreadPoolExecutor(max_workers=6) as workers:
-        receipts = list(workers.map(store.import_event, items + items))
-    assert store.seq == len(items)
-    assert sorted(record['seq'] for record in store.records.values()) == list(range(1, len(items)+1))
+        receipts = list(workers.map(store.submit, items + items))
+    assert store.checkpoint == len(items)
+    assert sorted(record['seq'] for record in receipts[:len(items)]) == list(range(1, len(items) + 1))
     assert receipts[:len(items)] == receipts[len(items):]
 
 
-def test_evidence_partial_bytes_and_profiles_never_auto_conform():
-    import base64
+def test_evidence_statuses_and_envelope_limit():
     raw = b'original\r\nbytes'
     digest = base64.urlsafe_b64encode(hashlib.sha3_256(raw).digest()).rstrip(b'=').decode()
-    assert k.knowledge_evidence_status(digest, raw, fetched=True, complete=True) == 'matched'
-    assert k.knowledge_evidence_status(digest, raw, fetched=True) == 'unavailable'
-    assert k.knowledge_evidence_status(None, raw, fetched=True, complete=True) == 'unchecked'
-    bindings = [{'profile': {'url': 'https://example.com/profile', 'digest': digest}, 'data': {'unknown': [1, 1]}}]
-    k.validate_knowledge_profiles(bindings)
-    with pytest.raises(AgentProtocolError): k.validate_knowledge_profiles(bindings + bindings)
-
-
-def test_live_window_nonce_ttl_and_future_boundary():
-    with pytest.raises(ValueError, match='twice'):
-        k.KnowledgeStore(ORIGIN, window_ms=100, nonce_ttl_ms=199)
-    store = k.KnowledgeStore(ORIGIN, window_ms=100, nonce_ttl_ms=200, clock=lambda: NOW)
-    assert store.submit(signed(1, now=NOW+100))['seq'] == 1
-    with pytest.raises(AgentProtocolError) as exc:
-        store.submit(signed(2, now=NOW+101))
-    assert exc.value.code == 'timestamp_out_of_window'
-    assert store.nonce_store.max_nonce(SIGNER.agent_id(), NOW+199) == 1
+    assert k.verify_knowledge_evidence(digest, raw) == 'matched'
+    assert k.verify_knowledge_evidence(digest, raw[:4]) == 'mismatched'
+    assert k.verify_knowledge_evidence(digest, None) == 'unavailable'
+    assert k.verify_knowledge_evidence(None, raw) == 'unchecked'
+    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW, max_envelope_bytes=100)
+    assert code(lambda: store.submit(signed())) == 'payload_too_large'
 
 
 def test_invalid_python_read_inputs_never_coerced_to_empty_query():
     store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
     for bad in ([], '', 0, False):
-        with pytest.raises(AgentProtocolError): store.query(bad)
-        with pytest.raises(AgentProtocolError): store.changes(bad)
+        with pytest.raises(AgentProtocolError):
+            store.query(bad)
 
 
-def test_public_schema_validator_cannot_mutate_sdk_validation():
-    validator = k.knowledge_schema_validator()
-    validator.schema.clear()
-    bad = signed(); bad['event']['payload']['visibility'] = 'private'
-    with pytest.raises(AgentProtocolError): k.validate_knowledge_envelope(bad)
-
-
-@pytest.mark.parametrize('mode', ['live', 'import'])
-def test_integral_json_numbers_preserve_signed_objects_and_nonce_semantics(mode):
-    from agent_protocols.identity import parse_strict_json, canonical_event_bytes
+def test_integral_json_numbers_preserve_signed_objects():
     integral = signed(10)
     original_bytes = canonical_event_bytes(integral['event'])
     integral['event']['nonce'] = 10.0
     integral['event']['created_at'] = float(NOW)
-    raw = json.dumps(integral)
-    assert '"nonce": 10.0' in raw
-    parsed = parse_strict_json(raw)
+    parsed = parse_strict_json(json.dumps(integral))
     before = copy.deepcopy(parsed)
     k.validate_knowledge_envelope(parsed)
     assert canonical_event_bytes(parsed['event']) == original_bytes
     store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
-    record = store.submit(parsed, mode=mode)
+    record = store.submit(parsed)
     assert record['envelope'] == before and parsed == before
-    assert type(parsed['event']['nonce']) is float
     assert type(record['envelope']['event']['nonce']) is float
-    assert type(record['envelope']['event']['created_at']) is float
-    assert store.submit(signed(10), mode=mode) == record
-    if mode == 'live':
-        assert store.nonce_store.max_nonce(SIGNER.agent_id(), NOW) == 10
-        assert type(store.nonce_store.max_nonce(SIGNER.agent_id(), NOW)) is int
-    else:
-        assert store.nonce_store.max_nonce(SIGNER.agent_id(), NOW) is None
-    assert k.materialize_knowledge(store.retained)[integral['hash']]['status'] == 'active'
+    assert store.submit(signed(10)) == record
+    assert k.materialize_knowledge(store.known_envelopes())[integral['hash']]['status'] == 'active'
 
 
 def test_integral_read_numbers_and_response_metadata_are_json_equivalent():
-    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW, search_modes=('lexical',))
-    store.import_event(signed())
-    request = k.parse_knowledge_read_json('{"limit":1.0}')
-    assert type(k.validate_knowledge_query(request)['limit']) is int
-    query = store.query(request)
-    query['result'][0]['seq'] = 1.0
-    query['result'][0]['accepted_at'] = float(NOW)
-    query['checkpoint'] = 1.0; query['as_of'] = float(NOW)
-    k.validate_knowledge_query_response(query, request, ORIGIN)
-    tracker = k.KnowledgePageTracker(ORIGIN); tracker.accept(query, request)
-    assert tracker.checkpoint == 1 and type(tracker.checkpoint) is int
-    changes = k.parse_knowledge_read_json('{"after":0.0,"limit":1.0}')
-    assert store.changes(changes)['result'][0]['seq'] == 1
-    k.validate_knowledge_changes_response(query, changes, ORIGIN)
-    assert k.validate_knowledge_changes(changes) == {'after': 0, 'limit': 1}
+    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
+    store.submit(signed())
+    request = k.parse_knowledge_read_json('{"limit":1.0,"after_seq":0.0}')
+    assert k.validate_knowledge_query(request) == {'limit': 1, 'after_seq': 0}
+    page = store.query(request)
+    page['result'][0]['seq'] = 1.0
+    page['checkpoint'] = 1.0
+    page['as_of'] = float(NOW)
+    tracker = k.KnowledgePageTracker(ORIGIN)
+    tracker.accept(request, page)
+    assert tracker.checkpoint == 1
     search = k.parse_knowledge_read_json('{"text":"cache","mode":"lexical","limit":1.0}')
-    assert type(k.validate_knowledge_search(search, ['lexical'])['limit']) is int
-    assert store.search(search)['result'][0]['rank'] == 1
+    assert type(k.validate_knowledge_search_request(search, ['lexical'])['limit']) is int
 
 
 @pytest.mark.parametrize('field', ['nonce', 'created_at'])
 def test_fractional_event_integer_fields_remain_invalid(field):
     event = signed()
     event['event'][field] = 1.5
-    with pytest.raises(AgentProtocolError): k.validate_knowledge_envelope(event)
-    with pytest.raises(AgentProtocolError): k.KnowledgeStore(ORIGIN, clock=lambda: NOW).import_event(event)
+    with pytest.raises(AgentProtocolError):
+        k.validate_knowledge_envelope(event)
+    with pytest.raises(AgentProtocolError):
+        k.KnowledgeStore(ORIGIN, clock=lambda: NOW).submit(event)
 
 
 def test_fractional_read_integer_fields_remain_invalid():
-    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW, search_modes=('lexical',))
+    store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
     for value in (1.5, True):
-        with pytest.raises(AgentProtocolError): store.query({'limit': value})
-        with pytest.raises(AgentProtocolError): store.changes({'after': value})
-        with pytest.raises(AgentProtocolError): store.search({'mode': 'lexical', 'text': 'cache', 'limit': value})
-    page = store.query()
-    page['checkpoint'] = 1.5
-    with pytest.raises(AgentProtocolError): k.validate_knowledge_changes_response(page, {}, ORIGIN)
+        with pytest.raises(AgentProtocolError):
+            store.query({'limit': value})
+        with pytest.raises(AgentProtocolError):
+            store.query({'after_seq': value})
+        with pytest.raises(AgentProtocolError):
+            store.search({'mode': 'lexical', 'text': 'cache', 'limit': value}, candidates=[],
+                         ranking={'mode': 'lexical', 'id': 'x'}, coverage={'exhaustive': True, 'reasons': []})

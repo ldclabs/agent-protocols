@@ -97,6 +97,10 @@ pub enum SdkError {
         data: serde_json::Value,
     },
 
+    /// A client-side page budget ended before a paginated read completed.
+    #[error("paginated read did not complete within {0} pages")]
+    PageLimitExceeded(usize),
+
     /// A non-2xx response. `code` and `data` come from the Agent Identity
     /// error body when the service sent one; `max_seen_nonce` from the
     /// `Max-Seen-Nonce` header.

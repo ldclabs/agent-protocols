@@ -1,5 +1,9 @@
-/** Agent Knowledge 1.0. Signatures establish attribution, never scientific truth. */
-import { createHash, randomUUID } from "node:crypto";
+/**
+ * Agent Knowledge 1.0. Signatures establish attribution, never scientific truth.
+ * Knowledge events are immutable, portable objects: acceptance never consults a
+ * live-write nonce cache, and nothing is fetched or executed implicitly.
+ */
+import { createHash } from "node:crypto";
 import canonicalize from "canonicalize";
 import { Validator, type Schema } from "@cfworker/json-schema";
 import { protocolError } from "./errors.js";
@@ -7,15 +11,10 @@ import {
   AgentId,
   Envelope,
   Event,
-  MemoryNonceStore,
-  type NonceStore,
   createEvent,
   parseStrictJson,
   validateOrigin,
   verifyEnvelope,
-  verifySubmission,
-  DEFAULT_LIVE_WRITE_WINDOW_MS,
-  DEFAULT_NONCE_TTL_MS,
 } from "./identity.js";
 import { KNOWLEDGE_SCHEMA } from "./knowledge-schema.js";
 
@@ -69,6 +68,16 @@ export const KNOWLEDGE_SEARCH_MODES = [
   "semantic",
   "hybrid",
 ] as const;
+/** Default allowance for `created_at` ahead of the receiver clock. */
+export const DEFAULT_FUTURE_SKEW_MS = 300_000;
+export const DEFAULT_MAX_ENVELOPE_BYTES = 262_144;
+/** Relationships that may point at an assessment as well as a publication. */
+const ASSESSMENT_RELATIONS: readonly string[] = [
+  "derived_from",
+  "supports",
+  "contradicts",
+];
+
 export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 export type KnowledgeRelationType = (typeof KNOWLEDGE_RELATIONS)[number];
 export type KnowledgeVerdict = (typeof KNOWLEDGE_VERDICTS)[number];
@@ -99,12 +108,11 @@ export interface KnowledgeRelation {
   relation: KnowledgeRelationType;
   target: string;
 }
-interface KnowledgePublicPayload {
-  visibility: "public";
+interface KnowledgeLicensedPayload {
   license: string;
   extra?: Record<string, unknown>;
 }
-interface KnowledgeResearchPayload extends KnowledgePublicPayload {
+interface KnowledgeResearchPayload extends KnowledgeLicensedPayload {
   context: KnowledgeContext;
   basis: string;
   evidence?: KnowledgeEvidence[];
@@ -118,21 +126,18 @@ export interface KnowledgePublishPayload extends KnowledgeResearchPayload {
   language: string;
   relations?: KnowledgeRelation[];
   tags?: string[];
-  learned_at?: number;
 }
 export interface KnowledgeAssessPayload extends KnowledgeResearchPayload {
   target: string;
   verdict: KnowledgeVerdict;
   summary: string;
 }
-export interface KnowledgeRetractPayload extends KnowledgePublicPayload {
+export interface KnowledgeRetractPayload extends KnowledgeLicensedPayload {
   target: string;
   reason: string;
 }
 export type KnowledgePayload =
-  | KnowledgePublishPayload
-  | KnowledgeAssessPayload
-  | KnowledgeRetractPayload;
+  KnowledgePublishPayload | KnowledgeAssessPayload | KnowledgeRetractPayload;
 export type KnowledgeEnvelope = Envelope<KnowledgePayload>;
 export interface KnowledgeRecord {
   envelope: KnowledgeEnvelope;
@@ -155,11 +160,7 @@ export interface KnowledgeFilters {
 }
 export interface KnowledgeQuery extends KnowledgeFilters {
   q?: string;
-  limit?: number;
-  cursor?: string;
-}
-export interface KnowledgeChangesRequest {
-  after?: number;
+  after_seq?: number;
   limit?: number;
   cursor?: string;
 }
@@ -170,12 +171,6 @@ export interface KnowledgeScope {
 }
 export interface KnowledgeQueryResponse extends KnowledgeScope {
   result: KnowledgeRecord[];
-  next_cursor?: string;
-  [key: string]: unknown;
-}
-export interface KnowledgeChangesResponse {
-  result: KnowledgeRecord[];
-  checkpoint: number;
   next_cursor?: string;
   [key: string]: unknown;
 }
@@ -192,7 +187,6 @@ export interface KnowledgeSearchRequest {
   mode: KnowledgeSearchMode;
   filters?: KnowledgeFilters;
   limit?: number;
-  cursor?: string;
 }
 export interface KnowledgeRanking {
   mode: KnowledgeSearchMode;
@@ -206,7 +200,6 @@ export interface KnowledgeCoverage {
 }
 export interface KnowledgeSearchHit {
   record: KnowledgeRecord;
-  rank: number;
   explanation: string;
   [key: string]: unknown;
 }
@@ -214,15 +207,12 @@ export interface KnowledgeSearchResponse extends KnowledgeScope {
   result: KnowledgeSearchHit[];
   ranking: KnowledgeRanking;
   coverage: KnowledgeCoverage;
-  next_cursor?: string;
   [key: string]: unknown;
 }
 export interface KnowledgeEndpoints {
   events: string;
   query: string;
   batch: string;
-  changes: string;
-  import?: string;
   search?: string;
 }
 export interface KnowledgeDiscovery {
@@ -233,13 +223,6 @@ export interface KnowledgeDiscovery {
   search_modes?: string[];
   peers?: string[];
   limits?: Record<string, number>;
-  collection_scope?: {
-    description?: string;
-    tags?: string[];
-    languages?: string[];
-    profiles?: string[];
-    [key: string]: unknown;
-  };
   [key: string]: unknown;
 }
 
@@ -289,13 +272,16 @@ export function knowledgeRetractEvent(
   );
 }
 const validators = new Map<string, Validator>();
-/** Structure only. Signature, canonical encodings and references are separate checks. */
-export function knowledgeSchemaValid(
+/** Structure only. Signatures, canonical encodings and references are separate checks. */
+export function validateKnowledgeSchema(
   value: unknown,
   definition = "signedEnvelope",
-): boolean {
+  code = "invalid_event",
+): void {
   let validator = validators.get(definition);
   if (!validator) {
+    if (!Object.hasOwn(KNOWLEDGE_SCHEMA.$defs, definition))
+      throw protocolError(code, "unknown schema definition");
     validator = new Validator(
       {
         $ref: `#/$defs/${definition}`,
@@ -306,10 +292,8 @@ export function knowledgeSchemaValid(
     );
     validators.set(definition, validator);
   }
-  return validator.validate(value).valid;
-}
-function shape(value: unknown, definition: string, code: string): void {
-  if (!knowledgeSchemaValid(value, definition))
+  jsonCheck(value, code);
+  if (!validator.validate(value).valid)
     throw protocolError(code, `invalid ${definition} structure`);
 }
 function jsonCheck(value: unknown, code = "invalid_event"): void {
@@ -394,6 +378,9 @@ function https(value: string, code = "invalid_event"): URL {
     );
   }
 }
+const sha3 = (bytes: Uint8Array | string): string =>
+  createHash("sha3-256").update(bytes).digest("base64url");
+/** Sorted, distinct direct dependencies. */
 export function knowledgeDependencies(item: KnowledgeEnvelope): string[] {
   return item.event.type === "knowledge.publish"
     ? [
@@ -408,11 +395,11 @@ export function knowledgeDependencies(item: KnowledgeEnvelope): string[] {
           .target,
       ];
 }
+/** Structure, Identity hash/signature, URLs, canonical IDs and profile uniqueness. Dependencies are separate. */
 export function validateKnowledgeEnvelope(
   value: unknown,
 ): asserts value is KnowledgeEnvelope {
-  jsonCheck(value);
-  shape(value, "signedEnvelope", "invalid_event");
+  validateKnowledgeSchema(value);
   const item = value as KnowledgeEnvelope;
   verifyEnvelope(item);
   validateKnowledgeId(item.hash);
@@ -434,8 +421,6 @@ export function validateKnowledgeEnvelope(
     }
   }
   for (const target of knowledgeDependencies(item)) validateKnowledgeId(target);
-  if ("learned_at" in payload && payload.learned_at! > item.event.created_at)
-    throw protocolError("invalid_event", "learned_at exceeds created_at");
 }
 export function parseKnowledgeEnvelope(text: string): KnowledgeEnvelope {
   const value = parseStrictJson(text);
@@ -450,19 +435,25 @@ function knownMap(
 ): ReadonlyMap<string, KnowledgeEnvelope> {
   return known instanceof Map ? known : new Map(Object.entries(known));
 }
-/** Targets must already have passed common and dependency validation in this dataset. */
+/** Check target rules against retained envelopes that already passed validation. */
 export function validateKnowledgeDependencies(
   item: KnowledgeEnvelope,
   known: KnowledgeKnownSet,
 ): void {
-  const retained = knownMap(known),
-    missing = knowledgeDependencies(item).filter((id) => !retained.has(id));
+  const retained = knownMap(known);
+  checkDependencies(item, (id) => retained.get(id));
+}
+function checkDependencies(
+  item: KnowledgeEnvelope,
+  lookup: (id: string) => KnowledgeEnvelope | undefined,
+): void {
+  const missing = knowledgeDependencies(item).filter(
+    (id) => lookup(id) === undefined,
+  );
   if (missing.length)
-    throw protocolError(
-      "missing_dependency",
-      "unresolved or withheld targets",
-      { missing },
-    );
+    throw protocolError("missing_dependency", "unresolved dependencies", {
+      missing,
+    });
   const links =
     item.event.type === "knowledge.publish"
       ? ((item.event.payload as KnowledgePublishPayload).relations ?? [])
@@ -471,20 +462,18 @@ export function validateKnowledgeDependencies(
             relation: item.event.type,
             target: (
               item.event.payload as
-                | KnowledgeAssessPayload
-                | KnowledgeRetractPayload
+                KnowledgeAssessPayload | KnowledgeRetractPayload
             ).target,
           },
         ];
   for (const link of links) {
-    const target = retained.get(link.target)!.event;
-    if (
-      !(
-        link.relation === "knowledge.retract"
-          ? ["knowledge.publish", "knowledge.assess"]
-          : ["knowledge.publish"]
-      ).includes(target.type)
-    )
+    const target = lookup(link.target)!.event;
+    const allowed =
+      link.relation === "knowledge.retract" ||
+      ASSESSMENT_RELATIONS.includes(link.relation)
+        ? ["knowledge.publish", "knowledge.assess"]
+        : ["knowledge.publish"];
+    if (!allowed.includes(target.type))
       throw protocolError("invalid_target", "wrong target type");
     const kind =
       link.relation === "addresses"
@@ -519,8 +508,9 @@ export function materializeKnowledge(
     validateKnowledgeEnvelope(item);
     if (id !== item.hash)
       throw protocolError("invalid_event", "dataset ID mismatch");
-    validateKnowledgeDependencies(item, retained);
   }
+  for (const item of retained.values())
+    validateKnowledgeDependencies(item, retained);
   const withdrawn = new Set<string>();
   const successors = new Map<string, Set<string>>();
   const assessments = new Map<string, Set<string>>();
@@ -570,59 +560,20 @@ export function materializeKnowledge(
   return result;
 }
 export type KnowledgeEvidenceStatus =
-  | "unchecked"
-  | "matched"
-  | "mismatched"
-  | "unavailable";
-/** Bytes must be the complete representation after transfer/content decoding, before text conversion. No fetching occurs. */
+  "unchecked" | "matched" | "mismatched" | "unavailable";
+/**
+ * Compare a digest with complete representation bytes (after transfer/content
+ * decoding, before text conversion). Pass `null` or `undefined` bytes when the
+ * complete representation could not be obtained. No fetching occurs.
+ */
 export function verifyKnowledgeEvidence(
   digest: string | undefined,
-  bytes?: Uint8Array,
-  options: { fetched?: boolean; complete?: boolean } = {},
+  bytes?: Uint8Array | null,
 ): KnowledgeEvidenceStatus {
-  if (digest === undefined || options.fetched === false) return "unchecked";
+  if (digest === undefined) return "unchecked";
   validateKnowledgeId(digest);
-  if (!bytes || options.complete !== true) return "unavailable";
-  return createHash("sha3-256").update(bytes).digest("base64url") === digest
-    ? "matched"
-    : "mismatched";
-}
-export interface KnowledgeProfileResult {
-  event_id: string;
-  profile_digest: string;
-  status: "unchecked" | "conformant" | "nonconformant" | "unavailable";
-}
-/** Report separately authorized profile evaluation, bound to exact event and artifact bytes. */
-export function knowledgeProfileResult(
-  item: KnowledgeEnvelope,
-  digest: string,
-  evaluation: {
-    supported?: boolean;
-    artifact?: Uint8Array;
-    dependenciesVerified?: boolean;
-    checksPassed?: boolean;
-  } = {},
-): KnowledgeProfileResult {
-  validateKnowledgeEnvelope(item);
-  validateKnowledgeId(digest);
-  if (
-    !("profiles" in item.event.payload) ||
-    !item.event.payload.profiles?.some((b) => b.profile.digest === digest)
-  )
-    throw protocolError("invalid_request", "profile is not bound to event");
-  let status: KnowledgeProfileResult["status"] = "unchecked";
-  if (evaluation.supported) {
-    if (
-      verifyKnowledgeEvidence(digest, evaluation.artifact, {
-        complete: true,
-      }) !== "matched" ||
-      evaluation.dependenciesVerified !== true
-    )
-      status = "unavailable";
-    else if (evaluation.checksPassed === true) status = "conformant";
-    else if (evaluation.checksPassed === false) status = "nonconformant";
-  }
-  return { event_id: item.hash, profile_digest: digest, status };
+  if (bytes == null) return "unavailable";
+  return sha3(bytes) === digest ? "matched" : "mismatched";
 }
 const fold = (value: string) =>
   value.replace(/[A-Z]/g, (char) => char.toLowerCase());
@@ -675,7 +626,7 @@ export function knowledgeTextMatches(
   );
 }
 function filterCheck(filters: KnowledgeFilters): void {
-  shape(filters, "searchFilters", "invalid_request");
+  validateKnowledgeSchema(filters, "searchFilters", "invalid_request");
   for (const key of ["actor", "target", "profile"] as const)
     if (filters[key] !== undefined)
       validateKnowledgeId(
@@ -692,12 +643,23 @@ function filterCheck(filters: KnowledgeFilters): void {
 export function validateKnowledgeQuery(
   value: unknown,
 ): asserts value is KnowledgeQuery {
-  jsonCheck(value, "invalid_request");
-  shape(value, "queryRequest", "invalid_request");
-  const { q, limit: _l, cursor: _c, ...filters } = value as KnowledgeQuery;
+  validateKnowledgeSchema(value, "queryRequest", "invalid_request");
+  const {
+    q,
+    limit: _l,
+    cursor: _c,
+    after_seq: _a,
+    ...filters
+  } = value as KnowledgeQuery;
   filterCheck(filters);
   if (q !== undefined) knowledgeTextTerms(q);
 }
+const INTEGER_PARAMETERS = [
+  "created_from",
+  "created_before",
+  "after_seq",
+  "limit",
+];
 /** Parse decoded HTTP pairs without discarding duplicate parameter names. */
 export function parseKnowledgeQuery(
   parameters: Iterable<readonly [string, string]> | URLSearchParams,
@@ -713,7 +675,7 @@ export function parseKnowledgeQuery(
         "unknown or repeated query parameter",
       );
     let value: unknown = input;
-    if (["created_from", "created_before", "limit"].includes(key)) {
+    if (INTEGER_PARAMETERS.includes(key)) {
       if (!/^[0-9]+$/.test(input) || input.replace(/^0+/, "").length > 16)
         throw protocolError(
           "invalid_request",
@@ -726,6 +688,7 @@ export function parseKnowledgeQuery(
   validateKnowledgeQuery(result);
   return result;
 }
+/** Exact filter and text predicate; `after_seq`, `limit` and `cursor` are not payload filters. */
 export function knowledgeQueryMatches(
   item: KnowledgeEnvelope,
   filters: KnowledgeQuery | KnowledgeFilters,
@@ -804,11 +767,11 @@ export function parseKnowledgeReadJson(raw: string): unknown {
 export function validateKnowledgeBatchRequest(
   value: unknown,
 ): asserts value is KnowledgeBatchRequest {
-  jsonCheck(value, "invalid_request");
-  shape(value, "batchRequest", "invalid_request");
+  validateKnowledgeSchema(value, "batchRequest", "invalid_request");
   for (const id of (value as KnowledgeBatchRequest).hashes)
     validateKnowledgeId(id, "invalid_request");
 }
+/** An unadvertised mode is `unsupported_search_mode` and is never substituted. */
 export function validateKnowledgeSearchRequest(
   value: unknown,
   modes: readonly string[] = KNOWLEDGE_SEARCH_MODES,
@@ -817,13 +780,14 @@ export function validateKnowledgeSearchRequest(
   const mode = (value as KnowledgeSearchRequest | null)?.mode;
   if (
     typeof mode === "string" &&
-    (!KNOWLEDGE_SEARCH_MODES.includes(mode) || !modes.includes(mode))
+    (!(KNOWLEDGE_SEARCH_MODES as readonly string[]).includes(mode) ||
+      !modes.includes(mode))
   )
     throw protocolError(
       "unsupported_search_mode",
       "requested mode is not advertised",
     );
-  shape(value, "searchRequest", "invalid_request");
+  validateKnowledgeSchema(value, "searchRequest", "invalid_request");
   const request = value as KnowledgeSearchRequest;
   knowledgeTextTerms(request.text, mode === "lexical");
   filterCheck(request.filters ?? {});
@@ -832,27 +796,27 @@ export function validateKnowledgeRecord(
   value: unknown,
   expectedId?: string,
 ): asserts value is KnowledgeRecord {
-  jsonCheck(value, "invalid_response");
-  shape(value, "acceptanceRecord", "invalid_response");
+  validateKnowledgeSchema(value, "acceptanceRecord", "invalid_response");
   const record = value as KnowledgeRecord;
-  validateKnowledgeEnvelope(record.envelope);
+  try {
+    validateKnowledgeEnvelope(record.envelope);
+  } catch {
+    throw protocolError("invalid_response", "invalid returned envelope");
+  }
   if (expectedId !== undefined && record.envelope.hash !== expectedId)
     throw protocolError(
       "invalid_response",
       "returned envelope ID does not match request",
     );
 }
-function responseShape(
+function responseRecords(
   value: unknown,
   definition: string,
   service: string,
-): void {
-  jsonCheck(value, "invalid_response");
-  shape(value, definition, "invalid_response");
+): KnowledgeRecord[] {
+  validateKnowledgeSchema(value, definition, "invalid_response");
   const response = value as
-    | KnowledgeQueryResponse
-    | KnowledgeBatchResponse
-    | KnowledgeSearchResponse;
+    KnowledgeQueryResponse | KnowledgeBatchResponse | KnowledgeSearchResponse;
   try {
     validateOrigin(response.service);
   } catch {
@@ -868,33 +832,27 @@ function responseShape(
       ? (response as KnowledgeSearchResponse).result.map((hit) => hit.record)
       : (response as KnowledgeQueryResponse).result;
   const ids = new Set<string>();
-  const sequences = new Set<number>();
   for (const record of records) {
-    validateKnowledgeRecord(record);
-    if (
-      record.seq > response.checkpoint ||
-      ids.has(record.envelope.hash) ||
-      sequences.has(record.seq)
-    )
+    if (record.seq > response.checkpoint || ids.has(record.envelope.hash))
       throw protocolError(
         "invalid_response",
-        "duplicate event, reused acceptance sequence, or sequence beyond snapshot",
+        "duplicate event or record beyond checkpoint",
       );
     ids.add(record.envelope.hash);
-    sequences.add(record.seq);
+    validateKnowledgeRecord(record);
   }
+  return records;
 }
 export function validateKnowledgeQueryResponse(
   value: unknown,
   request: KnowledgeQuery,
   service: string,
 ): asserts value is KnowledgeQueryResponse {
-  responseShape(value, "queryResponse", service);
-  const response = value as KnowledgeQueryResponse;
-  if (response.result.length > (request.limit ?? 100))
+  const records = responseRecords(value, "queryResponse", service);
+  if (records.length > (request.limit ?? 100))
     throw protocolError("invalid_response", "query page exceeds limit");
-  let previous = 0;
-  for (const record of response.result) {
+  let previous = request.after_seq ?? 0;
+  for (const record of records) {
     if (
       record.seq <= previous ||
       !knowledgeQueryMatches(record.envelope, request)
@@ -911,11 +869,10 @@ export function validateKnowledgeBatchResponse(
   hashes: readonly string[],
   service: string,
 ): asserts value is KnowledgeBatchResponse {
-  responseShape(value, "batchResponse", service);
-  const response = value as KnowledgeBatchResponse;
-  const result = response.result.map((r) => r.envelope.hash),
-    missing = response.missing;
-  for (const id of missing) validateKnowledgeId(id, "invalid_response");
+  const result = responseRecords(value, "batchResponse", service).map(
+      (r) => r.envelope.hash,
+    ),
+    missing = (value as KnowledgeBatchResponse).missing;
   if (
     result.some((id) => missing.includes(id)) ||
     new Set([...result, ...missing]).size !== hashes.length ||
@@ -935,121 +892,29 @@ export function validateKnowledgeSearchResponse(
   request: KnowledgeSearchRequest,
   service: string,
 ): asserts value is KnowledgeSearchResponse {
-  responseShape(value, "searchResponse", service);
+  const records = responseRecords(value, "searchResponse", service);
   const response = value as KnowledgeSearchResponse;
   if (
-    response.result.length > (request.limit ?? 20) ||
+    records.length > (request.limit ?? 20) ||
     response.ranking.mode !== request.mode
   )
     throw protocolError("invalid_response", "search limit or mode mismatch");
-  let rank = 0;
-  for (const hit of response.result) {
+  for (const record of records)
     if (
-      hit.rank <= rank ||
-      !knowledgeQueryMatches(hit.record.envelope, request.filters ?? {}) ||
+      !knowledgeQueryMatches(record.envelope, request.filters ?? {}) ||
       (request.mode === "lexical" &&
-        !knowledgeTextMatches(hit.record.envelope, request.text))
+        !knowledgeTextMatches(record.envelope, request.text))
     )
       throw protocolError(
         "invalid_response",
-        "search violated ranks, exact filters or lexical text",
+        "search violated exact filters or lexical text",
       );
-    rank = hit.rank;
-  }
-}
-export function validateKnowledgeChangesRequest(
-  value: unknown,
-): asserts value is KnowledgeChangesRequest {
-  jsonCheck(value, "invalid_request");
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    Object.keys(value).some(
-      (key) => !["after", "limit", "cursor"].includes(key),
-    )
-  )
-    throw protocolError("invalid_request", "invalid changes parameters");
-  const r = value as KnowledgeChangesRequest;
-  if (
-    (r.after !== undefined &&
-      (!Number.isSafeInteger(r.after) || r.after < 0)) ||
-    (r.limit !== undefined &&
-      (!Number.isInteger(r.limit) || r.limit < 1 || r.limit > 1000)) ||
-    (r.cursor !== undefined && (typeof r.cursor !== "string" || !r.cursor))
-  )
-    throw protocolError("invalid_request", "invalid changes parameters");
-}
-/** Parse decoded changes parameters while preserving duplicate-name detection. */
-export function parseKnowledgeChanges(
-  parameters: Iterable<readonly [string, string]> | URLSearchParams,
-): KnowledgeChangesRequest {
-  const request: Record<string, unknown> = {};
-  for (const [key, value] of parameters) {
-    if (
-      !["after", "limit", "cursor"].includes(key) ||
-      Object.hasOwn(request, key)
-    )
-      throw protocolError(
-        "invalid_request",
-        "unknown or repeated changes parameter",
-      );
-    if (
-      key !== "cursor" &&
-      (!/^[0-9]+$/.test(value) || value.replace(/^0+/, "").length > 16)
-    )
-      throw protocolError(
-        "invalid_request",
-        "HTTP integers require decimal digits",
-      );
-    request[key] = key === "cursor" ? value : Number(value);
-  }
-  validateKnowledgeChangesRequest(request);
-  return request;
-}
-export function validateKnowledgeChangesResponse(
-  value: unknown,
-  request: KnowledgeChangesRequest,
-): asserts value is KnowledgeChangesResponse {
-  jsonCheck(value, "invalid_response");
-  const response = value as KnowledgeChangesResponse;
-  if (
-    !response ||
-    !Array.isArray(response.result) ||
-    !Number.isSafeInteger(response.checkpoint) ||
-    response.checkpoint < 0 ||
-    (response.next_cursor !== undefined &&
-      (typeof response.next_cursor !== "string" || !response.next_cursor))
-  )
-    throw protocolError("invalid_response", "invalid changes response");
-  let seq = request.after ?? 0;
-  const seen = new Set<string>();
-  if (
-    response.result.length > (request.limit ?? 100) ||
-    response.checkpoint < seq
-  )
-    throw protocolError(
-      "invalid_response",
-      "changes limit or checkpoint mismatch",
-    );
-  for (const record of response.result) {
-    validateKnowledgeRecord(record);
-    if (
-      record.seq <= seq ||
-      record.seq > response.checkpoint ||
-      seen.has(record.envelope.hash)
-    )
-      throw protocolError("invalid_response", "invalid changes sequence");
-    seq = record.seq;
-    seen.add(record.envelope.hash);
-  }
 }
 export function validateKnowledgeDiscovery(
   value: unknown,
   origin: string,
 ): asserts value is KnowledgeDiscovery {
-  jsonCheck(value, "invalid_discovery");
-  shape(value, "discoveryDocument", "invalid_discovery");
+  validateKnowledgeSchema(value, "discoveryDocument", "invalid_discovery");
   const d = value as KnowledgeDiscovery;
   try {
     validateOrigin(origin);
@@ -1063,168 +928,178 @@ export function validateKnowledgeDiscovery(
       validateOrigin(peer);
       if (peer === origin) throw new Error();
     }
-    const scope = d.collection_scope ?? {},
-      langs = (scope.languages ?? []).map(fold);
-    if (new Set(langs).size !== langs.length) throw new Error();
-    for (const digest of scope.profiles ?? []) validateKnowledgeId(digest);
   } catch {
     throw protocolError(
       "invalid_discovery",
-      "invalid service, endpoint, peer or scope",
+      "invalid service, endpoint or peer",
     );
   }
 }
 
-interface KnowledgeSnapshot {
-  operation: "query" | "search" | "changes";
-  binding: string;
-  entries: { id: string; seq: number; explanation?: string }[];
-  offset: number;
-  scope: KnowledgeScope;
-  expires: number;
-  ranking?: KnowledgeRanking;
-  coverage?: KnowledgeCoverage;
+/** Effective request for cursor binding: no cursor, defaults applied. */
+function queryBinding(request: KnowledgeQuery): string {
+  const { cursor: _c, ...rest } = request;
+  return canonicalize({
+    ...rest,
+    limit: request.limit ?? 100,
+    after_seq: request.after_seq ?? 0,
+  })!;
 }
+
+/** Verifies that query pages form one complete, consistent enumeration. */
+export class KnowledgePageTracker {
+  private binding?: string;
+  private scope?: string;
+  private last = 0;
+  private next?: string;
+  private readonly seen = new Set<string>();
+  constructor(readonly service: string) {
+    validateOrigin(service);
+  }
+  get complete(): boolean {
+    return this.binding !== undefined && this.next === undefined;
+  }
+  /** The next poll's `after_seq`, available only after every page was consumed. */
+  get checkpoint(): number | undefined {
+    return this.complete ? JSON.parse(this.scope!).checkpoint : undefined;
+  }
+  accept(request: KnowledgeQuery, response: KnowledgeQueryResponse): void {
+    validateKnowledgeQuery(request);
+    validateKnowledgeQueryResponse(response, request, this.service);
+    const binding = queryBinding(request);
+    const scope = canonicalize({
+      service: response.service,
+      checkpoint: response.checkpoint,
+      as_of: response.as_of,
+    })!;
+    if (this.binding === undefined) {
+      if (request.cursor !== undefined)
+        throw protocolError(
+          "invalid_response",
+          "a traversal must start without a cursor",
+        );
+      this.last = request.after_seq ?? 0;
+    } else if (
+      this.next === undefined ||
+      request.cursor !== this.next ||
+      binding !== this.binding ||
+      scope !== this.scope
+    )
+      throw protocolError(
+        "invalid_response",
+        "pagination request or checkpoint scope changed",
+      );
+    const first = response.result[0];
+    if (
+      (first !== undefined && first.seq <= this.last) ||
+      response.result.some((record) => this.seen.has(record.envelope.hash))
+    )
+      throw protocolError(
+        "invalid_response",
+        "pagination repeated an event or moved backwards",
+      );
+    for (const record of response.result) this.seen.add(record.envelope.hash);
+    if (response.result.length) this.last = response.result.at(-1)!.seq;
+    this.binding = binding;
+    this.scope = scope;
+    this.next = response.next_cursor;
+  }
+}
+
 export interface KnowledgeStoreOptions {
   service: string;
   clock?: () => number;
-  windowMs?: number;
-  nonceTtlMs?: number;
-  /** Share this store with other protocols served by the same origin. */
-  nonceStore?: NonceStore;
+  /** Allowance for `created_at` ahead of the clock; there is no lower bound. */
+  futureSkewMs?: number;
   maxEnvelopeBytes?: number;
-  maxSnapshots?: number;
-  snapshotTtlMs?: number;
-  maxSnapshotRecords?: number;
-  /** Called only for new acceptance, before nonce mutation. */
-  admit?: (envelope: KnowledgeEnvelope, mode: "live" | "import") => void;
+  /** Runs for each new acceptance after protocol checks; throw to refuse. */
+  admit?: (envelope: KnowledgeEnvelope) => void;
 }
 export interface KnowledgeSearchSelection {
-  /** Frozen ranked event IDs. Candidates must be visible and satisfy all exact filters. */
+  /** Ranked event IDs. Candidates must be visible and satisfy all exact filters. */
   candidates: readonly string[];
   ranking: KnowledgeRanking;
   coverage: KnowledgeCoverage;
   explanations?: Readonly<Record<string, string>>;
 }
-/** Synchronous in-memory reference service engine. Applications supply persistence and HTTP policy separately. */
+/**
+ * Synchronous in-memory reference service engine with checkpoint-bound,
+ * stateless query cursors. Applications supply persistence and HTTP policy.
+ */
 export class KnowledgeStore {
+  readonly service: string;
+  private readonly clock: () => number;
+  private readonly futureSkewMs: number;
+  private readonly maxEnvelopeBytes: number;
+  private readonly admit?: (envelope: KnowledgeEnvelope) => void;
+  /** Insertion order is ascending seq: new records always get a larger seq. */
   private readonly records = new Map<string, KnowledgeRecord>();
   private readonly hidden = new Set<string>();
-  private readonly nonces: NonceStore;
-  private readonly snapshots = new Map<string, KnowledgeSnapshot>();
   private highWater = 0;
-  private readonly options: Required<Omit<KnowledgeStoreOptions, "admit">> &
-    Pick<KnowledgeStoreOptions, "admit">;
   constructor(options: KnowledgeStoreOptions) {
     validateOrigin(options.service);
-    this.nonces = options.nonceStore ?? new MemoryNonceStore();
-    this.options = {
-      nonceStore: this.nonces,
-      clock: Date.now,
-      windowMs: DEFAULT_LIVE_WRITE_WINDOW_MS,
-      nonceTtlMs: DEFAULT_NONCE_TTL_MS,
-      maxEnvelopeBytes: 262144,
-      maxSnapshots: 128,
-      snapshotTtlMs: 600000,
-      maxSnapshotRecords: 100000,
-      ...options,
-    };
-    for (const key of [
-      "windowMs",
-      "nonceTtlMs",
-      "maxEnvelopeBytes",
-      "maxSnapshots",
-      "snapshotTtlMs",
-      "maxSnapshotRecords",
+    this.service = options.service;
+    this.clock = options.clock ?? Date.now;
+    this.futureSkewMs = options.futureSkewMs ?? DEFAULT_FUTURE_SKEW_MS;
+    this.maxEnvelopeBytes =
+      options.maxEnvelopeBytes ?? DEFAULT_MAX_ENVELOPE_BYTES;
+    this.admit = options.admit;
+    for (const [name, value] of [
+      ["futureSkewMs", this.futureSkewMs],
+      ["maxEnvelopeBytes", this.maxEnvelopeBytes],
     ] as const)
-      if (!Number.isSafeInteger(this.options[key]) || this.options[key] <= 0)
-        throw protocolError("invalid_request", `invalid store option ${key}`);
-    if (this.options.nonceTtlMs < 2 * this.options.windowMs)
-      throw protocolError(
-        "invalid_request",
-        "nonce TTL must cover twice the live window",
-      );
-  }
-  get service(): string {
-    return this.options.service;
+      if (!Number.isSafeInteger(value) || value < 0)
+        throw protocolError("invalid_request", `invalid store option ${name}`);
   }
   get checkpoint(): number {
     return this.highWater;
   }
-  maxNonce(actor: AgentId, now = this.now()): number | undefined {
-    return this.nonces.maxNonce(actor, now);
-  }
   private now(): number {
-    const now = this.options.clock();
+    const now = this.clock();
     if (!Number.isSafeInteger(now) || now < 0)
       throw protocolError("invalid_request", "invalid service clock");
     return now;
   }
-  private visible(id: string, seq?: number): boolean {
-    const record = this.records.get(id);
-    return (
-      record !== undefined &&
-      !this.hidden.has(id) &&
-      (seq === undefined || seq === record.seq)
-    );
+  private visible(id: string): boolean {
+    return this.records.has(id) && !this.hidden.has(id);
   }
-  private known(): Map<string, KnowledgeEnvelope> {
+  /** Publicly visible envelopes keyed by event ID; copies cannot mutate storage. */
+  knownEnvelopes(): Map<string, KnowledgeEnvelope> {
     return new Map(
       [...this.records]
         .filter(([id]) => this.visible(id))
-        .map(([id, record]) => [id, record.envelope]),
+        .map(([id, record]) => [id, structuredClone(record.envelope)]),
     );
   }
-  /** Copies prevent callers from mutating accepted storage through a retained reference. */
-  knownEnvelopes(): Map<string, KnowledgeEnvelope> {
-    return structuredClone(this.known());
-  }
-  submit(
-    envelope: KnowledgeEnvelope,
-    mode: "live" | "import" = "live",
-    now = this.now(),
-  ): KnowledgeRecord {
-    if (mode !== "live" && mode !== "import")
-      throw protocolError("invalid_request", "unknown submission mode");
+  /** Accept a signed event, or return the original record of an exact resubmission. */
+  submit(envelope: KnowledgeEnvelope, now = this.now()): KnowledgeRecord {
     if (!Number.isSafeInteger(now) || now < 0)
       throw protocolError("invalid_request", "invalid service clock");
-    validateKnowledgeEnvelope(envelope);
-    const retained = this.records.get(envelope.hash);
+    const copy = structuredClone(envelope);
+    validateKnowledgeEnvelope(copy);
+    const retained = this.records.get(copy.hash);
     if (retained) return structuredClone(retained);
-    validateKnowledgeDependencies(envelope, this.known());
-    if (
-      Buffer.byteLength(JSON.stringify(envelope)) >
-      this.options.maxEnvelopeBytes
-    )
+    if (copy.event.created_at > now + this.futureSkewMs)
+      throw protocolError(
+        "timestamp_out_of_window",
+        "created_at is too far in the future",
+      );
+    checkDependencies(copy, (id) => this.records.get(id)?.envelope);
+    if (Buffer.byteLength(JSON.stringify(copy)) > this.maxEnvelopeBytes)
       throw protocolError(
         "payload_too_large",
         "envelope exceeds configured byte limit",
       );
     if (this.highWater === Number.MAX_SAFE_INTEGER)
-      throw protocolError("query_unavailable", "sequence space exhausted");
-    const copy = structuredClone(envelope);
-    this.options.admit?.(structuredClone(copy), mode);
-    if (mode === "live")
-      verifySubmission(copy, this.nonces, {
-        nowMs: now,
-        windowMs: this.options.windowMs,
-        nonceTtlMs: this.options.nonceTtlMs,
-      });
-    else if (copy.event.created_at > now + this.options.windowMs)
-      throw protocolError(
-        "timestamp_out_of_window",
-        "historical object is too far in the future",
-      );
+      throw protocolError("permission_denied", "sequence space exhausted");
+    this.admit?.(structuredClone(copy));
     const record: KnowledgeRecord = {
       envelope: copy,
-      seq: ++this.highWater,
       accepted_at: now,
+      seq: ++this.highWater,
     };
     this.records.set(copy.hash, record);
     return structuredClone(record);
-  }
-  import(envelope: KnowledgeEnvelope, now = this.now()): KnowledgeRecord {
-    return this.submit(envelope, "import", now);
   }
   event(id: string): KnowledgeRecord {
     validateKnowledgeId(id, "invalid_request");
@@ -1232,6 +1107,7 @@ export class KnowledgeStore {
       throw protocolError("not_found", "event unavailable");
     return structuredClone(this.records.get(id)!);
   }
+  /** Withhold from public reads; the record still answers exact retries and resolves dependencies. */
   hide(id: string): void {
     validateKnowledgeId(id, "invalid_request");
     if (this.records.has(id)) this.hidden.add(id);
@@ -1240,335 +1116,138 @@ export class KnowledgeStore {
     validateKnowledgeId(id, "invalid_request");
     this.hidden.delete(id);
   }
-  /** Pruning keeps sequence and live nonce high-water state; a later acceptance allocates a fresh sequence. */
+  /** Drop content and record; the sequence high-water mark is preserved. */
   prune(id: string): void {
     validateKnowledgeId(id, "invalid_request");
     this.records.delete(id);
     this.hidden.delete(id);
   }
-  expireSnapshots(): void {
-    this.snapshots.clear();
-  }
-  private scope(): KnowledgeScope {
-    return {
-      service: this.service,
-      checkpoint: this.highWater,
-      as_of: this.now(),
-    };
+  private scope(checkpoint: number, asOf: number): KnowledgeScope {
+    return { service: this.service, checkpoint, as_of: asOf };
   }
   batch(request: KnowledgeBatchRequest): KnowledgeBatchResponse {
     validateKnowledgeBatchRequest(request);
     const response: KnowledgeBatchResponse = {
-      ...this.scope(),
       result: [],
       missing: [],
+      ...this.scope(this.highWater, this.now()),
     };
     for (const id of request.hashes)
-      this.visible(id)
-        ? response.result.push(structuredClone(this.records.get(id)!))
-        : response.missing.push(id);
+      if (this.visible(id))
+        response.result.push(structuredClone(this.records.get(id)!));
+      else response.missing.push(id);
     return response;
   }
-  query(
-    request: KnowledgeQuery = {},
-    available = true,
-  ): KnowledgeQueryResponse {
+  query(request: KnowledgeQuery = {}): KnowledgeQueryResponse {
     validateKnowledgeQuery(request);
-    const response = this.page(
-      "query",
-      request,
-      undefined,
-      available,
-    ) as KnowledgeQueryResponse;
-    validateKnowledgeQueryResponse(response, request, this.service);
+    const digest = sha3(queryBinding(request));
+    const after = request.after_seq ?? 0,
+      limit = request.limit ?? 100;
+    let checkpoint: number, asOf: number, last: number;
+    if (request.cursor !== undefined)
+      [checkpoint, asOf, last] = this.decodeCursor(
+        request.cursor,
+        digest,
+        after,
+      );
+    else {
+      if (after > this.highWater)
+        throw protocolError(
+          "invalid_request",
+          "after_seq is greater than the current checkpoint",
+        );
+      [checkpoint, asOf, last] = [this.highWater, this.now(), after];
+    }
+    const response: KnowledgeQueryResponse = {
+      result: [],
+      ...this.scope(checkpoint, asOf),
+    };
+    for (const [id, record] of this.records) {
+      if (record.seq <= last || record.seq > checkpoint || this.hidden.has(id))
+        continue;
+      if (!knowledgeQueryMatches(record.envelope, request)) continue;
+      if (response.result.length === limit) {
+        response.next_cursor = `${checkpoint}.${asOf}.${response.result.at(-1)!.seq}.${digest}`;
+        break;
+      }
+      response.result.push(structuredClone(record));
+    }
     return response;
   }
-  changes(request: KnowledgeChangesRequest = {}): KnowledgeChangesResponse {
-    validateKnowledgeChangesRequest(request);
-    const response = this.page("changes", request) as KnowledgeChangesResponse;
-    validateKnowledgeChangesResponse(response, request);
-    return response;
+  private decodeCursor(
+    cursor: string,
+    digest: string,
+    after: number,
+  ): [number, number, number] {
+    const parts = cursor.split(".");
+    if (
+      parts.length !== 4 ||
+      parts[3] !== digest ||
+      parts.slice(0, 3).some((part) => !/^[0-9]{1,16}$/.test(part))
+    )
+      throw protocolError(
+        "invalid_cursor",
+        "malformed cursor or different request",
+      );
+    const [checkpoint, asOf, last] = parts.slice(0, 3).map(Number);
+    if (
+      !(after <= last && last <= checkpoint && checkpoint <= this.highWater) ||
+      !Number.isSafeInteger(asOf)
+    )
+      throw protocolError(
+        "invalid_cursor",
+        "cursor does not belong to this service state",
+      );
+    return [checkpoint, asOf, last];
   }
-  /** Ranking is supplied by the application; no embedding, fetching or code execution is implicit. */
+  /**
+   * Return one page of caller-ranked candidates; no ranking model is implied.
+   * Only a lexical page containing every match may claim exhaustive coverage.
+   */
   search(
     request: KnowledgeSearchRequest,
-    selection?: KnowledgeSearchSelection,
+    selection: KnowledgeSearchSelection,
     modes: readonly string[] = KNOWLEDGE_SEARCH_MODES,
   ): KnowledgeSearchResponse {
     validateKnowledgeSearchRequest(request, modes);
-    const response = this.page(
-      "search",
-      request,
-      selection,
-    ) as KnowledgeSearchResponse;
-    validateKnowledgeSearchResponse(response, request, this.service);
-    return response;
-  }
-  private page(
-    operation: KnowledgeSnapshot["operation"],
-    request: KnowledgeQuery | KnowledgeSearchRequest | KnowledgeChangesRequest,
-    selection?: KnowledgeSearchSelection,
-    available = true,
-  ):
-    | KnowledgeQueryResponse
-    | KnowledgeSearchResponse
-    | KnowledgeChangesResponse {
-    const { cursor, ...effective } = request,
-      limit = request.limit ?? (operation === "search" ? 20 : 100);
-    const binding = canonicalize({
-      ...effective,
-      limit,
-      ...(operation === "search"
-        ? { filters: (request as KnowledgeSearchRequest).filters ?? {} }
-        : operation === "changes"
-          ? { after: (request as KnowledgeChangesRequest).after ?? 0 }
-          : {}),
-    })!;
-    const now = this.now();
-    for (const [token, snapshot] of this.snapshots)
-      if (snapshot.expires <= now) this.snapshots.delete(token);
-    let snapshot: KnowledgeSnapshot;
-    if (cursor !== undefined) {
-      const found = this.snapshots.get(cursor);
-      if (!found || found.binding !== binding || found.operation !== operation)
-        throw protocolError("invalid_cursor", "expired or incompatible cursor");
-      snapshot = structuredClone(found);
-    } else {
-      if (!available)
-        throw protocolError(
-          "query_unavailable",
-          "exact enumeration unavailable",
-        );
-      if (this.records.size > this.options.maxSnapshotRecords)
-        throw protocolError(
-          "query_too_broad",
-          "configured scan budget exceeded",
-        );
-      const after = (request as KnowledgeChangesRequest).after ?? 0;
-      if (operation === "changes" && after > this.highWater)
-        throw protocolError("invalid_request", "after exceeds checkpoint");
-      const eligible = [...this.records.values()]
-        .filter(
-          (record) =>
-            this.visible(record.envelope.hash) &&
-            (operation === "changes"
-              ? record.seq > after
-              : knowledgeQueryMatches(
-                  record.envelope,
-                  operation === "search"
-                    ? ((request as KnowledgeSearchRequest).filters ?? {})
-                    : (request as KnowledgeQuery),
-                ) &&
-                (operation !== "search" ||
-                  (request as KnowledgeSearchRequest).mode !== "lexical" ||
-                  knowledgeTextMatches(
-                    record.envelope,
-                    (request as KnowledgeSearchRequest).text,
-                  ))),
-        )
-        .sort((a, b) => a.seq - b.seq);
-      let ids = eligible.map((record) => record.envelope.hash);
-      if (operation === "search") {
-        if (!selection)
-          throw protocolError(
-            "invalid_request",
-            "new search requires explicit ranking selection",
-          );
-        if (selection.candidates.length > this.options.maxSnapshotRecords)
-          throw protocolError("query_too_broad", "candidate budget exceeded");
-        if (
-          new Set(selection.candidates).size !== selection.candidates.length ||
-          selection.candidates.some((id) => !ids.includes(id))
-        )
-          throw protocolError(
-            "invalid_response",
-            "candidate list repeats IDs or violates exact filters",
-          );
-        if (
-          selection.coverage.exhaustive &&
-          selection.candidates.length !== ids.length
-        )
-          throw protocolError("invalid_response", "false exhaustive coverage");
-        ids = [...selection.candidates];
-      }
-      snapshot = {
-        operation,
-        binding,
-        entries: ids.map((id) => ({
-          id,
-          seq: this.records.get(id)!.seq,
-          ...(operation === "search"
-            ? {
-                explanation:
-                  selection!.explanations?.[id] ??
-                  `Candidate selected by ${selection!.ranking.id}`,
-              }
-            : {}),
-        })),
-        offset: 0,
-        scope: this.scope(),
-        expires: now + this.options.snapshotTtlMs,
-        ...(operation === "search"
-          ? {
-              ranking: structuredClone(selection!.ranking),
-              coverage: structuredClone(selection!.coverage),
-            }
-          : {}),
-      };
-    }
-    const response: KnowledgeQueryResponse | KnowledgeSearchResponse = {
-      ...snapshot.scope,
-      result: [],
-      ...(operation === "search"
-        ? { ranking: snapshot.ranking!, coverage: snapshot.coverage! }
-        : {}),
-    } as KnowledgeQueryResponse | KnowledgeSearchResponse;
-    while (
-      snapshot.offset < snapshot.entries.length &&
-      response.result.length < limit
-    ) {
-      const index = snapshot.offset++,
-        entry = snapshot.entries[index];
-      if (!this.visible(entry.id, entry.seq)) continue;
-      const record = structuredClone(this.records.get(entry.id)!);
-      if (operation === "search")
-        (response as KnowledgeSearchResponse).result.push({
-          record,
-          rank: index + 1,
-          explanation: entry.explanation!,
-        });
-      else (response as KnowledgeQueryResponse).result.push(record);
-    }
-    if (
-      snapshot.entries
-        .slice(snapshot.offset)
-        .some((entry) => this.visible(entry.id, entry.seq))
-    ) {
-      // Eviction is explicit through invalid_cursor on use, never a silently restarted scan.
-      if (this.snapshots.size >= this.options.maxSnapshots)
-        this.snapshots.delete(this.snapshots.keys().next().value!);
-      const token = randomUUID();
-      this.snapshots.set(token, snapshot);
-      response.next_cursor = token;
-    }
-    if (operation === "changes") {
-      const {
-        service: _s,
-        as_of: _a,
-        ...changes
-      } = response as KnowledgeQueryResponse;
-      return changes;
-    }
-    return structuredClone(response);
-  }
-}
-
-/** Stateful consumer guard. Complete is true only after consuming the last page of a verified scope. */
-export class KnowledgePageTracker {
-  private binding?: string;
-  private scope?: string;
-  private previous = 0;
-  private next?: string;
-  private seen = new Set<string>();
-  private readonly seenSequences = new Set<number>();
-  private readonly cursors = new Set<string>();
-  private started = false;
-  private ended = false;
-  constructor(
-    readonly operation: "query" | "search" | "changes",
-    readonly service: string,
-  ) {
-    validateOrigin(service);
-  }
-  get complete(): boolean {
-    return this.ended;
-  }
-  accept(
-    request: KnowledgeQuery | KnowledgeSearchRequest | KnowledgeChangesRequest,
-    response:
-      | KnowledgeQueryResponse
-      | KnowledgeSearchResponse
-      | KnowledgeChangesResponse,
-  ): void {
-    const search = this.operation === "search",
-      changes = this.operation === "changes";
-    if (search) {
-      validateKnowledgeSearchRequest(request);
-      validateKnowledgeSearchResponse(
-        response,
-        request as KnowledgeSearchRequest,
-        this.service,
-      );
-    } else if (changes) {
-      validateKnowledgeChangesRequest(request);
-      validateKnowledgeChangesResponse(response, request);
-    } else {
-      validateKnowledgeQuery(request);
-      validateKnowledgeQueryResponse(response, request, this.service);
-    }
-    const { cursor, ...rest } = request,
-      binding = canonicalize({
-        ...rest,
-        limit: request.limit ?? (search ? 20 : 100),
-        ...(search
-          ? { filters: (request as KnowledgeSearchRequest).filters ?? {} }
-          : changes
-            ? { after: (request as KnowledgeChangesRequest).after ?? 0 }
-            : {}),
-      })!;
-    const scoped = response as KnowledgeSearchResponse;
-    const scope = canonicalize({
-      checkpoint: response.checkpoint,
-      ...(!changes ? { service: scoped.service, as_of: scoped.as_of } : {}),
-      ...(search ? { ranking: scoped.ranking, coverage: scoped.coverage } : {}),
-    })!;
-    if (
-      this.ended ||
-      (this.started &&
-        (this.binding !== binding ||
-          this.scope !== scope ||
-          cursor !== this.next)) ||
-      (!this.started && cursor !== undefined)
-    )
+    const limit = request.limit ?? 20;
+    const eligible = new Set<string>();
+    for (const [id, record] of this.records)
+      if (
+        !this.hidden.has(id) &&
+        knowledgeQueryMatches(record.envelope, request.filters ?? {}) &&
+        (request.mode !== "lexical" ||
+          knowledgeTextMatches(record.envelope, request.text))
+      )
+        eligible.add(id);
+    const ids = selection.candidates;
+    if (new Set(ids).size !== ids.length || ids.some((id) => !eligible.has(id)))
       throw protocolError(
         "invalid_response",
-        "page request or snapshot configuration drift",
+        "candidate list repeats IDs or violates exact filters",
       );
     if (
-      response.next_cursor !== undefined &&
-      (response.next_cursor === cursor ||
-        this.cursors.has(response.next_cursor))
+      selection.coverage.exhaustive &&
+      (ids.length !== eligible.size || ids.length > limit)
     )
-      throw protocolError("invalid_response", "pagination cursor cycle");
-    let previous = this.previous;
-    const additions: string[] = [];
-    const sequences: number[] = [];
-    for (const value of response.result) {
-      const record = search
-          ? (value as KnowledgeSearchHit).record
-          : (value as KnowledgeRecord),
-        order = search ? (value as KnowledgeSearchHit).rank : record.seq;
-      if (
-        this.seen.has(record.envelope.hash) ||
-        this.seenSequences.has(record.seq) ||
-        order <= previous
-      )
-        throw protocolError(
-          "invalid_response",
-          "duplicate event, reused acceptance sequence, or nonincreasing cross-page order",
-        );
-      previous = order;
-      additions.push(record.envelope.hash);
-      sequences.push(record.seq);
-    }
-    if (cursor !== undefined) this.cursors.add(cursor);
-    this.binding = binding;
-    this.scope = scope;
-    this.started = true;
-    this.previous = previous;
-    this.next = response.next_cursor;
-    this.ended = this.next === undefined;
-    for (const id of additions) this.seen.add(id);
-    for (const seq of sequences) this.seenSequences.add(seq);
+      throw protocolError("invalid_response", "false exhaustive coverage");
+    const response: KnowledgeSearchResponse = {
+      result: ids.slice(0, limit).map((id) => ({
+        record: structuredClone(this.records.get(id)!),
+        explanation:
+          selection.explanations?.[id] ??
+          `Selected by ranking configuration ${selection.ranking.id}`,
+      })),
+      ...this.scope(this.highWater, this.now()),
+      ranking: structuredClone(selection.ranking),
+      coverage: structuredClone(selection.coverage),
+    };
+    validateKnowledgeSchema(response, "searchResponse", "invalid_response");
+    if (response.ranking.mode !== request.mode)
+      throw protocolError(
+        "invalid_response",
+        "ranking mode differs from requested mode",
+      );
+    return response;
   }
 }

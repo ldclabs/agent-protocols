@@ -2,12 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import {
-  AgentSigner,
-  MemoryNonceStore,
-  parseStrictJson,
-  verifySubmission,
-} from "./identity.js";
+import { AgentSigner, parseStrictJson } from "./identity.js";
 import { AgentProtocolError } from "./errors.js";
 import { KnowledgeClient, HttpResponseError } from "./http-client.js";
 import * as k from "./knowledge.js";
@@ -30,10 +25,9 @@ const store = (options: Partial<k.KnowledgeStoreOptions> = {}) =>
 const discovery: k.KnowledgeDiscovery = {
   protocol: k.KNOWLEDGE_PROTOCOL,
   service,
-  features: ["import", "ranked-search"],
+  features: ["ranked-search"],
   endpoints: {
     events: service + "/custom/events",
-    import: service + "/custom/import",
     search: service + "/custom/search",
   },
   search_modes: ["lexical", "semantic"],
@@ -105,14 +99,14 @@ test("programmatic non-JSON annotations are rejected without lossy serialization
     );
   }
 });
-test("storage, admission hooks, returned records, and read snapshots are detached", () => {
+test("storage, admission hooks, returned records, and read pages are detached", () => {
   const engine = store({
     admit: (item) => {
       (item.event.payload as k.KnowledgePublishPayload).title = "hook changed";
     },
   });
   const item = env("original"),
-    receipt = engine.import(item);
+    receipt = engine.submit(item);
   (item.event.payload as k.KnowledgePublishPayload).title = "caller changed";
   (receipt.envelope.event.payload as k.KnowledgePublishPayload).title =
     "receipt changed";
@@ -120,8 +114,26 @@ test("storage, admission hooks, returned records, and read snapshots are detache
   (page.result[0].envelope.event.payload as k.KnowledgePublishPayload).title =
     "page changed";
   const known = engine.knownEnvelopes();
-  known.clear();
+  (known.get(item.hash)!.event.payload as k.KnowledgePublishPayload).title =
+    "known changed";
   assert.deepEqual(engine.event(item.hash).envelope, env("original"));
+});
+test("acceptance ignores live nonce state and accepts old events", () => {
+  const engine = store();
+  assert.equal(engine.submit(env("higher_nonce")).seq, 1);
+  assert.equal(engine.submit(env("same_nonce_a")).seq, 2);
+  assert.equal(engine.submit(env("same_nonce_b")).seq, 3);
+  assert.equal(engine.submit(env("old_event")).seq, 4);
+  assert.throws(
+    () => engine.submit(env("future")),
+    code("timestamp_out_of_window"),
+  );
+  assert.equal(engine.submit(env("future"), vectors.now + 1).seq, 5);
+  const strict = store({ futureSkewMs: 0 });
+  assert.throws(
+    () => strict.submit(env("future"), vectors.now + 1),
+    code("timestamp_out_of_window"),
+  );
 });
 test("withholding, pruning and reacquisition preserve receipt identity and sequence high water", () => {
   const engine = store();
@@ -131,99 +143,119 @@ test("withholding, pruning and reacquisition preserve receipt identity and seque
   assert.throws(() => engine.event(item.hash), code("not_found"));
   assert.deepEqual(engine.submit(item), receipt);
   assert.deepEqual(engine.batch({ hashes: [item.hash] }).missing, [item.hash]);
+  assert.equal(engine.submit(env("branch_left")).seq, 2);
+  assert.equal(engine.submit(env("retract_original")).seq, 3);
   engine.prune(item.hash);
-  assert.equal(engine.checkpoint, 1);
-  assert.throws(() => engine.submit(item), code("nonce_not_greater"));
-  assert.equal(engine.import(item).seq, 2);
+  assert.equal(engine.checkpoint, 3);
+  assert.equal(engine.submit(item).seq, 4);
 });
-test("pruning then reaccepting an ID cannot leak a newer record through an older snapshot", () => {
+test("relationships may cite or dispute assessments but not retractions", () => {
+  const known = new Map<string, k.KnowledgeEnvelope>();
+  for (const name of ["original", "assessment", "retract_original"])
+    known.set(env(name).hash, env(name));
+  k.validateKnowledgeDependencies(env("derived_from_assessment"), known);
+  k.validateKnowledgeDependencies(env("contradicts_assessment"), known);
+  assert.throws(
+    () => k.validateKnowledgeDependencies(env("supports_retraction"), known),
+    code("invalid_target"),
+  );
+});
+test("checkpoint cursors are stateless and never leak a reaccepted record", () => {
   const engine = store();
-  engine.import(env("text_publication"));
+  engine.submit(env("text_publication"));
   const second = env("text_regional");
-  engine.import(second);
+  engine.submit(second);
   const first = engine.query({ limit: 1 });
   engine.prune(second.hash);
-  engine.import(second);
+  engine.submit(second);
   const last = engine.query({ limit: 1, cursor: first.next_cursor });
   assert.deepEqual(last.result, []);
   assert.equal(last.checkpoint, 2);
+  assert.equal(last.next_cursor, undefined);
+  assert.equal(engine.query({ after_seq: 2 }).result[0].seq, 3);
+  assert.throws(() => engine.query({ after_seq: 4 }), code("invalid_request"));
+  for (const cursor of [
+    first.next_cursor + "x",
+    "1.2.3",
+    "9.0.0." + "A".repeat(43),
+  ])
+    assert.throws(
+      () => engine.query({ limit: 1, cursor }),
+      code("invalid_cursor"),
+    );
+  assert.throws(
+    () => engine.query({ limit: 2, cursor: first.next_cursor }),
+    code("invalid_cursor"),
+  );
+  assert.throws(
+    () => store().query({ limit: 1, cursor: first.next_cursor }),
+    code("invalid_cursor"),
+  );
 });
-test("changes freezes checkpoint, includes late historical imports and preserves gaps", () => {
+test("search returns one page and cannot overclaim coverage", () => {
   const engine = store();
-  engine.import(env("original"));
-  engine.import(env("branch_left"));
-  const first = engine.changes({ limit: 1 });
-  engine.import(env("branch_right"));
-  const second = engine.changes({ limit: 1, cursor: first.next_cursor });
-  assert.equal(second.checkpoint, 2);
-  assert.equal(second.result[0].seq, 2);
-  engine.prune(env("original").hash);
-  assert.equal(engine.changes({ after: 2 }).result[0].seq, 3);
-  assert.throws(() => engine.changes({ after: 4 }), code("invalid_request"));
-});
-test("snapshot limits, expiration and cursor request binding are explicit", () => {
-  let clock = vectors.now;
-  const engine = store({
-    clock: () => clock,
-    snapshotTtlMs: 10,
-    maxSnapshots: 1,
+  for (const name of ["text_publication", "text_regional", "text_assessment"])
+    engine.submit(env(name));
+  const candidates = [...engine.knownEnvelopes().keys()].reverse();
+  const request: k.KnowledgeSearchRequest = {
+    text: "alpha",
+    mode: "lexical",
+    limit: 2,
+  };
+  const page = engine.search(request, {
+    candidates,
+    ranking: { mode: "lexical", id: "reverse-v1" },
+    coverage: { exhaustive: false, reasons: ["candidate_limit"] },
   });
-  engine.import(env("original"));
-  engine.import(env("branch_left"));
-  const first = engine.query({ limit: 1 });
-  engine.query({ limit: 1 });
-  assert.throws(
-    () => engine.query({ limit: 1, cursor: first.next_cursor }),
-    code("invalid_cursor"),
-  );
-  const page = engine.query({ limit: 1 });
-  clock += 10;
-  assert.throws(
-    () => engine.query({ limit: 1, cursor: page.next_cursor }),
-    code("invalid_cursor"),
-  );
-  const small = store({ maxSnapshotRecords: 1 });
-  small.import(env("original"));
-  small.import(env("branch_left"));
-  assert.throws(() => small.query(), code("query_too_broad"));
-});
-test("profile conformance requires exact bytes, verified dependencies and all checks", () => {
-  const signer = AgentSigner.fromSeed(
-      Buffer.from(vectors.seeds[vectors.fixtures.original.signer], "hex"),
-    ),
-    bytes = Buffer.from("profile-v1"),
-    digest = createHash("sha3-256").update(bytes).digest("base64url");
-  const event = env("original").event;
-  (event.payload as k.KnowledgePublishPayload).profiles = [
-    { profile: { url: "https://profiles.example/v1", digest }, data: {} },
-  ];
-  const item = signer.signEvent(event);
-  assert.equal(k.knowledgeProfileResult(item, digest).status, "unchecked");
-  assert.equal(
-    k.knowledgeProfileResult(item, digest, {
-      supported: true,
-      artifact: bytes,
-      checksPassed: true,
-    }).status,
-    "unavailable",
-  );
-  assert.equal(
-    k.knowledgeProfileResult(item, digest, {
-      supported: true,
-      artifact: bytes,
-      dependenciesVerified: true,
-      checksPassed: false,
-    }).status,
-    "nonconformant",
-  );
   assert.deepEqual(
-    k.knowledgeProfileResult(item, digest, {
-      supported: true,
-      artifact: bytes,
-      dependenciesVerified: true,
-      checksPassed: true,
-    }),
-    { event_id: item.hash, profile_digest: digest, status: "conformant" },
+    page.result.map((hit) => hit.record.envelope.hash),
+    candidates.slice(0, 2),
+  );
+  assert.equal("next_cursor" in page, false);
+  k.validateKnowledgeSearchResponse(page, request, service);
+  assert.throws(
+    () =>
+      engine.search(request, {
+        candidates,
+        ranking: { mode: "lexical", id: "reverse-v1" },
+        coverage: { exhaustive: true, reasons: [] },
+      }),
+    code("invalid_response"),
+  );
+});
+test("query HTTP parameters reject duplicate names, unknown fields and nondecimal integers", () => {
+  assert.deepEqual(
+    k.parseKnowledgeQuery(new URLSearchParams("after_seq=0001&limit=2")),
+    { after_seq: 1, limit: 2 },
+  );
+  for (const parameters of [
+    "after_seq=0&after_seq=1",
+    "after=1",
+    "after_seq=1e2",
+    "after_seq=-1",
+    "limit=0",
+    "cursor=",
+    "after_seq=9007199254740992",
+  ])
+    assert.throws(
+      () => k.parseKnowledgeQuery(new URLSearchParams(parameters)),
+      code("invalid_request"),
+    );
+});
+test("evidence statuses distinguish missing digests, missing bytes and mismatches", () => {
+  const bytes = Buffer.from("exact\r\nbytes"),
+    digest = createHash("sha3-256").update(bytes).digest("base64url");
+  assert.equal(k.verifyKnowledgeEvidence(digest, bytes), "matched");
+  assert.equal(
+    k.verifyKnowledgeEvidence(digest, bytes.subarray(0, 3)),
+    "mismatched",
+  );
+  assert.equal(k.verifyKnowledgeEvidence(digest, null), "unavailable");
+  assert.equal(k.verifyKnowledgeEvidence(digest), "unavailable");
+  assert.equal(k.verifyKnowledgeEvidence(undefined, bytes), "unchecked");
+  assert.throws(
+    () => store({ maxEnvelopeBytes: 100 }).submit(env("original")),
+    code("payload_too_large"),
   );
 });
 function transport(engine: k.KnowledgeStore, calls: any[]): typeof fetch {
@@ -234,29 +266,14 @@ function transport(engine: k.KnowledgeStore, calls: any[]): typeof fetch {
     assert.equal(new Headers(init?.headers).has("authorization"), false);
     if (url.pathname === "/.well-known/agent-knowledge") return json(discovery);
     const body = init?.body ? parseStrictJson(String(init.body)) : undefined;
-    if (url.pathname === "/custom/events")
-      return json(
-        init?.method === "POST"
-          ? engine.submit(body as k.KnowledgeEnvelope)
-          : engine.event(url.searchParams.get("hash")!),
-      );
-    if (url.pathname === "/custom/import")
-      return json(engine.import(body as k.KnowledgeEnvelope));
-    if (url.pathname === "/knowledge/query")
+    if (url.pathname === "/custom/events" && init?.method === "POST")
+      return json(engine.submit(body as k.KnowledgeEnvelope));
+    if (url.pathname.startsWith("/custom/events/"))
+      return json(engine.event(url.pathname.slice("/custom/events/".length)));
+    if (url.pathname === "/v1/knowledge/query")
       return json(engine.query(k.parseKnowledgeQuery(url.searchParams)));
-    if (url.pathname === "/knowledge/batch")
+    if (url.pathname === "/v1/knowledge/batch")
       return json(engine.batch(body as k.KnowledgeBatchRequest));
-    if (url.pathname === "/knowledge/changes")
-      return json(
-        engine.changes(
-          Object.fromEntries(
-            [...url.searchParams].map(([key, value]) => [
-              key,
-              key === "cursor" ? value : Number(value),
-            ]),
-          ),
-        ),
-      );
     if (url.pathname === "/custom/search")
       return json(
         engine.search(body as k.KnowledgeSearchRequest, {
@@ -268,14 +285,14 @@ function transport(engine: k.KnowledgeStore, calls: any[]): typeof fetch {
     throw new Error(`Unexpected route ${url}`);
   };
 }
-test("HTTP discovery uses advertised endpoints, validates live/import results and reads without a signer", async () => {
+test("HTTP discovery uses advertised endpoints, validates results and reads without a signer", async () => {
   const engine = store(),
     calls: any[] = [],
     client = await KnowledgeClient.discover(service, transport(engine, calls));
   const original = env("text_publication"),
     second = env("text_regional");
   await client.submit(original);
-  await client.import(second);
+  await client.submit(second);
   assert.equal(
     (await client.event(original.hash)).envelope.hash,
     original.hash,
@@ -292,47 +309,41 @@ test("HTTP discovery uses advertised endpoints, validates live/import results an
   for await (const page of client.queryPages({ q: "alpha", limit: 1 }))
     pages.push(page);
   assert.equal(pages.length, 2);
-  const changes = [];
-  for await (const page of client.changesPages({ limit: 1 }))
-    changes.push(page);
-  assert.equal(changes.length, 2);
-  const searches = [];
-  for await (const page of client.searchPages({
-    text: "alpha",
-    mode: "lexical",
-    limit: 1,
-  }))
-    searches.push(page);
-  assert.equal(searches.length, 2);
+  const polls = [];
+  for await (const page of client.queryPages({ after_seq: 1 }))
+    polls.push(page);
+  assert.deepEqual(
+    polls[0].result.map((r) => r.seq),
+    [2],
+  );
   const batch = calls.find((c) => c.url.pathname.endsWith("batch"));
   assert.deepEqual(JSON.parse(batch.init.body), {
     hashes: [second.hash, original.hash],
   });
   assert.equal(engine.checkpoint, 2);
 });
-test("HTTP defaults core routes and never guesses optional support", async () => {
+test("HTTP defaults to v1 routes and never guesses optional search", async () => {
   const engine = store();
-  engine.import(env("original"));
+  engine.submit(env("original"));
   const calls: string[] = [];
   const client = new KnowledgeClient(service, async (input) => {
     calls.push(String(input));
     return json(engine.event(env("original").hash));
   });
   await client.event(env("original").hash);
-  assert.equal(new URL(calls[0]).pathname, "/knowledge/events");
-  await assert.rejects(
-    () => client.import(env("original")),
-    code("invalid_request"),
+  assert.equal(
+    new URL(calls[0]).pathname,
+    "/v1/knowledge/events/" + env("original").hash,
   );
   await assert.rejects(
-    () => client.search({ text: "cache", mode: "semantic" }),
+    () => client.search({ text: "cache", mode: "lexical" }),
     code("unsupported_search_mode"),
   );
   assert.equal(calls.length, 1);
 });
 test("HTTP rejects duplicate JSON, tampering, wrong IDs, wrong scope, redirects and cross-origin endpoints", async () => {
   const engine = store();
-  const record = engine.import(env("original"));
+  const record = engine.submit(env("original"));
   await assert.rejects(
     () =>
       new KnowledgeClient(
@@ -359,7 +370,7 @@ test("HTTP rejects duplicate JSON, tampering, wrong IDs, wrong scope, redirects 
       new KnowledgeClient(service, async () => json(tampered)).event(
         record.envelope.hash,
       ),
-    code("invalid_event_hash"),
+    code("invalid_response"),
   );
   await assert.rejects(
     () =>
@@ -399,35 +410,32 @@ test("HTTP rejects duplicate JSON, tampering, wrong IDs, wrong scope, redirects 
     /redirect refused/,
   );
 });
-test("HTTP preserves Identity error details and Max-Seen-Nonce without retrying as import", async () => {
+test("HTTP preserves structured error details", async () => {
   let calls = 0;
-  const client = new KnowledgeClient(
-    service,
-    async () => {
-      calls++;
-      return new Response(
-        JSON.stringify({
-          error: {
-            code: "nonce_not_greater",
-            message: "stale",
-            data: { max_nonce: 50 },
-          },
-        }),
-        { status: 409, headers: { "Max-Seen-Nonce": "50" } },
-      );
-    },
-    discovery,
-  );
+  const client = new KnowledgeClient(service, async () => {
+    calls++;
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: "missing_dependency",
+          message: "fetch targets",
+          data: { missing: [env("original").hash] },
+        },
+      }),
+      { status: 409 },
+    );
+  });
   await assert.rejects(
-    () => client.submit(env("original")),
+    () => client.submit(env("branch_left")),
     (e: unknown) =>
       e instanceof HttpResponseError &&
-      e.code === "nonce_not_greater" &&
-      e.maxSeenNonce === "50",
+      e.code === "missing_dependency" &&
+      JSON.stringify(e.data) ===
+        JSON.stringify({ missing: [env("original").hash] }),
   );
   assert.equal(calls, 1);
 });
-test("HTTP authentication is explicit, origin bound, and importing actor need not equal caller", async () => {
+test("HTTP authentication is explicit, origin bound, and the caller need not be the actor", async () => {
   const caller = AgentSigner.generate(),
     now = Math.floor(Date.now() / 1000),
     jwt = caller.signRequestJwt({
@@ -438,18 +446,14 @@ test("HTTP authentication is explicit, origin bound, and importing actor need no
       exp: now + 100,
     });
   const engine = store();
-  const client = new KnowledgeClient(
-    service,
-    async (_url, init) => {
-      assert.equal(
-        new Headers(init?.headers).get("authorization"),
-        `Bearer ${jwt}`,
-      );
-      return json(engine.import(env("original")));
-    },
-    discovery,
-  );
-  assert.equal((await client.import(env("original"), jwt)).seq, 1);
+  const client = new KnowledgeClient(service, async (_url, init) => {
+    assert.equal(
+      new Headers(init?.headers).get("authorization"),
+      `Bearer ${jwt}`,
+    );
+    return json(engine.submit(env("original")));
+  });
+  assert.equal((await client.submit(env("original"), jwt)).seq, 1);
   const other = caller.signRequestJwt({
     iss: caller.agentId(),
     sub: caller.agentId(),
@@ -457,59 +461,39 @@ test("HTTP authentication is explicit, origin bound, and importing actor need no
     iat: now,
     exp: now + 100,
   });
-  await assert.rejects(() => client.import(env("original"), other));
+  await assert.rejects(() => client.submit(env("original"), other));
 });
-test("page tracker rejects ranking drift, repeated events and cursor cycles", () => {
+test("page tracker rejects scope drift, repeated events and changed requests", () => {
   const engine = store();
-  engine.import(env("text_publication"));
-  engine.import(env("text_regional"));
-  const request: k.KnowledgeSearchRequest = {
-      text: "alpha",
-      mode: "lexical",
-      limit: 1,
-    },
-    selection: k.KnowledgeSearchSelection = {
-      candidates: [...engine.knownEnvelopes().keys()],
-      ranking: { mode: "lexical", id: "v1" },
-      coverage: { exhaustive: true, reasons: [] },
-    };
-  const first = engine.search(request, selection),
+  engine.submit(env("text_publication"));
+  engine.submit(env("text_regional"));
+  const request: k.KnowledgeQuery = { q: "alpha", limit: 1 };
+  const first = engine.query(request),
     nextRequest = { ...request, cursor: first.next_cursor },
-    second = engine.search(nextRequest);
-  const tracker = new k.KnowledgePageTracker("search", service);
+    second = engine.query(nextRequest);
+  const tracker = new k.KnowledgePageTracker(service);
   tracker.accept(request, first);
+  assert.equal(tracker.checkpoint, undefined);
   assert.throws(
-    () =>
-      tracker.accept(nextRequest, {
-        ...second,
-        ranking: { mode: "lexical", id: "v2" },
-      }),
+    () => tracker.accept(nextRequest, { ...second, as_of: second.as_of + 1 }),
     code("invalid_response"),
   );
   assert.throws(
-    () =>
-      tracker.accept(nextRequest, {
-        ...second,
-        result: [{ ...first.result[0], rank: 2 }],
-      }),
+    () => tracker.accept(nextRequest, { ...second, result: first.result }),
     code("invalid_response"),
   );
   assert.throws(
-    () =>
-      tracker.accept(nextRequest, {
-        ...second,
-        next_cursor: first.next_cursor,
-      }),
+    () => tracker.accept({ ...nextRequest, q: "ALPHA" }, second),
     code("invalid_response"),
   );
   tracker.accept(nextRequest, second);
   assert.equal(tracker.complete, true);
+  assert.equal(tracker.checkpoint, 2);
 });
-
 test("HTTP response verification binds the request actually sent despite caller mutation", async () => {
   const engine = store();
-  engine.import(env("text_publication"));
-  engine.import(env("text_regional"));
+  engine.submit(env("text_publication"));
+  engine.submit(env("text_regional"));
   let release!: (response: Response) => void;
   const client = new KnowledgeClient(
     service,
@@ -534,12 +518,12 @@ test("HTTP response verification binds the request actually sent despite caller 
   const item = env("original"),
     pendingSubmit = client.submit(item);
   item.hash = env("branch_left").hash;
-  release(json(engine.import(env("original"))));
+  release(json(engine.submit(env("original"))));
   assert.equal((await pendingSubmit).envelope.hash, env("original").hash);
 });
 test("HTTP rejects alternate success statuses and omits ambient credentials", async () => {
   const engine = store();
-  const record = engine.import(env("original"));
+  const record = engine.submit(env("original"));
   const client = new KnowledgeClient(service, async (_input, init) => {
     assert.equal(init?.credentials, "omit");
     return new Response(JSON.stringify(record), { status: 201 });
@@ -549,70 +533,15 @@ test("HTTP rejects alternate success statuses and omits ambient credentials", as
     code("invalid_response"),
   );
 });
-
-test("shared actor-wide nonce cache can be injected across protocol services", () => {
-  const nonceStore = new MemoryNonceStore();
-  verifySubmission(env("branch_left"), nonceStore, { nowMs: vectors.now });
-  const engine = store({ nonceStore });
-  assert.throws(
-    () => engine.submit(env("original")),
-    code("nonce_not_greater"),
-  );
-  assert.equal(engine.import(env("original")).seq, 1);
-  assert.equal(engine.maxNonce(env("original").event.actor), 20);
-});
-
-test("returned search metadata cannot mutate the frozen snapshot", () => {
+test("batch and search responses reject duplicate events", () => {
   const engine = store();
-  engine.import(env("text_publication"));
-  engine.import(env("text_regional"));
-  const request: k.KnowledgeSearchRequest = {
-    text: "alpha",
-    mode: "lexical",
-    limit: 1,
-  };
-  const first = engine.search(request, {
-    candidates: [...engine.knownEnvelopes().keys()],
-    ranking: { mode: "lexical", id: "immutable-v1" },
-    coverage: { exhaustive: true, reasons: [] },
-  });
-  first.ranking.id = "mutated";
-  first.coverage.exhaustive = false;
-  first.coverage.reasons.push("approximate");
-  const second = engine.search({ ...request, cursor: first.next_cursor });
-  assert.equal(second.ranking.id, "immutable-v1");
-  assert.deepEqual(second.coverage, { exhaustive: true, reasons: [] });
-});
-
-test("changes HTTP parameters reject duplicate names, unknown fields and nondecimal integers", () => {
-  assert.deepEqual(
-    k.parseKnowledgeChanges(new URLSearchParams("after=0001&limit=2")),
-    { after: 1, limit: 2 },
-  );
-  for (const parameters of [
-    "after=0&after=1",
-    "foo=x",
-    "after=1e2",
-    "after=-1",
-    "limit=0",
-    "cursor=",
-    "after=9007199254740992",
-  ])
-    assert.throws(
-      () => k.parseKnowledgeChanges(new URLSearchParams(parameters)),
-      code("invalid_request"),
-    );
-});
-
-test("batch and search reject distinct events sharing one acceptance sequence", () => {
-  const engine = store();
-  const first = engine.import(env("text_publication"));
-  const second = engine.import(env("text_regional"));
+  const first = engine.submit(env("text_publication"));
+  const second = engine.submit(env("text_regional"));
   const hashes = [second.envelope.hash, first.envelope.hash];
   const batch = engine.batch({ hashes });
   // Caller-selected batch order and ranked search order may decrease in seq.
   k.validateKnowledgeBatchResponse(batch, hashes, service);
-  batch.result[1].seq = batch.result[0].seq;
+  batch.result[1] = batch.result[0];
   assert.throws(
     () => k.validateKnowledgeBatchResponse(batch, hashes, service),
     code("invalid_response"),
@@ -624,41 +553,9 @@ test("batch and search reject distinct events sharing one acceptance sequence", 
     coverage: { exhaustive: true, reasons: [] },
   });
   k.validateKnowledgeSearchResponse(response, request, service);
-  response.result[1].record.seq = response.result[0].record.seq;
+  response.result[1] = response.result[0];
   assert.throws(
     () => k.validateKnowledgeSearchResponse(response, request, service),
     code("invalid_response"),
   );
-});
-
-test("search tracker rejects reused acceptance sequences across pages while allowing descending seq", () => {
-  const engine = store();
-  const first = engine.import(env("text_publication"));
-  const second = engine.import(env("text_regional"));
-  const request: k.KnowledgeSearchRequest = {
-    text: "alpha",
-    mode: "lexical",
-    limit: 1,
-  };
-  const page = engine.search(request, {
-    candidates: [second.envelope.hash, first.envelope.hash],
-    ranking: { mode: "lexical", id: "reverse-v1" },
-    coverage: { exhaustive: true, reasons: [] },
-  });
-  const nextRequest = { ...request, cursor: page.next_cursor };
-  const last = engine.search(nextRequest);
-  const tracker = new k.KnowledgePageTracker("search", service);
-  tracker.accept(request, page);
-  const conflicting = structuredClone(last);
-  conflicting.result[0].record.seq = page.result[0].record.seq;
-  assert.throws(
-    () => tracker.accept(nextRequest, conflicting),
-    code("invalid_response"),
-  );
-  assert.equal(tracker.complete, false);
-  // Rejection must not consume this valid continuation. Rank increases; seq decreases.
-  tracker.accept(nextRequest, last);
-  assert.equal(last.result[0].rank, 2);
-  assert.equal(last.result[0].record.seq, 1);
-  assert.equal(tracker.complete, true);
 });

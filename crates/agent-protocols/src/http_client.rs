@@ -698,7 +698,7 @@ fn encode_query_component(value: &str) -> String {
     encoded
 }
 
-/// Public Knowledge discovery/retrieval and optionally authenticated writes.
+/// Public Knowledge discovery/retrieval and optionally authenticated submissions.
 /// Default transport rejects all redirects, preventing cross-origin forwarding
 /// of queries, envelopes, and bearer credentials. Custom transports supplied to
 /// `with_client` must provide the same redirect policy; final origin is checked
@@ -744,34 +744,21 @@ impl KnowledgeClient {
         Ok(document)
     }
     fn endpoint(&self, key: &str) -> Result<String> {
-        if ["search", "import"].contains(&key) {
-            let feature = if key == "search" {
-                "ranked-search"
-            } else {
-                "import"
-            };
-            let enabled = self
-                .discovery
-                .as_ref()
+        let discovery = self.discovery.as_ref();
+        if key == "search"
+            && !discovery
                 .and_then(|d| d["features"].as_array())
-                .is_some_and(|f| f.iter().any(|v| v == feature));
-            if !enabled {
-                return Err(SdkError::protocol(
-                    if key == "search" {
-                        "unsupported_search_mode"
-                    } else {
-                        "invalid_request"
-                    },
-                    "optional endpoint is not advertised; discover first",
-                ));
-            }
+                .is_some_and(|f| f.iter().any(|v| v == "ranked-search"))
+        {
+            return Err(SdkError::protocol(
+                "unsupported_search_mode",
+                "ranked search is not advertised; discover first",
+            ));
         }
-        Ok(self
-            .discovery
-            .as_ref()
+        Ok(discovery
             .and_then(|d| d["endpoints"][key].as_str())
             .map(str::to_owned)
-            .unwrap_or_else(|| format!("{}/knowledge/{key}", self.origin)))
+            .unwrap_or_else(|| format!("{}/v1/knowledge/{key}", self.origin)))
     }
     async fn send(&self, request: reqwest::RequestBuilder) -> Result<Value> {
         let response = request.send().await?;
@@ -806,38 +793,15 @@ impl KnowledgeClient {
         crate::identity::parse_strict_json(text)
             .map_err(|e| SdkError::protocol("invalid_response", e.to_string()))
     }
-    fn query_request(&self, endpoint: &str, request: &Value) -> Result<reqwest::RequestBuilder> {
-        let mut url = url::Url::parse(&self.endpoint(endpoint)?)
-            .map_err(|e| SdkError::protocol("invalid_request", e.to_string()))?;
-        let normalized = crate::knowledge::normalized_json(request);
-        for (key, value) in normalized
-            .as_object()
-            .ok_or_else(|| SdkError::protocol("invalid_request", "request must be object"))?
-        {
-            let value = value
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| value.to_string());
-            url.query_pairs_mut().append_pair(key, &value);
-        }
-        Ok(self.inner.get(url))
-    }
     pub async fn event(&self, hash: &str) -> Result<Value> {
-        crate::knowledge::validate_knowledge_digest(hash)
+        crate::knowledge::validate_knowledge_id(hash)
             .map_err(|e| SdkError::protocol("invalid_request", e.to_string()))?;
-        let response = self
-            .send(self.query_request("events", &serde_json::json!({"hash": hash}))?)
-            .await?;
+        let url = format!("{}/{hash}", self.endpoint("events")?);
+        let response = self.send(self.inner.get(url)).await?;
         crate::knowledge::validate_knowledge_record(&response, Some(hash))?;
         Ok(response)
     }
     pub async fn submit(&self, envelope: &Value, jwt: Option<&str>) -> Result<Value> {
-        self.write("events", envelope, jwt).await
-    }
-    pub async fn import(&self, envelope: &Value, jwt: Option<&str>) -> Result<Value> {
-        self.write("import", envelope, jwt).await
-    }
-    async fn write(&self, endpoint: &str, envelope: &Value, jwt: Option<&str>) -> Result<Value> {
         let verified = crate::knowledge::validate_knowledge_envelope(envelope)?;
         if let Some(jwt) = jwt {
             crate::identity::verify_request_jwt(
@@ -847,30 +811,48 @@ impl KnowledgeClient {
         }
         let response = self
             .send(with_jwt(
-                self.inner.post(self.endpoint(endpoint)?).json(envelope),
+                self.inner.post(self.endpoint("events")?).json(envelope),
                 jwt,
             ))
             .await?;
         crate::knowledge::validate_knowledge_record(&response, Some(&verified.hash))?;
-        if response["envelope"] != *envelope {
-            return Err(SdkError::protocol(
-                "invalid_response",
-                "write receipt changed submitted envelope",
-            ));
-        }
         Ok(response)
     }
     pub async fn query(&self, request: &Value) -> Result<Value> {
         crate::knowledge::validate_knowledge_query(request)?;
-        let response = self.send(self.query_request("query", request)?).await?;
+        let mut url = url::Url::parse(&self.endpoint("query")?)
+            .map_err(|e| SdkError::protocol("invalid_request", e.to_string()))?;
+        for (key, value) in crate::knowledge::normalized_json(request)
+            .as_object()
+            .expect("validated query is an object")
+        {
+            let value = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            url.query_pairs_mut().append_pair(key, &value);
+        }
+        let response = self.send(self.inner.get(url)).await?;
         crate::knowledge::validate_knowledge_query_response(&response, request, &self.origin)?;
         Ok(response)
     }
-    pub async fn changes(&self, request: &Value) -> Result<Value> {
-        crate::knowledge::validate_knowledge_changes_request(request)?;
-        let response = self.send(self.query_request("changes", request)?).await?;
-        crate::knowledge::validate_knowledge_changes_response(&response, request, &self.origin)?;
-        Ok(response)
+    /// Complete one checkpoint-bound query within `max_pages`, checking every
+    /// page against the same request and scope. Persist the returned checkpoint
+    /// as the next `after_seq`. No peer requests are made.
+    pub async fn query_all(&self, request: &Value, max_pages: usize) -> Result<(Vec<Value>, u64)> {
+        let mut tracker = crate::knowledge::KnowledgePageTracker::new(&self.origin)?;
+        let mut next = request.clone();
+        let mut records = Vec::new();
+        for _ in 0..max_pages {
+            let page = self.query(&next).await?;
+            tracker.accept(&next, &page)?;
+            records.extend(page["result"].as_array().into_iter().flatten().cloned());
+            if let Some(checkpoint) = tracker.checkpoint() {
+                return Ok((records, checkpoint));
+            }
+            next["cursor"] = page["next_cursor"].clone();
+        }
+        Err(SdkError::PageLimitExceeded(max_pages))
     }
     pub async fn batch(&self, request: &Value) -> Result<Value> {
         let hashes = crate::knowledge::validate_knowledge_batch_request(request)?;
@@ -881,7 +863,6 @@ impl KnowledgeClient {
         Ok(response)
     }
     pub async fn search(&self, request: &Value) -> Result<Value> {
-        let endpoint = self.endpoint("search")?;
         let modes: Vec<String> = self
             .discovery
             .as_ref()
@@ -891,30 +872,9 @@ impl KnowledgeClient {
             .filter_map(|v| v.as_str().map(str::to_owned))
             .collect();
         crate::knowledge::validate_knowledge_search_request(request, &modes)?;
+        let endpoint = self.endpoint("search")?;
         let response = self.send(self.inner.post(endpoint).json(request)).await?;
         crate::knowledge::validate_knowledge_search_response(&response, request, &self.origin)?;
         Ok(response)
-    }
-    /// Complete a finite query with a caller-selected page budget. Each page is
-    /// checked against the same request/snapshot; no peer requests are made.
-    pub async fn query_all(&self, request: &Value, max_pages: usize) -> Result<Vec<Value>> {
-        use crate::knowledge::{KnowledgePageValidator, KnowledgeReadOperation};
-        let mut tracker =
-            KnowledgePageValidator::new(&self.origin, KnowledgeReadOperation::Query, request)?;
-        let mut next = request.clone();
-        let mut records = Vec::new();
-        for _ in 0..max_pages {
-            let page = self.query(&next).await?;
-            tracker.validate_page(&page, &next)?;
-            records.extend(page["result"].as_array().unwrap().iter().cloned());
-            if tracker.is_complete() {
-                return Ok(records);
-            }
-            next["cursor"] = page["next_cursor"].clone();
-        }
-        Err(SdkError::protocol(
-            "query_too_broad",
-            "client page budget exhausted before completing snapshot",
-        ))
     }
 }

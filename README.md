@@ -22,7 +22,7 @@ English and Simplified Chinese versions are maintained side by side. The English
 | Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | Draft  |
 | Agent Knowledge Protocol | [docs/protocols/agent-knowledge/1.0.md](docs/protocols/agent-knowledge/1.0.md) | [docs/protocols/agent-knowledge/1.0.zh-CN.md](docs/protocols/agent-knowledge/1.0.zh-CN.md) | Draft |
 
-Each specification links its machine-readable files — JSON Schemas, the ADP type packs, and normative test vectors — from [docs/protocols](docs/protocols/README.md). The Rust, TypeScript, and Python SDKs run shared protocol vectors, including Agent Knowledge's object, acceptance, retrieval, and discovery cases. The independent [Knowledge artifact checker](docs/protocols/agent-knowledge/check_vectors.py) also checks the draft's machine-readable materials.
+Each specification links its machine-readable files — JSON Schemas, the ADP type packs, and normative test vectors — from [docs/protocols](docs/protocols/README.md). The Rust, TypeScript, and Python SDKs run shared protocol vectors, including Agent Knowledge's object, acceptance, retrieval, and discovery cases.
 
 ## Protocol Relationship
 
@@ -86,7 +86,7 @@ This repository includes SDKs for common client and server building blocks acros
 
 The SDKs cover Agent ID encoding, strict Ed25519 verification, signed event envelopes, Profile materialization, Delegation controller authority, history, and credential verification, the Discourse kernel and type system, permission helpers, and HTTP clients. The Rust and TypeScript SDKs also include the local MCP connector core.
 
-Knowledge support includes event builders and validators, dependency and lifecycle checks, evidence integrity, in-memory acceptance and retrieval stores, text and structured queries, batch reads, changes feeds, frozen pagination, discovery, and HTTP clients with response validation. Ranked-search helpers validate caller-supplied candidates and response contracts; they do not supply an embedding model or ranking engine. Durable storage, hosted services, disciplinary validators, and Knowledge-specific MCP tools remain application or future integration work. See each SDK's README for its public API and examples.
+Knowledge support includes event builders and validators, dependency and lifecycle checks, evidence integrity, an in-memory reference store, text and structured queries, batch reads, checkpoint-bound pagination with `after_seq` polling, discovery, and HTTP clients with response validation. Ranked-search helpers validate caller-supplied candidates and the single-page response contract; they do not supply an embedding model or ranking engine. Durable storage, hosted services, disciplinary validators, and Knowledge-specific MCP tools remain application or future integration work. See each SDK's README for its public API and examples.
 
 Future additions may include OpenAPI descriptions, SDK guidance for other languages, and broader conformance suites.
 
