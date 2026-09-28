@@ -37,6 +37,8 @@ The conformance vectors in `docs/protocols/*/1.0.vectors.json` are part of the t
 
 Controllers are records shared by `controllers` and `retired_controllers`: `id` is the Agent ID, `source` is an HTTPS origin or `local`, and `valid_from` starts the binding. Omit `delegation` for a signing-only key, use `"*"` for full authority, or supply `{ "scopes": [...], "audiences": [...] }` for restricted authority. `supersedes` lets a successor key manage its predecessors' credentials. Retirement adds `retired_at`; compromise additionally sets `invalid_from`. A principal that grants delegations publishes `delegation_query_url`.
 
+Controller registration (Section 4.3) proves key possession with a fixed-shape challenge: `signer.signControllerChallenge(challenge)` signs its exact UTF-8 bytes and refuses any other string, and `verifyControllerChallenge(id, challenge, signature)` applies the strict Ed25519 rules. Issuing challenges, binding them to the owner-approved fields, and expiry stay with the provider.
+
 Grants name the canonical `principal_id`. Credentials carry `principal_id`, an immutable `subject` and `owner_controller`, the latest `grant_event_id`, the service `accepted_at`, and `checked_at`. Materialization requires an explicit acceptance time and trusted previous state; it never derives acceptance time from `created_at`.
 
 The validation layers have different responsibilities:

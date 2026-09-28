@@ -3,13 +3,49 @@ from pathlib import Path
 from copy import deepcopy
 
 import pytest
+from jsonschema import Draft202012Validator
 from agent_protocols import delegation as d
 from agent_protocols.errors import AgentProtocolError
-from agent_protocols.identity import AgentSigner
+from agent_protocols.identity import AgentSigner, is_controller_challenge, verify_controller_challenge
 
 VECTORS = json.loads(
     (Path(__file__).resolve().parents[3] / "docs/protocols/agent-delegation/1.0.vectors.json").read_text()
 )
+REGISTRATION = VECTORS["controller_registration"]
+REGISTRATION_SIGNER = AgentSigner.from_seed(bytes.fromhex(REGISTRATION["seed"]))
+
+
+@pytest.mark.parametrize("case", REGISTRATION["challenges"], ids=lambda c: c["name"])
+def test_controller_registration_challenges_have_the_fixed_shape(case):
+    assert is_controller_challenge(case["challenge"]) is case["valid"]
+    if case["valid"]:
+        REGISTRATION_SIGNER.sign_controller_challenge(case["challenge"])
+    else:
+        with pytest.raises(AgentProtocolError):
+            REGISTRATION_SIGNER.sign_controller_challenge(case["challenge"])
+
+
+@pytest.mark.parametrize("case", REGISTRATION["proofs"], ids=lambda c: c["name"])
+def test_controller_registration_proofs_sign_the_complete_challenge_string(case):
+    if not case["valid"]:
+        with pytest.raises(AgentProtocolError):
+            verify_controller_challenge(case["id"], case["challenge"], case["signature"])
+        return
+    verify_controller_challenge(case["id"], case["challenge"], case["signature"])
+    assert REGISTRATION_SIGNER.sign_controller_challenge(case["challenge"]) == case["signature"]
+
+
+def test_controller_registration_schema_vectors():
+    schema = json.loads(
+        (Path(__file__).resolve().parents[3] / "docs/protocols/agent-delegation/1.0.schema.json").read_text()
+    )
+    Draft202012Validator.check_schema(schema)
+    challenge_validator = Draft202012Validator({**schema, "$ref": "#/$defs/controllerChallenge"})
+    for case in REGISTRATION["challenges"]:
+        assert challenge_validator.is_valid(case["challenge"]) is case["valid"], case["name"]
+    for case in REGISTRATION["requests"]:
+        validator = Draft202012Validator({**schema, "$ref": "#/$defs/" + case["definition"]})
+        assert validator.is_valid(case["value"]) is case["valid"], case["name"]
 
 
 @pytest.mark.parametrize("case", VECTORS["principal_documents"], ids=lambda c: c["name"])

@@ -1,6 +1,6 @@
 {
   "protocol": "agent-delegation/1.0",
-  "description": "Normative Agent Delegation 1.0 test vectors. Every principal document marked valid MUST pass principal document validation (Sections 4 and 5.1) and every document marked invalid MUST be rejected; delegation IDs and audiences MUST be accepted and rejected as listed; and every acceptance case MUST produce its expected outcome.",
+  "description": "Normative Agent Delegation 1.0 test vectors. Every principal document marked valid MUST pass principal document validation (Sections 4 and 5.1) and every document marked invalid MUST be rejected; delegation IDs and audiences MUST be accepted and rejected as listed; and every acceptance case MUST produce its expected outcome. Controller registration challenge shapes, request shapes, and proof signatures MUST produce the listed validity outcomes; owner authorization, binding, and expiry remain provider checks in Section 4.3.",
   "delegation_ids": {
     "valid": [
       "del_01J8ZM7A3G2T9B4Q6X8R0N1P2Q",
@@ -13,7 +13,7 @@
       ".",
       "..",
       "has space",
-      "café",
+      "caf\u00e9",
       "slash/id",
       "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "percent%20"
@@ -1808,6 +1808,164 @@
         "accepted_at": 350,
         "previous": null,
         "expected": "controller_not_current"
+      }
+    ]
+  },
+  "controller_registration": {
+    "seed": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d",
+    "challenges": [
+      {
+        "name": "canonical challenge",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "valid": true
+      },
+      {
+        "name": "missing prefix",
+        "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "valid": false
+      },
+      {
+        "name": "short suffix",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh",
+        "valid": false
+      },
+      {
+        "name": "padded suffix",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        "valid": false
+      },
+      {
+        "name": "trailing newline",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\n",
+        "valid": false
+      },
+      {
+        "name": "wrong purpose prefix",
+        "challenge": "agent-delegation/1.0:delegation.grant:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "valid": false
+      }
+    ],
+    "proofs": [
+      {
+        "name": "complete challenge UTF-8 bytes",
+        "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signature": "ZuR4e4PgO_bDU-BvOq7gWsd8E-bZ5pkAToKRZpOpIDPrUTeK5SRgRWyi9Gntz68JCPuifJsFlyv0Uo2Y55xICQ",
+        "valid": true
+      },
+      {
+        "name": "decoded suffix",
+        "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signature": "NAUriSsXTUBpL3DghJRXHhTr8z73PzMY8JIpLloNJqR4YZw3HXetLEFahe63R2G2WPZrV2Hj5OVy7a1yp6qFCQ",
+        "valid": false
+      },
+      {
+        "name": "SHA3-256 of challenge",
+        "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signature": "ubwP7Kag_GykTlRye8MiX6hO0OhlIlNvppcW-TNGyqCSZKE7qQqgYylAdwDfst_7tcWp3jac2FV2odXAkMXhBw",
+        "valid": false
+      },
+      {
+        "name": "trailing newline",
+        "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signature": "e4qzIG2xdZsxAqvRVKLIfs7NVlVuXrZxDAwyl0s7qMGTNnchxGlOrLFv-ArDen0rGPlcay7_te_x6kl2ZsEVBg",
+        "valid": false
+      },
+      {
+        "name": "wrong key (seed 0x3e)",
+        "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signature": "1ovJZQ--iff0k0cEJ9ebTas7BgVp4tHqZY3vsrZvRmvZr6CCt8A5rbOWtv_SlXW_hNHpO2bPv0TLd9sD8qjADw",
+        "valid": false
+      },
+      {
+        "name": "small-order key forges any message (R = identity, S = 0)",
+        "id": "did:agent:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "signature": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "valid": false
+      }
+    ],
+    "requests": [
+      {
+        "name": "signing-only challenge request",
+        "definition": "controllerChallengeRequest",
+        "valid": true,
+        "value": {
+          "principal_id": "https://example.com/p",
+          "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+          "source": "local"
+        }
+      },
+      {
+        "name": "challenge response",
+        "definition": "controllerChallengeResponse",
+        "valid": true,
+        "value": {
+          "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "expires_at": 1788653100000
+        }
+      },
+      {
+        "name": "registration proof request",
+        "definition": "controllerRegistrationRequest",
+        "valid": true,
+        "value": {
+          "principal_id": "https://example.com/p",
+          "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+          "source": "local",
+          "name": "Local signer",
+          "expires_at": 1788653100000,
+          "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "signature": "ZuR4e4PgO_bDU-BvOq7gWsd8E-bZ5pkAToKRZpOpIDPrUTeK5SRgRWyi9Gntz68JCPuifJsFlyv0Uo2Y55xICQ"
+        }
+      },
+      {
+        "name": "scoped successor challenge request",
+        "definition": "controllerChallengeRequest",
+        "valid": true,
+        "value": {
+          "principal_id": "https://example.com/p",
+          "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+          "source": "https://dmsg.net",
+          "delegation": {
+            "scopes": [
+              "message.draft"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          },
+          "supersedes": [
+            "did:agent:-VxqXf8DH6x7GmpUtmEMrrg7Offopmvhb_X6pKUR7S0"
+          ]
+        }
+      },
+      {
+        "name": "null delegation",
+        "definition": "controllerChallengeRequest",
+        "valid": false,
+        "value": {
+          "principal_id": "https://example.com/p",
+          "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+          "source": "local",
+          "delegation": null
+        }
+      },
+      {
+        "name": "registration without expires_at",
+        "definition": "controllerRegistrationRequest",
+        "valid": false,
+        "value": {
+          "principal_id": "https://example.com/p",
+          "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+          "source": "local",
+          "challenge": "agent-delegation/1.0:controller-registration:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+          "signature": "ZuR4e4PgO_bDU-BvOq7gWsd8E-bZ5pkAToKRZpOpIDPrUTeK5SRgRWyi9Gntz68JCPuifJsFlyv0Uo2Y55xICQ"
+        }
       }
     ]
   }

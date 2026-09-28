@@ -201,6 +201,62 @@ impl AgentSigner {
             URL_SAFE_NO_PAD.encode(signature.to_bytes())
         ))
     }
+
+    /// Signs an Agent Delegation controller registration challenge (Section
+    /// 4.3) over its exact UTF-8 bytes. Any other string is refused, so the
+    /// signer never becomes an arbitrary-message signing oracle.
+    pub fn sign_controller_challenge(&self, challenge: &str) -> Result<String> {
+        validate_controller_challenge(challenge)?;
+        let signature = self.signing_key.sign(challenge.as_bytes());
+        Ok(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+    }
+}
+
+/// Prefix of an Agent Delegation controller registration challenge (Section 4.3).
+pub const CONTROLLER_CHALLENGE_PREFIX: &str = "agent-delegation/1.0:controller-registration:";
+
+/// The prefix followed by 43 opaque base64url characters, 88 in all.
+pub fn is_controller_challenge(value: &str) -> bool {
+    value
+        .strip_prefix(CONTROLLER_CHALLENGE_PREFIX)
+        .is_some_and(|suffix| {
+            suffix.len() == 43
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+}
+
+fn validate_controller_challenge(value: &str) -> Result<()> {
+    if is_controller_challenge(value) {
+        Ok(())
+    } else {
+        Err(SdkError::protocol(
+            "invalid_request",
+            "not an agent-delegation/1.0 controller registration challenge",
+        ))
+    }
+}
+
+/// Verifies a controller registration proof (Agent Delegation Section 4.3):
+/// `signature` over the challenge's exact UTF-8 bytes under the strict rules of
+/// Section 3.1. Matching the challenge to what the provider issued, and its
+/// expiry, remain the provider's checks.
+pub fn verify_controller_challenge(
+    agent_id: &AgentId,
+    challenge: &str,
+    signature: &str,
+) -> Result<()> {
+    validate_controller_challenge(challenge)?;
+    let signature: [u8; 64] = URL_SAFE_NO_PAD
+        .decode(signature)?
+        .try_into()
+        .map_err(|bytes: Vec<u8>| SdkError::InvalidSignatureLength(bytes.len()))?;
+    verify_ed25519_strict_bytes(
+        &agent_id.public_key_bytes()?,
+        challenge.as_bytes(),
+        &signature,
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

@@ -1,6 +1,7 @@
 from .errors import AgentProtocolError
 from .identity import (
     AGENT_ID_PREFIX,
+    CONTROLLER_CHALLENGE_PREFIX,
     IDENTITY_EVENT_FIELDS,
     MAX_NONCE_JUMP,
     SHARED_ERROR_CODES,
@@ -16,6 +17,7 @@ from .identity import (
     create_request_jwt_claims,
     event_hash,
     event_hash_bytes,
+    is_controller_challenge,
     parse_envelope_json,
     parse_strict_json,
     public_key_bytes,
@@ -29,6 +31,7 @@ from .identity import (
     validate_nonce,
     validate_origin,
     verify_ed25519_strict,
+    verify_controller_challenge,
     verify_envelope,
     verify_event_hash,
     verify_event_hash_signature,
@@ -86,6 +89,7 @@ from .delegation import (
 
 __all__ = [
     "AGENT_ID_PREFIX",
+    "CONTROLLER_CHALLENGE_PREFIX",
     "DELEGATION_ERROR_CODES",
     "DELEGATION_GRANT",
     "DELEGATION_PROTOCOL",
@@ -116,6 +120,7 @@ __all__ = [
     "delegation_revoke_event",
     "event_hash",
     "event_hash_bytes",
+    "is_controller_challenge",
     "is_principal_alias",
     "latest_profile_update",
     "materialize_delegation_credential",
@@ -150,6 +155,7 @@ __all__ = [
     "validate_profile_payload",
     "validate_profile_succession",
     "validate_profile_update",
+    "verify_controller_challenge",
     "verify_delegation_credential",
     "verify_ed25519_strict",
     "verify_envelope",

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-protocols.dev/schemas/agent-delegation/1.0.schema.json",
   "title": "Agent Delegation Protocol 1.0",
-  "description": "JSON Schema definitions for Agent Delegation 1.0: principal documents, Controller records, grant and revoke envelopes, accepted records, credentials, and query bodies. Cross-record rules — unique keys, supersedes ordering, timestamp ordering, ceilings, and ownership — remain normative in the specification.",
+  "description": "JSON Schema definitions for Agent Delegation 1.0: principal documents, Controller records and registration challenges, grant and revoke envelopes, accepted records, credentials, and query bodies. Cross-record rules — unique keys, supersedes ordering, timestamp ordering, ceilings, and ownership — remain normative in the specification.",
   "$ref": "#/$defs/principalDocument",
   "$defs": {
     "agentId": {
@@ -651,6 +651,98 @@
         }
       },
       "additionalProperties": true
+    },
+    "controllerChallenge": {
+      "type": "string",
+      "description": "agent-delegation/1.0:controller-registration: plus 43 opaque base64url characters. Sign the complete UTF-8 string (Section 4.3). maxLength rejects a trailing newline that some regex engines let `$` match before.",
+      "maxLength": 88,
+      "pattern": "^agent-delegation/1\\.0:controller-registration:[A-Za-z0-9_-]{43}$"
+    },
+    "controllerChallengeRequest": {
+      "type": "object",
+      "required": [
+        "principal_id",
+        "id",
+        "source"
+      ],
+      "properties": {
+        "principal_id": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "id": {
+          "$ref": "#/$defs/controller/properties/id"
+        },
+        "source": {
+          "$ref": "#/$defs/controller/properties/source"
+        },
+        "name": {
+          "$ref": "#/$defs/controller/properties/name"
+        },
+        "delegation": {
+          "$ref": "#/$defs/controller/properties/delegation"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/controller/properties/supersedes"
+        }
+      },
+      "additionalProperties": false
+    },
+    "controllerChallengeResponse": {
+      "type": "object",
+      "required": [
+        "challenge",
+        "expires_at"
+      ],
+      "properties": {
+        "challenge": {
+          "$ref": "#/$defs/controllerChallenge"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
+        }
+      },
+      "additionalProperties": false
+    },
+    "controllerRegistrationRequest": {
+      "type": "object",
+      "required": [
+        "principal_id",
+        "id",
+        "source",
+        "expires_at",
+        "challenge",
+        "signature"
+      ],
+      "properties": {
+        "principal_id": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "id": {
+          "$ref": "#/$defs/controller/properties/id"
+        },
+        "source": {
+          "$ref": "#/$defs/controller/properties/source"
+        },
+        "name": {
+          "$ref": "#/$defs/controller/properties/name"
+        },
+        "delegation": {
+          "$ref": "#/$defs/controller/properties/delegation"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/controller/properties/supersedes"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestampMs"
+        },
+        "challenge": {
+          "$ref": "#/$defs/controllerChallenge"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

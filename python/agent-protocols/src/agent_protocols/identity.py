@@ -126,6 +126,38 @@ class AgentSigner:
         signature = self._private_key.sign(signing_input)
         return f"{encoded_header}.{encoded_payload}.{_base64url_encode(signature)}"
 
+    def sign_controller_challenge(self, challenge: str) -> str:
+        """Signs an Agent Delegation controller registration challenge
+        (Section 4.3) over its exact UTF-8 bytes. Any other string is refused,
+        so the signer never becomes an arbitrary-message signing oracle."""
+        _validate_controller_challenge(challenge)
+        return _base64url_encode(self._private_key.sign(challenge.encode()))
+
+
+# Prefix of an Agent Delegation controller registration challenge (Section 4.3).
+CONTROLLER_CHALLENGE_PREFIX = "agent-delegation/1.0:controller-registration:"
+_CONTROLLER_CHALLENGE_PATTERN = re.compile(r"agent-delegation/1\.0:controller-registration:[A-Za-z0-9_-]{43}")
+
+
+def is_controller_challenge(value: str) -> bool:
+    """The prefix followed by 43 opaque base64url characters, 88 in all."""
+    return isinstance(value, str) and _CONTROLLER_CHALLENGE_PATTERN.fullmatch(value) is not None
+
+
+def _validate_controller_challenge(value: str) -> None:
+    if not is_controller_challenge(value):
+        raise AgentProtocolError("invalid_request", "not an agent-delegation/1.0 controller registration challenge")
+
+
+def verify_controller_challenge(agent_id: AgentId, challenge: str, signature: str) -> None:
+    """Verifies a controller registration proof (Agent Delegation Section
+    4.3): ``signature`` over the challenge's exact UTF-8 bytes under the strict
+    rules of Section 3.1. Raises on failure. Matching the challenge to what the
+    provider issued, and its expiry, remain the provider's checks."""
+    _validate_controller_challenge(challenge)
+    if not verify_ed25519_strict(challenge.encode(), _base64url_decode(signature), public_key_bytes(agent_id)):
+        raise AgentProtocolError("invalid_signature", "signature verification failed")
+
 
 class NonceStore(Protocol):
     def check_and_update(self, actor: AgentId, nonce: int, now_ms: int, ttl_ms: int) -> int: ...

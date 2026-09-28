@@ -1,10 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { AgentSigner } from "./identity.js";
+import { AgentSigner, isControllerChallenge, verifyControllerChallenge } from "./identity.js";
 import * as d from "./delegation.js";
 
 const vectors = JSON.parse(readFileSync(new URL("../../../docs/protocols/agent-delegation/1.0.vectors.json", import.meta.url), "utf8"));
+const registration = vectors.controller_registration;
+
+test("controller registration challenges have the fixed shape", () => {
+  const signer = AgentSigner.fromSeed(Buffer.from(registration.seed, "hex"));
+  for (const fixture of registration.challenges) {
+    assert.equal(isControllerChallenge(fixture.challenge), fixture.valid, fixture.name);
+    if (fixture.valid) signer.signControllerChallenge(fixture.challenge);
+    else assert.throws(() => signer.signControllerChallenge(fixture.challenge), fixture.name);
+  }
+});
+
+test("controller registration proofs sign the complete challenge string", () => {
+  const signer = AgentSigner.fromSeed(Buffer.from(registration.seed, "hex"));
+  for (const fixture of registration.proofs) {
+    const verify = () => verifyControllerChallenge(fixture.id, fixture.challenge, fixture.signature);
+    if (!fixture.valid) {
+      assert.throws(verify, fixture.name);
+      continue;
+    }
+    verify();
+    assert.equal(signer.signControllerChallenge(fixture.challenge), fixture.signature, fixture.name);
+  }
+});
+
 for (const fixture of vectors.principal_documents) test(`controller conformance: ${fixture.name}`, () => {
   if (fixture.valid) d.validatePrincipalDocument(fixture.document);
   else assert.throws(() => d.validatePrincipalDocument(fixture.document));

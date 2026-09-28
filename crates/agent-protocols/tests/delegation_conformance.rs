@@ -1,5 +1,7 @@
 use agent_protocols::delegation::*;
-use agent_protocols::identity::{AgentSigner, Envelope};
+use agent_protocols::identity::{
+    is_controller_challenge, verify_controller_challenge, AgentId, AgentSigner, Envelope,
+};
 use serde_json::{json, Value};
 
 const ID: &str = "https://example.com/p";
@@ -12,6 +14,63 @@ fn vectors() -> Value {
     );
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
+
+fn registration_signer(registration: &Value) -> AgentSigner {
+    let hex = registration["seed"].as_str().unwrap();
+    let seed: [u8; 32] = (0..32)
+        .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    AgentSigner::from_seed(seed)
+}
+
+#[test]
+fn controller_registration_challenges_have_the_fixed_shape() {
+    let registration = &vectors()["controller_registration"];
+    let signer = registration_signer(registration);
+    for fixture in registration["challenges"].as_array().unwrap() {
+        let challenge = fixture["challenge"].as_str().unwrap();
+        let valid = fixture["valid"].as_bool().unwrap();
+        assert_eq!(
+            is_controller_challenge(challenge),
+            valid,
+            "{}",
+            fixture["name"]
+        );
+        assert_eq!(
+            signer.sign_controller_challenge(challenge).is_ok(),
+            valid,
+            "{}",
+            fixture["name"]
+        );
+    }
+}
+
+#[test]
+fn controller_registration_proofs_sign_the_complete_challenge_string() {
+    let registration = &vectors()["controller_registration"];
+    let signer = registration_signer(registration);
+    for fixture in registration["proofs"].as_array().unwrap() {
+        let id: AgentId = fixture["id"].as_str().unwrap().parse().unwrap();
+        let challenge = fixture["challenge"].as_str().unwrap();
+        let signature = fixture["signature"].as_str().unwrap();
+        let valid = fixture["valid"].as_bool().unwrap();
+        assert_eq!(
+            verify_controller_challenge(&id, challenge, signature).is_ok(),
+            valid,
+            "{}",
+            fixture["name"]
+        );
+        if valid {
+            assert_eq!(
+                signer.sign_controller_challenge(challenge).unwrap(),
+                signature
+            );
+        }
+    }
+}
+
 fn key(byte: u8) -> AgentSigner {
     AgentSigner::from_seed([byte; 32])
 }

@@ -220,6 +220,62 @@ export class AgentSigner {
     );
     return `${signingInput}.${base64UrlEncode(signature)}`;
   }
+
+  /**
+   * Signs an Agent Delegation controller registration challenge (Section 4.3)
+   * over its exact UTF-8 bytes. Any other string is refused, so the signer
+   * never becomes an arbitrary-message signing oracle.
+   */
+  signControllerChallenge(challenge: string): string {
+    validateControllerChallenge(challenge);
+    const signature = nacl.sign.detached(
+      new TextEncoder().encode(challenge),
+      this.keyPair.secretKey,
+    );
+    return base64UrlEncode(signature);
+  }
+}
+
+/** Prefix of an Agent Delegation controller registration challenge (Section 4.3). */
+export const CONTROLLER_CHALLENGE_PREFIX = "agent-delegation/1.0:controller-registration:";
+const CONTROLLER_CHALLENGE_PATTERN =
+  /^agent-delegation\/1\.0:controller-registration:[A-Za-z0-9_-]{43}$/;
+
+/** The prefix followed by 43 opaque base64url characters, 88 in all. */
+export function isControllerChallenge(value: string): boolean {
+  return CONTROLLER_CHALLENGE_PATTERN.test(value);
+}
+
+function validateControllerChallenge(value: string): void {
+  if (typeof value !== "string" || !isControllerChallenge(value)) {
+    throw protocolError(
+      "invalid_request",
+      "not an agent-delegation/1.0 controller registration challenge",
+    );
+  }
+}
+
+/**
+ * Verifies a controller registration proof (Agent Delegation Section 4.3):
+ * `signature` over the challenge's exact UTF-8 bytes under the strict rules of
+ * Section 3.1. Throws on failure. Matching the challenge to what the provider
+ * issued, and its expiry, remain the provider's checks.
+ */
+export function verifyControllerChallenge(
+  agentId: AgentId,
+  challenge: string,
+  signature: string,
+): void {
+  validateControllerChallenge(challenge);
+  if (
+    !verifyEd25519Strict(
+      new TextEncoder().encode(challenge),
+      base64UrlDecode(signature),
+      publicKeyBytes(agentId),
+    )
+  ) {
+    throw protocolError("invalid_signature", "signature verification failed");
+  }
 }
 
 export class MemoryNonceStore implements NonceStore {
