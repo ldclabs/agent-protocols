@@ -1,6 +1,6 @@
 # agent-protocols Python SDK
 
-Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols.
+Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols.
 
 ## Modules
 
@@ -8,7 +8,8 @@ Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, and Ag
 - `agent_protocols.profile`: `profile.update` payload helpers, delegation discovery hints, validation, succession checks, materialization.
 - `agent_protocols.delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, authority, acceptance, historical, and use checks, `verify_delegation_credential` over the latest grant record, and `audit_delegation_history` for auditors.
 - `agent_protocols.discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
-- `agent_protocols.http_client`: optional requests-based Profile, Delegation, and Discourse clients. Install with `agent-protocols[http]`. Lists use `{"result", "next_cursor"}`; non-2xx responses raise `HttpResponseError` with the protocol `code`, `data`, and `max_seen_nonce`.
+- `agent_protocols.knowledge`: signed research contributions, known-set lifecycle views, evidence and profile bindings, bounded in-memory storage, exact queries, frozen search, discovery, and response validation.
+- `agent_protocols.http_client`: optional requests-based Profile, Delegation, Discourse, and Knowledge clients. Install with `agent-protocols[http]`. Lists use `{"result", "next_cursor"}`; non-2xx responses raise `HttpResponseError` with the protocol `code`, `data`, and `max_seen_nonce`.
 
 ## Example
 
@@ -70,3 +71,83 @@ python3 -m pytest python/agent-protocols/tests
 ```
 
 The suite includes both `unittest.TestCase` classes and pytest functions. Running only `unittest discover` would omit the function-based conformance tests.
+
+## Knowledge
+
+`agent_protocols.knowledge` implements Agent Knowledge 1.0: signed publications,
+assessments and retractions; strict payload and dependency validation; deterministic
+known-set lifecycle views; evidence byte verification; and exact query, batch,
+changes, ranked-search and discovery contracts. The JSON Schema ships inside the
+installed package; no repository files are needed at runtime.
+
+```python
+from agent_protocols import (
+    AgentSigner, ClientNonceManager, KnowledgeStore,
+    knowledge_publish_event, materialize_knowledge, unix_ms,
+)
+
+signer = AgentSigner.generate()
+now = unix_ms()
+nonces = ClientNonceManager()
+event = knowledge_publish_event(signer.agent_id(), now, nonces.next_nonce(now), {
+    "visibility": "public",
+    "license": "https://creativecommons.org/licenses/by/4.0/",
+    "kind": "observation",
+    "title": "Cache keys must preserve language",
+    "statement": "Caching a greeting by user alone can return the wrong language.",
+    "language": "en",
+    "context": {
+        "scope": "A two-language in-memory greeting renderer",
+        "conditions": ["A user switches languages"],
+        "limitations": ["Only this fixture was tested"],
+    },
+    "basis": "A two-request fixture returned the first cached greeting.",
+    "tags": ["caching"],
+})
+envelope = signer.sign_event(event)
+store = KnowledgeStore("https://knowledge.example.com")
+record = store.submit(envelope)
+page = store.query({"q": "cache language", "kind": "observation"})
+assert page["result"][0]["envelope"]["hash"] == envelope["hash"]
+assert materialize_knowledge(store.retained)[envelope["hash"]]["status"] == "active"
+```
+
+`validate_knowledge_envelope` checks signatures and core object rules;
+`validate_knowledge_dependencies` checks locally validated target envelopes.
+`materialize_knowledge` verifies its map and requires dependency closure before
+reporting facts within that known set. `knowledge_evidence_status` verifies exact,
+complete representation bytes without fetching resources. Profile bindings are
+checked and preserved; profile conformance and scientific validity need the
+application's discipline-specific checks. Nothing is automatically fetched or run.
+
+`KnowledgeStore` is a bounded, synchronized **in-memory** service component. It
+preserves exact retry receipts, freezes query/search candidates, rejects expired or
+incompatible cursors, and distinguishes hiding from pruning. `changes` includes all
+three event types and historical imports. Pass a shared `nonce_store` and shared
+`lock` when other protocol handlers accept writes at the same service. Imports
+never consume live nonces. Applications supply durable storage, restoration of the
+sequence high-water mark, admission policy, and hosting. The included store is not
+a durable server and does not automatically restore records after a restart.
+
+Ranked search is opt-in through `search_modes`. Lexical search can enumerate all
+portable matches; applications can supply ordered `candidates`, a versioned
+`ranking`, honest `coverage`, and optional `explanations` for semantic or hybrid
+search. A snapshot preserves that selection despite later admissions or ranking
+changes. Pagination storage has configurable capacity and expiry.
+
+Install `agent-protocols[http]` to use `agent_protocols.http_client.KnowledgeClient`.
+`KnowledgeClient.discover(origin)` validates discovery and honors same-origin
+endpoint overrides. `event`, `query`, `batch`, `changes`, and `search` are public
+reads without a signer. `submit` and advertised `import_event` accept an optional
+origin-bound request JWT; an importer may differ from the event's author. All
+returned envelopes, exact IDs, filters, scope and ranking mode are verified. Raw
+response JSON is parsed strictly and redirects are disabled. Use a dedicated
+session without default credentials for public discovery; any session-level auth,
+cookies or transport adapters remain caller-controlled.
+
+Use `client.iter_pages("query", request)`, `iter_pages("search", request)`, or
+`iter_pages("changes", request)` to reject cross-page scope/configuration drift,
+repeated IDs, cursor loops and ordering regressions. Persist a changes checkpoint
+only after consuming every page. `KnowledgePageTracker` exposes that completed
+checkpoint for callers implementing their own transport. Peers are hints; the SDK
+does not send queries or credentials to them automatically.

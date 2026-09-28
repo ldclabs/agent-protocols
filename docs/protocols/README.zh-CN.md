@@ -10,6 +10,7 @@
 | Agent Profile Protocol    | `agent-profile/1.0`    | [agent-profile/1.0.md](agent-profile/1.0.md)       | [agent-profile/1.0.zh-CN.md](agent-profile/1.0.zh-CN.md)       | [JSON Schema](agent-profile/1.0.schema.json) · [测试向量](agent-profile/1.0.vectors.json)                                                     |
 | Agent Delegation Protocol | `agent-delegation/1.0` | [agent-delegation/1.0.md](agent-delegation/1.0.md) | [agent-delegation/1.0.zh-CN.md](agent-delegation/1.0.zh-CN.md) | [JSON Schema](agent-delegation/1.0.schema.json) · [测试向量](agent-delegation/1.0.vectors.json)                                               |
 | Agent Discourse Protocol  | `agent-discourse/1.0`  | [agent-discourse/1.0.md](agent-discourse/1.0.md)   | [agent-discourse/1.0.zh-CN.md](agent-discourse/1.0.zh-CN.md)   | [JSON Schema](agent-discourse/1.0.schema.json) · [类型包](agent-discourse/1.0.packs.json) · [测试向量](agent-discourse/1.0.vectors.json) |
+| Agent Knowledge Protocol | `agent-knowledge/1.0` | [agent-knowledge/1.0.md](agent-knowledge/1.0.md) | [agent-knowledge/1.0.zh-CN.md](agent-knowledge/1.0.zh-CN.md) | [JSON Schema](agent-knowledge/1.0.schema.json) · [测试向量](agent-knowledge/1.0.vectors.json) |
 
 本地 Agent Protocols MCP Connector 另见 [../mcp/local-connector/1.0.zh-CN.md](../mcp/local-connector/1.0.zh-CN.md)。
 
@@ -21,10 +22,13 @@
 | 这个智能体如何描述自己？ | Agent Profile | 元数据和 delegation 提示不是代理关系证明。 |
 | 它可以代表谁、用于哪个应用？ | Agent Delegation | Controller 绑定需要显式 delegation 权限；grant 受 audience、scope 和状态限制。 |
 | 它在这个 Room 中能做什么？ | Agent Discourse | Room 成员、角色与事件规则仍独立生效。 |
+| 智能体如何发现、审视、复用并共同发展知识？ | Agent Knowledge | 查询标明服务与快照范围；相关性、签名来源和学科验证各有边界，不建立普遍真理认证。 |
 
 接入时先读 Identity（它还定义了其他协议共享的 HTTP 约定），再只读所用到的协议。本地 MCP Connector 负责适配这些协议，不替代它们的验证规则。
 
 测试向量是规范性的：与向量结果不一致的实现即不符合规范。仅凭协议标识符相同，并不能证明实现符合最新草案。
+
+Agent Knowledge 提供原生 Rust、TypeScript 和 Python SDK 模块，包含验证、内存状态与检索，以及 HTTP 客户端。其测试运行共享向量；独立的[配套文件检查器](agent-knowledge/check_vectors.py) 仍作为单独的草案开发检查。SDK 支持不包含托管服务、学科验证器、排名引擎或 Knowledge MCP 适配器。
 
 ## 版本管理
 

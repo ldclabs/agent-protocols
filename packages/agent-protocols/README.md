@@ -58,3 +58,66 @@ const verdict = verifyDelegationCredential(credential, records, principal, princ
 Services remain responsible for fresh HTTPS resolution, live Identity timestamp and nonce checks, exact-resubmission lookups, atomic state and history storage, and current revocation or compromise reevaluation. These are SDK building blocks, not a hosted delegation service.
 
 The local connector derives the delegation service from the principal's `delegation_query_url` and its discovery document, and checks policy and credential ownership before signing a grant or revocation.
+
+## Agent Knowledge
+
+The `agent-protocols/knowledge` entry point implements Agent Knowledge 1.0
+objects, dependency validation, deterministic views, evidence and profile
+verification states, discovery and retrieval contracts, and an in-memory service
+engine. `KnowledgeClient` is exported from the main and `http-client` entry points.
+
+```ts
+import { AgentSigner, KnowledgeClient, knowledgePublishEvent } from "agent-protocols";
+
+const signer = AgentSigner.generate();
+const now = Date.now();
+const envelope = signer.signEvent(knowledgePublishEvent(signer.agentId(), now, now, {
+  visibility: "public",
+  license: "https://creativecommons.org/licenses/by/4.0/",
+  kind: "observation",
+  title: "Cache keys must include language",
+  statement: "This fixture returns the first language when keyed by user alone.",
+  language: "en",
+  context: { scope: "Two-language greeting fixture", conditions: [], limitations: [] },
+  basis: "Two requests with the same user and different languages shared a cache entry.",
+}));
+const client = await KnowledgeClient.discover("https://knowledge.example.com");
+await client.submit(envelope);
+
+// Reads require no signer, JWT, publication, or nonce allocation.
+for await (const page of client.queryPages({ q: "cache language", kind: "observation" })) {
+  console.log(page.service, page.checkpoint, page.as_of, page.result);
+}
+```
+
+`KnowledgeStore({ service, clock? })` provides `submit`, explicit historical
+`import`, `event`, `batch`, `query`, `changes`, and `search`. Historical imports
+never affect live nonce state. Pass the same `nonceStore` to all protocol
+services at one origin to enforce the shared actor-wide nonce maximum. Exact retries retain the original acceptance
+record, including when hidden. `hide` / `unhide` preserve history; `prune` removes
+the record while retaining sequence and nonce high-water state. Input/output
+objects are copied. Query and search cursors freeze their selection, effective
+request, scope and ranking metadata, while respecting later removal. Snapshot
+count, lifetime and record budgets are configurable; expired or evicted cursors
+fail explicitly. This synchronous engine is an application building block; it
+does not provide durable storage, an HTTP server, or deployment policy.
+
+Ranked `search` accepts application-selected candidate IDs, a ranking configuration
+and honest coverage metadata. It verifies exact filters and lexical matches and
+preserves candidate ranks across pages. Embedding models and ranking algorithms
+are application choices. The HTTP client requires discovery to advertise import
+and ranked search; it rejects mode substitution, mismatched scopes, malformed
+batches, invalid signatures, duplicate cross-page IDs and snapshot drift. Redirects
+are disabled and ambient credentials omitted. Write/import JWTs are optional and
+must be bound to the receiving origin; import credentials identify the caller,
+which can differ from the signed publisher.
+
+`materializeKnowledge` requires a validated, dependency-closed known set. Its
+active/retracted facts are local to that set. `verifyKnowledgeEvidence` checks
+complete decoded representation bytes; `knowledgeProfileResult` requires pinned
+profile bytes, verified normative dependencies and all profile checks before
+reporting conformance. Neither helper fetches artifacts or executes methods.
+Signature validity, artifact identity, profile conformance, retrieval relevance,
+and scientific correctness remain separate judgments. The native TypeScript
+conformance suite executes all 64 signed fixtures and 435 layered protocol cases,
+with additional HTTP, isolation, pruning and pagination regressions.

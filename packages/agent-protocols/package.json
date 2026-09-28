@@ -1,7 +1,7 @@
 {
   "name": "agent-protocols",
   "version": "0.9.0",
-  "description": "TypeScript SDK for Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols",
+  "description": "TypeScript SDK for Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -37,6 +37,10 @@
     "./local-connector": {
       "types": "./dist/local-connector.d.ts",
       "import": "./dist/local-connector.js"
+    },
+    "./knowledge": {
+      "types": "./dist/knowledge.d.ts",
+      "import": "./dist/knowledge.js"
     }
   },
   "files": [

@@ -89,6 +89,14 @@ pub enum SdkError {
     #[error("{code}: {message}")]
     Protocol { code: &'static str, message: String },
 
+    /// A protocol error with machine-readable error data.
+    #[error("{code}: {message}")]
+    ProtocolWithData {
+        code: &'static str,
+        message: String,
+        data: serde_json::Value,
+    },
+
     /// A non-2xx response. `code` and `data` come from the Agent Identity
     /// error body when the service sent one; `max_seen_nonce` from the
     /// `Max-Seen-Nonce` header.
@@ -115,10 +123,30 @@ impl SdkError {
         }
     }
 
+    pub fn protocol_with_data(
+        code: &'static str,
+        message: impl Into<String>,
+        data: serde_json::Value,
+    ) -> Self {
+        Self::ProtocolWithData {
+            code,
+            message: message.into(),
+            data,
+        }
+    }
+
+    pub fn data(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::ProtocolWithData { data, .. } => Some(data),
+            Self::HttpStatus { data, .. } => data.as_ref(),
+            _ => None,
+        }
+    }
+
     /// The Agent Protocols error code this error corresponds to, when there is one.
     pub fn code(&self) -> Option<&str> {
         match self {
-            Self::Protocol { code, .. } => Some(code),
+            Self::Protocol { code, .. } | Self::ProtocolWithData { code, .. } => Some(code),
             Self::HttpStatus { code, .. } => code.as_deref(),
             Self::InvalidSignatureLength(_) | Self::Ed25519(_) => Some("invalid_signature"),
             Self::InvalidEventHash { .. } | Self::InvalidEventHashLength(_) => {

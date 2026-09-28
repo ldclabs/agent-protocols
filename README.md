@@ -2,12 +2,13 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Agent Protocols is an open specification repository for interoperable autonomous agents. The repository currently defines four draft protocols:
+Agent Protocols is an open specification repository for interoperable autonomous agents. The repository currently defines five draft protocols:
 
 1. **Agent Identity Protocol**: Ed25519-based agent identity, signed event envelopes, canonical encoding, and verification rules.
 2. **Agent Profile Protocol**: portable agent profiles that describe names, capabilities, service endpoints, and provider metadata without replacing cryptographic identity.
 3. **Agent Delegation Protocol**: portable, verifiable delegation credentials that state on whose behalf an agent may act — grants signed by principal controller keys, with scopes, constraints, validity windows, and revocation status.
 4. **Agent Discourse Protocol**: lifecycle-bounded rooms for multi-agent discussion, built as a small kernel — membership, signed messages, ordered records, verifiable archives — plus a type system through which each room declares schema-validated custom event types, inline or from reusable type packs.
+5. **Agent Knowledge Protocol**: an open network for discovering, sharing, and collaboratively evolving knowledge across disciplines. Signed research capsules connect through provenance, assessments, and reuse reports. Public text and structured queries, batch reads, relationship exploration, and optional ranked search help agents find and examine contributions; disciplinary application profiles define more precise interpretation and validation.
 
 English and Simplified Chinese versions are maintained side by side. The English version is the default working language for cross-implementation review. The Chinese version should preserve the same normative requirements.
 
@@ -19,8 +20,9 @@ English and Simplified Chinese versions are maintained side by side. The English
 | Agent Profile Protocol    | [docs/protocols/agent-profile/1.0.md](docs/protocols/agent-profile/1.0.md)       | [docs/protocols/agent-profile/1.0.zh-CN.md](docs/protocols/agent-profile/1.0.zh-CN.md)       | Draft  |
 | Agent Delegation Protocol | [docs/protocols/agent-delegation/1.0.md](docs/protocols/agent-delegation/1.0.md) | [docs/protocols/agent-delegation/1.0.zh-CN.md](docs/protocols/agent-delegation/1.0.zh-CN.md) | Draft  |
 | Agent Discourse Protocol  | [docs/protocols/agent-discourse/1.0.md](docs/protocols/agent-discourse/1.0.md)   | [docs/protocols/agent-discourse/1.0.zh-CN.md](docs/protocols/agent-discourse/1.0.zh-CN.md)   | Draft  |
+| Agent Knowledge Protocol | [docs/protocols/agent-knowledge/1.0.md](docs/protocols/agent-knowledge/1.0.md) | [docs/protocols/agent-knowledge/1.0.zh-CN.md](docs/protocols/agent-knowledge/1.0.zh-CN.md) | Draft |
 
-Each specification links its machine-readable files — JSON Schemas, the ADP type packs, and normative test vectors — from [docs/protocols](docs/protocols/README.md). The Rust, TypeScript, and Python SDKs run the same test vectors.
+Each specification links its machine-readable files — JSON Schemas, the ADP type packs, and normative test vectors — from [docs/protocols](docs/protocols/README.md). The Rust, TypeScript, and Python SDKs run shared protocol vectors, including Agent Knowledge's object, acceptance, retrieval, and discovery cases. The independent [Knowledge artifact checker](docs/protocols/agent-knowledge/check_vectors.py) also checks the draft's machine-readable materials.
 
 ## Protocol Relationship
 
@@ -30,6 +32,7 @@ The protocols are designed to compose without forcing one service to own everyth
 - Agent Profile uses Agent Identity signatures to publish mutable descriptive metadata for an agent.
 - Agent Delegation states on whose behalf an agent may act. Grants and revocations are ordinary Agent Identity signed events whose `actor` must be a controller key published by the principal's HTTPS URL; Agent Profile can carry delegation discovery hints.
 - Agent Discourse uses Agent Identity for all write operations and may resolve profiles from a local profile store or any compatible third-party Agent Profile service.
+- Agent Knowledge uses Agent Identity for portable public research contributions and their continuing evaluation, reuse, and evolution. Profile can advertise knowledge services, and Discourse can discuss or supply public evidence for capsules; neither is required for the knowledge graph. Disciplinary application profiles add structured interpretation and validation without changing core identity or authority.
 
 ```text
 Agent Identity
@@ -39,6 +42,8 @@ Agent Identity
       +--> Agent Delegation (principal-signed credentials)
       |
       +--> Agent Discourse -- may resolve --> third-party Agent Profile service
+      |
+      +--> Agent Knowledge -- derivation, assessments, corrections --> knowledge graph
 ```
 
 ## MCP Interfaces
@@ -66,19 +71,22 @@ docs/
     agent-profile/
     agent-delegation/
     agent-discourse/
+    agent-knowledge/
   mcp/
     local-connector/
 ```
 
 ## SDKs
 
-This repository includes SDKs for common client and server building blocks across the Identity, Profile, Delegation, and Discourse protocols:
+This repository includes SDKs for common client and server building blocks across the Identity, Profile, Delegation, Discourse, and Knowledge protocols:
 
 - Rust: [crates/agent-protocols](crates/agent-protocols)
 - TypeScript: [packages/agent-protocols](packages/agent-protocols)
 - Python: [python/agent-protocols](python/agent-protocols)
 
 The SDKs cover Agent ID encoding, strict Ed25519 verification, signed event envelopes, Profile materialization, Delegation controller authority, history, and credential verification, the Discourse kernel and type system, permission helpers, and HTTP clients. The Rust and TypeScript SDKs also include the local MCP connector core.
+
+Knowledge support includes event builders and validators, dependency and lifecycle checks, evidence integrity, in-memory acceptance and retrieval stores, text and structured queries, batch reads, changes feeds, frozen pagination, discovery, and HTTP clients with response validation. Ranked-search helpers validate caller-supplied candidates and response contracts; they do not supply an embedding model or ranking engine. Durable storage, hosted services, disciplinary validators, and Knowledge-specific MCP tools remain application or future integration work. See each SDK's README for its public API and examples.
 
 Future additions may include OpenAPI descriptions, SDK guidance for other languages, and broader conformance suites.
 

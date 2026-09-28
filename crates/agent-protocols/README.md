@@ -1,6 +1,6 @@
 # agent-protocols Rust SDK
 
-Rust SDK for the draft Agent Identity, Agent Profile, Agent Delegation, and Agent Discourse protocols.
+Rust SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols.
 
 The crate is intentionally framework-neutral:
 
@@ -14,6 +14,7 @@ The crate is intentionally framework-neutral:
 - `profile`: `profile.update` payloads, Profile documents, delegation discovery hints, discovery responses, validation, succession checks, materialization.
 - `delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, query shapes, authority, acceptance, historical, and use checks, `verify_delegation_credential` over the latest grant record, and `audit_delegation_history` for auditors.
 - `discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records (`ArchiveRecord`), server records, and archive verification.
+- `knowledge`: signed contributions, evidence/profile checks, dependency graph views, discovery, portable queries, snapshots, and the in-memory Knowledge store.
 - `http_client`: optional `reqwest` clients behind the `http-client` feature. Lists use `ListResponse`; non-2xx responses become `SdkError::HttpStatus` with the protocol `code`, `data`, and `Max-Seen-Nonce`.
 - `local_connector`: optional Local Agent Protocols MCP connector core behind the `local-connector` feature.
 
@@ -91,3 +92,68 @@ let verdict = verify_delegation_credential(
 Services remain responsible for fresh HTTPS resolution, live Identity timestamp and nonce checks, exact-resubmission lookups, atomic state and history storage, and current revocation or compromise reevaluation. These are SDK building blocks, not a hosted delegation service.
 
 `DelegationPayload` wraps grant and revoke payloads for the shared validation and materialization APIs. The local connector derives the delegation service from the principal's `delegation_query_url` and checks policy and credential ownership before signing. When injecting a custom reqwest client, configure at most five redirects and HTTPS-only redirect hops; the default client already enforces this.
+
+## Agent Knowledge
+
+The `knowledge` module implements Knowledge 1.0 object validation and dependency
+rules, typed publication/assessment/retraction builders, evidence-byte integrity,
+profile-binding checks and scoped profile results, deterministic known-set views,
+portable text/filter matching, discovery, and read-response contracts. The bundled
+schema ships with the crate; runtime validation never reads a repository path.
+Unknown application data in `extra` and profile `data` is preserved. Optional
+arrays/objects use `Option`, retaining omitted versus explicitly empty values.
+
+```rust
+use agent_protocols::identity::{AgentSigner, Event};
+use agent_protocols::knowledge::{KnowledgeStore, PROTOCOL, materialize_knowledge};
+use serde_json::json;
+
+let signer = AgentSigner::generate();
+let event = Event::new(PROTOCOL, "knowledge.publish", signer.agent_id(), 1000, 1,
+    json!({
+        "visibility": "public", "license": "https://example.org/license",
+        "kind": "question", "title": "Can this result generalize?",
+        "statement": "Does the result extend to nonuniform samples?",
+        "language": "en",
+        "context": {"scope": "A proposed research question", "conditions": [], "limitations": []},
+        "basis": "The original experiment considered only uniform samples."
+    }));
+let envelope = serde_json::to_value(signer.sign_event(event)?)?;
+let mut store = KnowledgeStore::new("https://knowledge.example.org")?;
+store.import(&envelope, 1000)?; // Explicit historical path; live writes use submit.
+let page = store.query(&json!({"q": "nonuniform", "kind": "question"}), 1000)?;
+assert_eq!(page["result"].as_array().unwrap().len(), 1);
+let view = materialize_knowledge(&store.visible_envelopes())?;
+# Ok::<(), agent_protocols::SdkError>(())
+```
+
+`KnowledgeStore` is a bounded-cursor, single-process in-memory implementation for
+applications and tests, not a durable HTTP service. Application code supplies
+locking, persistence, admission policy and resource limits. Snapshot defaults are
+256 retained cursors and a 300-second lifetime. `accept_with_nonce_store` lets an
+application share actor nonces with other protocols at the same origin; imports,
+rejections and exact retries do not consume nonces. Hiding preserves receipts;
+pruning loses the receipt while retaining the sequence high-water mark. All reads
+return owned data. `SdkError::data()` exposes sorted missing dependencies.
+
+`query`, `batch`, and `changes` implement exact local reads. `search` accepts
+caller-selected candidates and explicit ranking/coverage metadata; it supplies
+stable pagination without implementing an embedding model. `KnowledgePageValidator`
+checks request binding, frozen scope/configuration, ordering, and duplicate IDs
+across query, changes, or search pages. A lifecycle view applies only to the
+validated dependency-closed set supplied to it; retrieval alone does not establish
+current lifecycle status, scientific truth, or profile conformance.
+
+With `http-client`, `KnowledgeClient::new(origin)?` provides public reads without a
+signer, `discover`, `event`, `query`, `query_all`, `batch`, `changes`, `search`,
+`submit`, and `import`. Optional imports/search require advertised discovery.
+Writes optionally accept an Identity request JWT; it authenticates the transport
+caller without replacing the envelope actor. Discovery endpoints must share the
+receiving HTTPS origin. The default transport disables redirects and parses raw
+response text strictly before verifying every returned envelope and request
+contract. A custom reqwest client must preserve the redirect restriction. The SDK
+never automatically contacts peers, fetches artifacts, or executes procedures.
+
+`cargo test -p agent-protocols --all-features` runs the shared Knowledge signed
+fixtures and every applicable layered vector in native Rust, plus real local
+HTTPS client tests and additional nonce, pagination, numeric, and profile tests.

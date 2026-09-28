@@ -165,3 +165,9 @@ __all__ = [
     "with_room_head",
     "with_room_id",
 ]
+
+# Knowledge has no HTTP dependency; the optional KnowledgeClient is in http_client.
+from .knowledge import *
+from .knowledge import __all__ as _knowledge_exports
+
+__all__ += _knowledge_exports

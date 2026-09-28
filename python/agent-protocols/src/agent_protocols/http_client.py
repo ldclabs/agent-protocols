@@ -330,3 +330,174 @@ def _requests_session() -> Any:
     if requests is None:
         raise RuntimeError("Install agent-protocols[http] to use HTTP clients")
     return requests.Session()
+
+
+class KnowledgeClient:
+    """Public Knowledge reads and explicitly authenticated writes.
+
+    Discovery endpoints override recommended paths. Requests never follow
+    redirects, so a peer or redirect cannot receive a query, envelope, or JWT.
+    Public reads never attach an SDK Authorization header. Use a dedicated
+    session without default credentials for public discovery.
+    """
+    def __init__(self, base_url: str, session: Any | None = None, *,
+                 endpoints: dict[str, str] | None = None, features: tuple[str, ...] | list[str] = (),
+                 search_modes: tuple[str, ...] | list[str] = (), timeout: float = 30.0):
+        from .knowledge import KNOWLEDGE_PROTOCOL, validate_knowledge_discovery
+        from .identity import validate_origin
+        validate_origin(base_url)
+        self.base_url = base_url
+        self.session = session if session is not None else _requests_session()
+        self.timeout = timeout
+        document: dict[str, Any] = {'protocol': KNOWLEDGE_PROTOCOL, 'service': base_url,
+                                    'endpoints': dict(endpoints or {}), 'features': list(features)}
+        if search_modes:
+            document['search_modes'] = list(search_modes)
+        validate_knowledge_discovery(document, base_url)
+        self._discovery = document
+        self._endpoints = {key: base_url + '/knowledge/' + key for key in ('events', 'query', 'batch', 'changes')}
+        self._endpoints.update(document['endpoints'])
+
+    @classmethod
+    def discover(cls, origin: str, session: Any | None = None, *, timeout: float = 30.0) -> 'KnowledgeClient':
+        from .knowledge import validate_knowledge_discovery
+        client = cls(origin, session, timeout=timeout)
+        document = client.protocol()
+        validate_knowledge_discovery(document, origin)
+        discovered = cls(origin, client.session, endpoints=document.get('endpoints'),
+                         features=document.get('features', []), search_modes=document.get('search_modes', []), timeout=timeout)
+        import copy
+        discovered._discovery = copy.deepcopy(document)
+        return discovered
+
+    @property
+    def discovery(self) -> dict[str, Any]:
+        import copy
+        return copy.deepcopy(self._discovery)
+
+    def _request(self, method: str, url: str, *, body: Any = None, jwt: str | None = None) -> Any:
+        from .errors import AgentProtocolError
+        from .identity import parse_strict_json, verify_request_jwt
+        from .knowledge import _knowledge_origin
+        if _knowledge_origin(url) != self.base_url:
+            raise AgentProtocolError('invalid_request', 'cross-origin Knowledge endpoint')
+        headers: dict[str, Any] = {'Authorization': None}
+        # requests uses None to suppress a session-level default Authorization.
+        # Session authentication/cookies are caller-owned; use a dedicated session.
+        if jwt is not None:
+            verify_request_jwt(jwt, audience=self.base_url)
+            headers['Authorization'] = 'Bearer ' + jwt
+        kwargs: dict[str, Any] = {'headers': headers, 'allow_redirects': False, 'timeout': self.timeout}
+        if body is not None:
+            kwargs['json'] = body
+        response = getattr(self.session, method.lower())(url, **kwargs)
+        final_url = getattr(response, 'url', None)
+        if final_url:
+            try:
+                final_origin = _knowledge_origin(final_url)
+            except (AgentProtocolError, ValueError) as exc:
+                raise AgentProtocolError('invalid_response', 'Knowledge response has an invalid origin') from exc
+            if final_origin != self.base_url:
+                raise AgentProtocolError('invalid_response', 'Knowledge response came from a different origin')
+        status = getattr(response, 'status_code', 200)
+        if status != 200:
+            raise HttpResponseError(status, getattr(response, 'text', ''), (getattr(response, 'headers', {}) or {}).get(MAX_NONCE_HEADER))
+        try:
+            return parse_strict_json(response.text)
+        except (AgentProtocolError, TypeError, ValueError) as exc:
+            raise AgentProtocolError('invalid_response', 'Knowledge response violates strict I-JSON') from exc
+
+    def protocol(self) -> dict[str, Any]:
+        from .knowledge import validate_knowledge_discovery
+        document = self._request('GET', self.base_url + '/.well-known/agent-knowledge')
+        validate_knowledge_discovery(document, self.base_url)
+        return document
+
+    def submit(self, envelope: Envelope, *, jwt: str | None = None) -> dict[str, Any]:
+        return self._write(envelope, 'events', jwt)
+
+    def submit_event(self, envelope: Envelope, *, jwt: str | None = None) -> dict[str, Any]:
+        return self.submit(envelope, jwt=jwt)
+
+    def import_event(self, envelope: Envelope, *, jwt: str | None = None) -> dict[str, Any]:
+        from .errors import AgentProtocolError
+        if 'import' not in self._discovery.get('features', []):
+            raise AgentProtocolError('invalid_request', 'service has not advertised historical import')
+        return self._write(envelope, 'import', jwt)
+
+    def _write(self, envelope: Envelope, endpoint: str, jwt: str | None) -> dict[str, Any]:
+        from .knowledge import validate_knowledge_envelope, validate_knowledge_record
+        import copy
+        envelope = copy.deepcopy(envelope)
+        validate_knowledge_envelope(envelope)
+        result = self._request('POST', self._endpoints[endpoint], body=envelope, jwt=jwt)
+        validate_knowledge_record(result, expected_hash=envelope['hash'])
+        return result
+
+    def event(self, event_id: str) -> dict[str, Any]:
+        from .errors import AgentProtocolError
+        from .knowledge import validate_knowledge_id, validate_knowledge_record
+        try:
+            validate_knowledge_id(event_id)
+        except AgentProtocolError as exc:
+            raise AgentProtocolError('invalid_request', 'malformed Knowledge event ID') from exc
+        result = self._request('GET', _query(self._endpoints['events'], {'hash': event_id}))
+        validate_knowledge_record(result, expected_hash=event_id)
+        return result
+
+    def query(self, request: dict[str, Any] | None = None) -> dict[str, Any]:
+        from .knowledge import validate_knowledge_query, validate_knowledge_query_response
+        request = validate_knowledge_query({} if request is None else request)
+        result = self._request('GET', _query(self._endpoints['query'], request))
+        validate_knowledge_query_response(result, request, self.base_url)
+        return result
+
+    def batch(self, hashes: list[str]) -> dict[str, Any]:
+        from .knowledge import validate_knowledge_batch, validate_knowledge_batch_response
+        requested = tuple(hashes)
+        body = {'hashes': list(requested)}
+        validate_knowledge_batch(body)
+        result = self._request('POST', self._endpoints['batch'], body=body)
+        validate_knowledge_batch_response(result, requested, self.base_url)
+        return result
+
+    def changes(self, request: dict[str, Any] | None = None) -> dict[str, Any]:
+        from .knowledge import validate_knowledge_changes, validate_knowledge_changes_response
+        request = validate_knowledge_changes({} if request is None else request)
+        result = self._request('GET', _query(self._endpoints['changes'], request))
+        validate_knowledge_changes_response(result, request, self.base_url)
+        return result
+
+    def search(self, request: dict[str, Any]) -> dict[str, Any]:
+        from .knowledge import validate_knowledge_search, validate_knowledge_search_response
+        from .errors import AgentProtocolError
+        import copy
+        request = copy.deepcopy(request)
+        request = validate_knowledge_search(request, self._discovery.get('search_modes', []))
+        if 'ranked-search' not in self._discovery.get('features', []):
+            raise AgentProtocolError('unsupported_search_mode', 'service has not advertised ranked search')
+        result = self._request('POST', self._endpoints['search'], body=request)
+        validate_knowledge_search_response(result, request, self.base_url)
+        return result
+
+    def iter_pages(self, operation: str = 'query', request: dict[str, Any] | None = None):
+        """Yield validated pages, rejecting scope/configuration drift or repeated IDs.
+
+        Persist a changes checkpoint only after the iterator is exhausted. A
+        failed/expired continuation must restart at the last completed checkpoint.
+        """
+        import copy
+        from .knowledge import KnowledgePageTracker
+        tracker = KnowledgePageTracker(self.base_url, operation)
+        request = copy.deepcopy(request or {})
+        if 'cursor' in request:
+            from .errors import AgentProtocolError
+            raise AgentProtocolError('invalid_request', 'iter_pages must start without a cursor')
+        while True:
+            page = getattr(self, operation)(request)
+            tracker.accept(page, request)
+            next_cursor = page.get('next_cursor')
+            yield page
+            if next_cursor is None:
+                break
+            request['cursor'] = next_cursor
