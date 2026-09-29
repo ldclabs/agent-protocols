@@ -1,6 +1,6 @@
 {
   "name": "agent-protocols",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "TypeScript SDK for Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols",
   "type": "module",
   "license": "MIT",
@@ -53,6 +53,7 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
+    "@noble/hashes": "^2.4.0",
     "canonicalize": "^4.0.0",
     "tweetnacl": "^1.0.3"
   },

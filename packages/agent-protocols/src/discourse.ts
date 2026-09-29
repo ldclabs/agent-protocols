@@ -8,9 +8,11 @@
  * never need to understand application semantics.
  */
 import { Validator, type Schema } from "@cfworker/json-schema";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { sha3_256 } from "@noble/hashes/sha3.js";
 import canonicalize from "canonicalize";
-import { createHash } from "node:crypto";
 
+import { base64UrlEncode } from "./encoding.js";
 import { AgentProtocolError, protocolError } from "./errors.js";
 import {
   AgentId,
@@ -1478,9 +1480,9 @@ export function verifyPackDigest(bytes: Uint8Array, digest: string): void {
   const separator = digest.indexOf(":");
   const algorithm = digest.slice(0, separator);
   const expected = digest.slice(separator + 1);
-  const actual = createHash(algorithm)
-    .update(bytes)
-    .digest("base64url");
+  const actual = base64UrlEncode(
+    algorithm === "sha256" ? sha256(bytes) : sha3_256(bytes),
+  );
   if (actual !== expected) {
     throw protocolError("pack_unavailable", "pack digest mismatch");
   }
@@ -1735,5 +1737,5 @@ function hashCanonicalJson(value: unknown): string {
       "value cannot be represented as canonical JSON",
     );
   }
-  return createHash("sha3-256").update(canonical).digest("base64url");
+  return base64UrlEncode(sha3_256(new TextEncoder().encode(canonical)));
 }

@@ -1,7 +1,9 @@
+import { sha3_256 } from "@noble/hashes/sha3.js";
+import { hexToBytes } from "@noble/hashes/utils.js";
 import canonicalize from "canonicalize";
-import { createHash } from "node:crypto";
 import nacl from "tweetnacl";
 
+import { base64UrlDecodeCanonical, base64UrlEncode } from "./encoding.js";
 import { protocolError } from "./errors.js";
 
 export const AGENT_ID_PREFIX = "did:agent:";
@@ -502,11 +504,7 @@ export function eventHash(event: Event<unknown>): string {
 
 export function eventHashBytes(event: Event<unknown>): Uint8Array {
   validateNonce(event.nonce);
-  return new Uint8Array(
-    createHash("sha3-256")
-      .update(canonicalEventBytes(event))
-      .digest(),
-  );
+  return sha3_256(canonicalEventBytes(event));
 }
 
 export function signEvent(
@@ -587,8 +585,8 @@ const SMALL_ORDER_Y: readonly bigint[] = [
   0n,
   1n,
   FIELD_P - 1n,
-  littleEndian(Buffer.from("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", "hex")),
-  littleEndian(Buffer.from("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", "hex")),
+  littleEndian(hexToBytes("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05")),
+  littleEndian(hexToBytes("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a")),
 ];
 
 function littleEndian(bytes: Uint8Array): bigint {
@@ -1004,18 +1002,14 @@ export function validateNonce(nonce: number): void {
   }
 }
 
-function base64UrlEncode(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64url");
-}
-
 /**
  * Canonical base64url decoding: URL-safe alphabet, no padding, zero trailing
  * bits. Receivers MUST reject non-canonical encodings, otherwise one value
  * gains multiple distinct string forms and corrupts string-keyed comparisons.
  */
 function base64UrlDecode(value: string): Uint8Array {
-  const bytes = new Uint8Array(Buffer.from(value, "base64url"));
-  if (Buffer.from(bytes).toString("base64url") !== value) {
+  const bytes = base64UrlDecodeCanonical(value);
+  if (bytes === undefined) {
     throw protocolError(
       "invalid_encoding",
       "expected canonical base64url without padding",

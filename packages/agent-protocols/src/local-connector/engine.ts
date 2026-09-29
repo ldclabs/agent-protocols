@@ -33,6 +33,7 @@ import {
   validateRoomPath,
   verifyServerRecord,
 } from "../discourse.js";
+import { base64UrlEncode } from "../encoding.js";
 import {
   AgentId,
   AgentSigner,
@@ -279,10 +280,6 @@ function profileToMemberProfile(profile: AgentProfile): RoomMemberProfile {
     description: profile.description,
     avatar_url: profile.avatar_url,
   };
-}
-
-function base64UrlEncode(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64url");
 }
 
 function compareStrings(a: string, b: string): number {

@@ -3,9 +3,10 @@
  * Knowledge events are immutable, portable objects: acceptance never consults a
  * live-write nonce cache, and nothing is fetched or executed implicitly.
  */
-import { createHash } from "node:crypto";
+import { sha3_256 } from "@noble/hashes/sha3.js";
 import canonicalize from "canonicalize";
 import { Validator, type Schema } from "@cfworker/json-schema";
+import { base64UrlDecodeCanonical, base64UrlEncode } from "./encoding.js";
 import { protocolError } from "./errors.js";
 import {
   AgentId,
@@ -355,7 +356,7 @@ export function validateKnowledgeId(
   if (
     typeof value !== "string" ||
     !/^[A-Za-z0-9_-]{43}$/.test(value) ||
-    Buffer.from(value, "base64url").toString("base64url") !== value
+    base64UrlDecodeCanonical(value) === undefined
   )
     throw protocolError(code, "ID must canonically encode 32 bytes");
 }
@@ -379,7 +380,9 @@ function https(value: string, code = "invalid_event"): URL {
   }
 }
 const sha3 = (bytes: Uint8Array | string): string =>
-  createHash("sha3-256").update(bytes).digest("base64url");
+  base64UrlEncode(
+    sha3_256(typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes),
+  );
 /** Sorted, distinct direct dependencies. */
 export function knowledgeDependencies(item: KnowledgeEnvelope): string[] {
   return item.event.type === "knowledge.publish"
@@ -1085,7 +1088,7 @@ export class KnowledgeStore {
         "created_at is too far in the future",
       );
     checkDependencies(copy, (id) => this.records.get(id)?.envelope);
-    if (Buffer.byteLength(JSON.stringify(copy)) > this.maxEnvelopeBytes)
+    if (new TextEncoder().encode(JSON.stringify(copy)).length > this.maxEnvelopeBytes)
       throw protocolError(
         "payload_too_large",
         "envelope exceeds configured byte limit",
