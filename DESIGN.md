@@ -233,7 +233,7 @@ This file governs the documentation site ([docs/index.html](docs/index.html)), s
 
 ## Overview
 
-Agent Protocols is an open, provider-neutral specification repository: four draft protocols for interoperable autonomous agents, maintained bilingually (English canonical, Simplified Chinese in parity). The design must read as a **standards desk, not a startup dashboard** — calm, archival, verifiable, slightly austere. If IETF RFCs had been brushed onto celadon instead of typed on white, they would look like this.
+Agent Protocols is an open, provider-neutral specification repository: five draft protocols for interoperable autonomous agents, maintained bilingually (English canonical, Simplified Chinese in parity). The design must read as a **standards desk, not a startup dashboard** — calm, archival, verifiable, slightly austere. If IETF RFCs had been brushed onto celadon instead of typed on white, they would look like this.
 
 The palette follows the family discipline shared with alink's "Ink Night & Porcelain" system (ldclabs sibling project): **cold surfaces, one warm accent**. Here the temperature is green-stone rather than blue-porcelain, and the single warm accent is not a human dot but a **cinnabar seal** — the mark a document receives when a signature verifies. Everything on the page is cold and mineral except the moments of cryptographic assurance.
 
