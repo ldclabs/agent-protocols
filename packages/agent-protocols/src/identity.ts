@@ -532,7 +532,14 @@ export function parseAgentUrl(value: unknown): AgentUrl {
     url.resource = segments[2];
   }
   if (query >= 0) {
-    for (const item of value.slice(query + 1).split("&")) {
+    const items = value.slice(query + 1).split("&");
+    if (items.length > AGENT_URL_MAX_ROUTES) {
+      throw protocolError(
+        "invalid_url",
+        "agent URL allows at most eight routes",
+      );
+    }
+    for (const item of items) {
       if (!item.startsWith("route=")) {
         throw protocolError(
           "invalid_url",
@@ -546,23 +553,16 @@ export function parseAgentUrl(value: unknown): AgentUrl {
       }
       url.routes.push(route);
     }
-    if (url.routes.length > AGENT_URL_MAX_ROUTES) {
-      throw protocolError(
-        "invalid_url",
-        "agent URL allows at most eight routes",
-      );
-    }
   }
   return url;
 }
 
 export function formatAgentUrl(url: AgentUrl): string {
   validateAgentId(url.agent_id);
-  const path =
-    url.protocol === undefined ? "" : `/${url.protocol}/${url.resource}`;
+  const path = url.protocol == null ? "" : `/${url.protocol}/${url.resource}`;
   if (
-    (url.protocol === undefined) !== (url.resource === undefined) ||
-    (url.protocol !== undefined &&
+    (url.protocol == null) !== (url.resource == null) ||
+    (url.protocol != null &&
       (!AGENT_URL_PROTOCOL.test(url.protocol) ||
         !AGENT_URL_RESOURCE.test(url.resource!)))
   ) {

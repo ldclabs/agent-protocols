@@ -1101,7 +1101,7 @@ pub struct AgentUrl {
 }
 
 fn invalid_agent_url(message: &str) -> SdkError {
-    SdkError::InvalidPayload(format!("invalid agent URL: {message}"))
+    SdkError::protocol("invalid_url", format!("invalid agent URL: {message}"))
 }
 
 fn valid_agent_url_path(protocol: &str, resource: &str) -> bool {
@@ -1138,6 +1138,9 @@ pub fn parse_agent_url(value: &str) -> Result<AgentUrl> {
         url.resource = Some(segments[2].to_owned());
     }
     if let Some(query) = query {
+        if query.split('&').count() > AGENT_URL_MAX_ROUTES {
+            return Err(invalid_agent_url("at most eight routes"));
+        }
         for item in query.split('&') {
             let route = item
                 .strip_prefix("route=")
@@ -1148,15 +1151,12 @@ pub fn parse_agent_url(value: &str) -> Result<AgentUrl> {
             }
             url.routes.push(route.to_owned());
         }
-        if url.routes.len() > AGENT_URL_MAX_ROUTES {
-            return Err(invalid_agent_url("at most eight routes"));
-        }
     }
     Ok(url)
 }
 
+/// Formats an Agent URL. `agent_id` is valid by construction.
 pub fn format_agent_url(url: &AgentUrl) -> Result<String> {
-    url.agent_id.as_str().parse::<AgentId>()?;
     let path = match (&url.protocol, &url.resource) {
         (None, None) => String::new(),
         (Some(protocol), Some(resource)) if valid_agent_url_path(protocol, resource) => {

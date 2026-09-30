@@ -100,7 +100,10 @@ def parse_agent_url(value: Any) -> dict[str, Any]:
             raise AgentProtocolError("invalid_url", "agent URL path must be /<protocol>/<resource>")
         url["protocol"], url["resource"] = segments[1], segments[2]
     if separator:
-        for item in query.split("&"):
+        items = query.split("&")
+        if len(items) > AGENT_URL_MAX_ROUTES:
+            raise AgentProtocolError("invalid_url", "agent URL allows at most eight routes")
+        for item in items:
             if not item.startswith("route="):
                 raise AgentProtocolError("invalid_url", "agent URL query allows only route parameters")
             route = item[len("route="):]
@@ -108,8 +111,6 @@ def parse_agent_url(value: Any) -> dict[str, Any]:
             if route in url["routes"]:
                 raise AgentProtocolError("invalid_url", "duplicate agent URL route")
             url["routes"].append(route)
-        if len(url["routes"]) > AGENT_URL_MAX_ROUTES:
-            raise AgentProtocolError("invalid_url", "agent URL allows at most eight routes")
     return url
 
 
