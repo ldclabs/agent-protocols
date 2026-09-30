@@ -329,10 +329,8 @@ export function validateMailReply(reply: MailLetter, parent: MailLetter): void {
     "reply participants/thread binding mismatch",
   );
 }
-export function validateMailPacket(
-  packet: unknown,
-  expectedId?: string,
-): asserts packet is MailPacket {
+/** Validate a packet and return its canonical bytes, computed once for ID and size checks. */
+function packetBytes(packet: unknown, expectedId?: string): Uint8Array {
   validateMailSchema(packet, "packet");
   const p = packet as MailPacket;
   decodeMailBytes(p.enc, 32);
@@ -354,6 +352,13 @@ export function validateMailPacket(
       "invalid_packet",
       "packet ID mismatch",
     );
+  return bytes;
+}
+export function validateMailPacket(
+  packet: unknown,
+  expectedId?: string,
+): asserts packet is MailPacket {
+  packetBytes(packet, expectedId);
 }
 export function mailPacketId(packet: MailPacket): string {
   return base64UrlEncode(sha3_256(mailCanonicalBytes(packet)));
@@ -515,8 +520,19 @@ export async function openMailPacket(
   packet = clone(packet);
   card = clone(card);
   safeTime(now);
-  validateMailPacket(packet, expectedId);
+  const bytes = packetBytes(packet, expectedId);
   validateMailboxCard(card, owner);
+  return openVerified(packet, bytes, card, key, owner, now);
+}
+/** Open with a card that was already verified for `owner` (the keyring verifies at `add`). */
+async function openVerified(
+  packet: MailPacket,
+  bytes: Uint8Array,
+  card: MailboxCard,
+  key: MailEncryptionKey,
+  owner: string,
+  now: number,
+): Promise<MailLetter> {
   const c = card.event.payload,
     h = packet.header;
   requireMail(
@@ -525,7 +541,7 @@ export async function openMailPacket(
     "card/header binding mismatch",
   );
   requireMail(
-    mailCanonicalBytes(packet).length <= c.max_packet_bytes,
+    bytes.length <= c.max_packet_bytes,
     "payload_too_large",
     "packet exceeds card limit",
   );
@@ -713,10 +729,12 @@ export class MailKeyring {
     now = Date.now(),
     expectedId?: string,
   ): Promise<MailLetter> {
-    validateMailPacket(packet, expectedId);
+    packet = clone(packet);
+    safeTime(now);
+    const bytes = packetBytes(packet, expectedId);
     const x = this.entries.get(packet.header.card_hash);
     requireMail(x, "invalid_packet", "unknown retained card");
-    return openMailPacket(packet, x.card, x.key, this.owner, now, expectedId);
+    return openVerified(packet, bytes, x.card, x.key, this.owner, now);
   }
 }
 export interface MailInboxSnapshot {
@@ -893,7 +911,7 @@ interface RelayMailbox {
 }
 export interface MailRelaySnapshot {
   version: 1;
-  service: string;
+  origin: string;
   mailboxes: {
     current: MailCardRecord;
     last_seq: number;
@@ -926,10 +944,10 @@ export class MailRelayStore {
   private readonly maxPackets: number;
   private readonly maxBytes: number;
   constructor(
-    readonly service: string,
+    readonly origin: string,
     options: MailRelayOptions = {},
   ) {
-    validateOrigin(service);
+    validateOrigin(origin);
     this.nonces = options.nonceStore ?? new MemoryNonceStore();
     this.clock = options.clock ?? Date.now;
     this.maxPackets = options.maxPackets ?? 10000;
@@ -945,9 +963,9 @@ export class MailRelayStore {
     const s = options.snapshot;
     if (s) {
       requireMail(
-        s.version === 1 && s.service === service,
+        s.version === 1 && s.origin === origin,
         "invalid_request",
-        "snapshot service mismatch",
+        "snapshot origin mismatch",
       );
       for (const m of s.mailboxes) {
         const box: RelayMailbox = {
@@ -974,7 +992,7 @@ export class MailRelayStore {
   snapshot(): MailRelaySnapshot {
     return {
       version: 1,
-      service: this.service,
+      origin: this.origin,
       mailboxes: [...this.boxes.values()].map((b) => ({
         current: clone(b.current),
         last_seq: b.lastSeq,
@@ -987,7 +1005,7 @@ export class MailRelayStore {
     };
   }
   discovery(): MailDiscovery {
-    return { protocol: MAIL_PROTOCOL, service: this.service };
+    return { protocol: MAIL_PROTOCOL, service: this.origin };
   }
   publish(card: MailboxCard, now = this.clock()): MailCardRecord {
     card = clone(card);
@@ -1013,7 +1031,7 @@ export class MailRelayStore {
         );
     } else
       requireMail(
-        p.routes.includes(this.service),
+        p.routes.includes(this.origin),
         "permission_denied",
         "first card must list this relay",
       );
@@ -1069,7 +1087,8 @@ export class MailRelayStore {
     packet = clone(packet);
     safeTime(now);
     pathId(mailboxId, 16);
-    validateMailPacket(packet);
+    const bytes = packetBytes(packet),
+      size = bytes.length;
     const h = packet.header;
     requireMail(
       h.mailbox_id === mailboxId,
@@ -1078,12 +1097,12 @@ export class MailRelayStore {
     );
     const b = this.boxes.get(mailboxId);
     requireMail(b, "mailbox_unavailable");
-    const id = mailPacketId(packet),
+    const id = base64UrlEncode(sha3_256(bytes)),
       prior = b.tombstones.get(id);
     if (prior) return { packet_id: id, accepted_at: prior.accepted_at };
     const c = b.current.envelope,
       p = c.event.payload;
-    requireMail(p.routes.includes(this.service), "mailbox_unavailable");
+    requireMail(p.routes.includes(this.origin), "mailbox_unavailable");
     requireMail(h.card_hash === c.hash && now < p.expires_at, "stale_card");
     requireMail(now < h.expires_at, "packet_expired");
     requireMail(
@@ -1092,7 +1111,6 @@ export class MailRelayStore {
       "invalid_packet",
       "packet lifetime exceeds bound",
     );
-    const size = mailCanonicalBytes(packet).length;
     requireMail(
       size <= p.max_packet_bytes,
       "payload_too_large",
@@ -1117,7 +1135,7 @@ export class MailRelayStore {
   }
   private ownerBox(mailboxId: string, jwt: string, now: number): RelayMailbox {
     pathId(mailboxId, 16);
-    const claims = ownerClaims(jwt, this.service, now);
+    const claims = ownerClaims(jwt, this.origin, now);
     const b = this.boxes.get(mailboxId);
     requireMail(b, "mailbox_unavailable");
     requireMail(
@@ -1173,12 +1191,15 @@ export class MailRelayStore {
       b.bytes -= stored.size;
     }
   }
+  /** Drop expired packets and tombstones, then forget mailboxes whose current card's `receive_until` passed. */
   prune(now = this.clock()): void {
     safeTime(now);
-    for (const b of this.boxes.values()) {
+    for (const [mailboxId, b] of this.boxes) {
       this.dropExpired(b, now);
       for (const [id, t] of b.tombstones)
         if (now >= t.expires_at) b.tombstones.delete(id);
+      if (now >= b.current.envelope.event.payload.receive_until)
+        this.boxes.delete(mailboxId);
     }
   }
   private dropExpired(b: RelayMailbox, now: number): void {

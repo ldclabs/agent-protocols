@@ -445,7 +445,7 @@ def generate():
     encryptions = {}
     for name, card_name, letter_name, eph in [('original', 'card', 'letter', 11), ('reencrypted', 'card', 'letter', 12),
                                               ('rotated', 'rotated_card', 'letter', 13), ('lower_nonce', 'card', 'lower_nonce_letter', 14),
-                                              ('reopened', 'reopened_card', 'letter', 15)]:
+                                              ('reopened', 'reopened_card', 'letter', 15), ('long_lived', 'long_lived_card', 'letter', 16)]:
         c, l, ephemeral = envelopes[card_name], envelopes[letter_name], bytes([eph]) * 32
         packet = make_packet(c, l, ephemeral)
         secret = rotated_sk if card_name == 'rotated_card' else sk
@@ -624,6 +624,9 @@ def generate():
         {'op': 'publish', 'card': 'reopened_card', 'now': NOW, 'expected': 'accepted', 'accepted_at': NOW},
         {'op': 'deliver', 'packet': 'reencrypted', 'now': NOW + 3, 'expected': 'stale_card', 'stored': 0},
         {'op': 'deliver', 'packet': 'reopened', 'now': NOW + 4, 'expected': 'accepted', 'accepted_at': NOW + 4, 'stored': 1, 'seqs': [2]},
+        {'op': 'publish', 'card': 'long_lived_card', 'now': NOW, 'expected': 'accepted', 'accepted_at': NOW},
+        # The card is current and unexpired, but the packet's own deadline has passed.
+        {'op': 'deliver', 'packet': 'long_lived', 'now': NOW + DAY + 1000, 'expected': 'packet_expired'},
     ]
     relay = RelayModel()
     mailbox = p['mailbox_id']

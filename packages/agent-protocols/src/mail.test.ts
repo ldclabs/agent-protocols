@@ -492,6 +492,18 @@ test("Mail relay quotas, tombstones, owner authorization and pruning", () => {
     codeOf(() => s.deliver(mailbox, packet("original"), expires)),
     "stale_card",
   );
+  assert.equal(s.card(mailbox).envelope.hash, e.card.hash);
+  // Past the current card's receive_until the mailbox is forgotten; a later card is a new registration.
+  s.prune(e.card.event.payload.receive_until);
+  assert.equal(
+    codeOf(() => s.card(mailbox)),
+    "mailbox_unavailable",
+  );
+  assert.equal(
+    codeOf(() => s.publish(e.moved_card)),
+    "permission_denied",
+  );
+  assert.equal(s.publish(e.rotated_card).accepted_at, now);
 });
 test("Mail pagination uses a plain seq cursor and resumes past deletions", () => {
   const s = new m.MailRelayStore(service, { clock: () => now });

@@ -510,6 +510,41 @@ fn live_control_nonces_quota_pagination_and_failure_atomicity() {
     );
 }
 #[test]
+fn relay_prune_forgets_mailbox_after_receive_until() {
+    let v = vectors();
+    let now = v["now"].as_i64().unwrap();
+    let c = card(&v, "card");
+    let mailbox = c.event.payload.mailbox_id.clone();
+    let mut relay = MailRelayStore::new(ORIGIN).unwrap();
+    relay.publish(&v["envelopes"]["card"], now).unwrap();
+    relay
+        .deliver(&mailbox, &packet(&v, "original"), now)
+        .unwrap();
+    relay.prune(c.event.payload.receive_until - 1).unwrap();
+    assert_eq!(relay.card(&mailbox).unwrap().envelope, c);
+    relay.prune(c.event.payload.receive_until).unwrap();
+    assert_eq!(
+        code(relay.card(&mailbox)).as_deref(),
+        Some("mailbox_unavailable")
+    );
+    assert_eq!(
+        code(relay.deliver(&mailbox, &packet(&v, "original"), now)).as_deref(),
+        Some("mailbox_unavailable")
+    );
+    // A later card is a new registration and must list this relay again.
+    assert_eq!(
+        code(relay.publish(&v["envelopes"]["moved_card"], now)).as_deref(),
+        Some("permission_denied")
+    );
+    assert_eq!(
+        relay
+            .publish(&v["envelopes"]["rotated_card"], now)
+            .unwrap()
+            .accepted_at,
+        now
+    );
+}
+#[test]
 fn keyring_and_card_cache_seal_prune_and_bind_keys() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();

@@ -306,18 +306,23 @@ fn unframe(bytes: &[u8]) -> Result<Value> {
     }
     Ok(value)
 }
-pub fn validate_packet(value: &Value) -> Result<Packet> {
+/// Validate a packet and return it with its canonical bytes, computed once for ID and size checks.
+pub(crate) fn checked_packet(value: &Value) -> Result<(Packet, Vec<u8>)> {
     validate_mail_schema(value, "packet").map_err(|e| fail("invalid_packet", e.to_string()))?;
     let packet: Packet = serde_json::from_value(normalized(value))?;
     fixed_bytes(&packet.enc, 32)?;
     let n = decode_bytes(&packet.ciphertext)?.len();
-    if n < 1040 || n % 1024 != 16 || canonical_bytes(&packet)?.len() > MAX_PACKET_BYTES {
+    let bytes = canonical_bytes(&packet)?;
+    if n < 1040 || n % 1024 != 16 || bytes.len() > MAX_PACKET_BYTES {
         return Err(fail(
             "invalid_packet",
             "invalid ciphertext or packet length",
         ));
     }
-    Ok(packet)
+    Ok((packet, bytes))
+}
+pub fn validate_packet(value: &Value) -> Result<Packet> {
+    Ok(checked_packet(value)?.0)
 }
 pub fn parse_packet(text: &str) -> Result<Packet> {
     if text.len() > 2 * MAX_PACKET_BYTES {
@@ -385,15 +390,26 @@ pub fn decrypt_packet(
     now: i64,
 ) -> Result<Letter> {
     clock(now)?;
-    let packet = validate_packet(&serde_json::to_value(packet)?)?;
+    let (packet, bytes) = checked_packet(&serde_json::to_value(packet)?)?;
     let card = validate_card(&serde_json::to_value(card)?)?;
+    open_verified(&packet, &bytes, &card, key, owner, now)
+}
+/// Open with a card already verified as a historical object (`MailKeyring` verifies at `add`).
+pub(crate) fn open_verified(
+    packet: &Packet,
+    bytes: &[u8],
+    card: &MailboxCard,
+    key: &MailEncryptionKey,
+    owner: &AgentId,
+    now: i64,
+) -> Result<Letter> {
     let h = &packet.header;
     let p = &card.event.payload;
     if &card.event.actor != owner
         || h.card_hash != card.hash
         || h.mailbox_id != p.mailbox_id
         || h.expires_at > p.receive_until
-        || canonical_bytes(&packet)?.len() > p.max_packet_bytes
+        || bytes.len() > p.max_packet_bytes
         || key.public_key() != p.public_key
     {
         return Err(fail("invalid_packet", "recipient/card/key binding"));

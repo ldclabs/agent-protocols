@@ -493,6 +493,26 @@
       },
       "packet_jcs": "{\"ciphertext\":\"85gyd10PY0VtD2iFCkgmVjq-Yxl6S5sjx5vEfS5DO80BO84RmNC2n1smIOGllj9MqwZYlcYOhtbkBCGlfikxbQuUNvAj817crv7nrovwI9aG82T1z_u2OxvA6XZfxn1MY_g7ptuG_pja7r23OThhqOwEYUBimGvtXepmHaezZmvfzmWmidzVe0yN1Gdkuh3pqsJw2ZAanLe6NF8ZlG4aAW0zEqF6uIQ2R2usDszGm7_VICRlHJ0qdFKDCrVSEjGFnIGEijs2yK9uDYekCAtAF03oqwKn-ICEQCqoTWwWMT3XJu0Gs8whhdzNZqm5uwbQ7qJiDlFj37xhvHosmqw5foiyoyYXWkwZqbu5XceitUj5RqRs7-S-DHAWQHrQtwBoyRAL2H1y9U7c-1fpUDFL4gwrp8cZYhmSy8oygYsekl6x6q0QcRbtwLCCbZybY6AIL6R8yBxpIKi3OEGMUGPG6cKlfcjb9GQHJPNmr7Hj8fyT_kL2GEyGr53USP9DnXO9JI-QMtPvW0acRKVxAbGcDQGbH2MfmUSanJlGWAljgE70DqFj9Mvooovwo5w8kRFuPCmwta9gPTYmpiFJW5wIGmDhIdS_QEXlQ3xb_VCxrlT66cbakOyrtPVaYnVEoYuaudWX4H7KrjxOeBIDzWLRJtusafVGJtiCXqJ3rgCoCBotQOohj36MfnsG3toX9zGzExn_RIgPq3aYLlAt0vFYeyapTivqs8sg_0ZWFmc9iBg9uzvQO7pYwD-zwLaFUUEmEXt3k8fQZIhV-kjJj6btLRrfdQBPNJmmNk2C9ZIJNiIXwg0rE40LuYSqzFoYJiwM5G41IzvLnSifJMkTM6x5uFFlOYvtvL2dtPtH5PiSi8d1G8QpUG03xKDpva8iuI-wHahUBpzSyl9LYFiRzd2cPUy6xGRlN162pzQWFALyiEvSahWZMFLB7_UcqE1MXooHDVozzb5YlxAuy2MGD3SetKEwrDPdPrhBtGp0_Hh55_lVznG1NLfb0EgECYDLC6BH-9MElSjsQOccvv-g3TYeFzpZwmscI050pYLzCXlbihZgI0yobwglpgCgOkc5TX6TwLz-zvT8dUQohTv2Cx0gRptZLwj9U6IUJdhpVTcGD_9NKRMLqE5GTzfc0-frE9dwn6wnU7klUGdToH9RqdZg0OrnlYvcC6dEAS2b-d4oWkH76FFyJYiaIfIi7SaS-o2L5pTw1wths7jHg0hFsPV-hqcJFdW-jtfME9SuirGWjGr5zQlVvxf-vw4-TGjRVVNuBASMOs1TqU70qVpa2nDHEwwT5n0w3Y8mDLJii6w1TEyV4C_u_buj5eIjae6l4hrGd3RgXLX8e8k0b5v1x0xaJPs6sa6Wr-pIHqdAwLmfavg\",\"enc\":\"foHpFuOvzbMe902NuSPyuhW4KhqmWU6iKNzfJ9e1T2w\",\"header\":{\"card_hash\":\"2I2Xu6pA-vwaa3JvqsMmGr1yAsbJMuh4EVpa9R0H0hM\",\"expires_at\":1790812801000,\"mailbox_id\":\"AAECAwQFBgcICQoLDA0ODw\",\"protocol\":\"agent-mail/1.0\"}}",
       "packet_id": "Qbz1efMWkVta4hmG2Vn7Dkg8EuglLhp3ONi3j0ynoiE"
+    },
+    "long_lived": {
+      "card": "long_lived_card",
+      "letter": "letter",
+      "ephemeral_secret_hex": "1010101010101010101010101010101010101010101010101010101010101010",
+      "plaintext_b64": "AAACvnsiZXZlbnQiOnsiYWN0b3IiOiJkaWQ6YWdlbnQ6Nmtwc1ktS2NVZ3EtOVZCN0V5N0YtWlZIZHE2LXZudVNRaDdxYVJSRzBpdyIsImNyZWF0ZWRfYXQiOjE3OTA3MjY0MDAwMDAsIm5vbmNlIjoyMDAsInBheWxvYWQiOnsiZXhwaXJlc19hdCI6MTc5MDgxMjgwMTAwMCwicGFydHMiOlt7ImRhdGEiOiJRMkZ1SUhkbElHTnZiWEJoY21VZ2IzVnlJR1YyYVdSbGJtTmxQd3JtaUpIa3U2emxqNl9rdTZYbW9MamxyN25vcjRIbWphN2xrSmZ2dko4IiwibWVkaWFfdHlwZSI6InRleHQvcGxhaW4ifSx7ImRhdGEiOiJBQUgtX3ciLCJtZWRpYV90eXBlIjoiYXBwbGljYXRpb24vb2N0ZXQtc3RyZWFtIiwibmFtZSI6ImV2aWRlbmNlLmJpbiJ9XSwic3ViamVjdCI6IkEgcHJpdmF0ZSBxdWVzdGlvbiAvIOengeS_oSIsInRocmVhZF9pZCI6Ik1ERXlNelExTmpjNE9UbzdQRDAtUHciLCJ0byI6ImRpZDphZ2VudDpFNWoyTEcwYVJYeFJ1bXBMWHoyOUwybjhxVElXSVkzSW1YNUJhOUY5azhvIn0sInByb3RvY29sIjoiYWdlbnQtbWFpbC8xLjAiLCJ0eXBlIjoibWFpbC5tZXNzYWdlIn0sImhhc2giOiI4Y09tU2dMa3NtQmRGSTVoZXNVdzBIZ20xOVZxbk9pZVMxakVDVUxqWkRZIiwic2lnbmF0dXJlIjoiZ0dVS3JvdE5YSTV2R1NMR3V3NFV4VThJenlSWkx2RTBtYjVWSEZLd0pWZ0p0R2p5RVNoXzJ5Y0FRZEhxSW9ydHhfXzZuR3ozV3hubDlEVm1ONWhFRFEifQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "info_hex": "6167656e742d6d61696c2f312e30",
+      "aad_jcs": "{\"card_hash\":\"p6Lfv9JJtXRcbDDF8qi9Rc-beBftx9uD12nBqa4u4bk\",\"expires_at\":1790812801000,\"mailbox_id\":\"AAECAwQFBgcICQoLDA0ODw\",\"protocol\":\"agent-mail/1.0\"}",
+      "packet": {
+        "header": {
+          "protocol": "agent-mail/1.0",
+          "mailbox_id": "AAECAwQFBgcICQoLDA0ODw",
+          "card_hash": "p6Lfv9JJtXRcbDDF8qi9Rc-beBftx9uD12nBqa4u4bk",
+          "expires_at": 1790812801000
+        },
+        "enc": "eB-quQhDAVDazN1vnWxQhuNPc6k-u6onF2XlA27fxRk",
+        "ciphertext": "GmZ56LjXGHfc7ehdIc6TC--kI_AR4UFNmpS1Fy75Ow_bLubKdXxUKAkYBPlZi93CPcxbkKZKk4xSZyU7JgOgrTdwEsvGoUzXow66RIgmhY23uAX3BUljsYSFGhPmIaStdb9i7JY1Fzj8plTSHT8NuVyVxpdiVt-HfYAVN-IL8Sn3uGabxEIl0EccUz_giExio3qDUdlyQhc7Mv-WLpS19U_3QeXQ8gA8HXt37i-KXyBD-oNFSDKJk58cRN6KX21cijgO8BB101IcqMI3ms8D318wXxfO-g-0kBA4fstGUQf4caLVrLWIx8e8se6Y0Rzjrrc7qc07ema1F_HXvu0deSYPtoZj8XvZw4cDpNd6s-D-JwFAlU-4tp7tTHKGEADnmS9S-8bKhNIXttHAh6nYFjQbWucyHbd6soDlBaojniSJle_5krgEua7gDT2ONSuVwDEL6mkfNrhB17TWwToO9dSO6TbeA_hJhVTUUV3VsjBNdOp7zA6zR7Uo2CxrUCsOCS0hlrje0kdnmoB_tNbw5tYSorgKiKsfIhXVBEWRQYR0pmGCc4C9S2VnotBjU3x1_IsDQYHdl3p5aulBnNqJMEofyFhQD1JTVT9gmRtyL-iQwg5c-qJ3ypa6P_WT6cf9E9siyQO0HM55We3rof4JIh7nKi7PBCJIgh5bJOsPRcHxTg4clv7hrlQL73oyCcqNkbWsvqkMx4RlqtFrCNYwvq33RgfzUTvV-Vavp6IYHNAmUEeyeA1pSFZ_M3xc6f9_KsoztfDGC5VL9g-33ApXvmXODn_E48UgKajdp_dmVKkh_LXKI4rxpwfrXUicjxF6d9-ebPPg_q5VYjXWNSWywRxF1-Cijt4dQg4hq2zFOdS95TmwNRssEMNEhPvXCiUFdqzBqCLtT7mRtopDzTl-f7zOu-M4B8wnWHT9jz1SwyOkKX5zh1xijZtRaesXkixFNyIiZPHLsxLMzVR84KC2S-yT3b7yBc9DjVcoip7ww6ahCJw42tqKDfzL3QS-KZCVbT1HC0-D0uqrYXxZpNtqWTXVBJ0BFhMVM1duakrwyoNFdnJXZ5rUMWLONXZYVilSXIRh3AbSb_VMg4ajDneA9A3ykc3oFcQFgoxpJJMGxIAvO6gVTe4YsRkRaOyySDJErZ0YkvpeRWnUtfY_12_wjmgDUcKukhHOoKATn1FFoewEmHUFXlEPE1I0sJSD7tygm5Txq_dGnWO-WYFKjFWNvxpGeMpwUFYqdhxZjFq3gUIJVI3gSTnSHXP7Gv_S9YdCdoZOEQcOIB7QojUSgfW_IXlaKT7GbabJ5mHHxxkVR172OVRBdwLC2RpsvuSgLHOR6ZyNIIiQ3k_34VcxQOa0OwF3nFTj3YcP-sTgixZX7Ss"
+      },
+      "packet_jcs": "{\"ciphertext\":\"GmZ56LjXGHfc7ehdIc6TC--kI_AR4UFNmpS1Fy75Ow_bLubKdXxUKAkYBPlZi93CPcxbkKZKk4xSZyU7JgOgrTdwEsvGoUzXow66RIgmhY23uAX3BUljsYSFGhPmIaStdb9i7JY1Fzj8plTSHT8NuVyVxpdiVt-HfYAVN-IL8Sn3uGabxEIl0EccUz_giExio3qDUdlyQhc7Mv-WLpS19U_3QeXQ8gA8HXt37i-KXyBD-oNFSDKJk58cRN6KX21cijgO8BB101IcqMI3ms8D318wXxfO-g-0kBA4fstGUQf4caLVrLWIx8e8se6Y0Rzjrrc7qc07ema1F_HXvu0deSYPtoZj8XvZw4cDpNd6s-D-JwFAlU-4tp7tTHKGEADnmS9S-8bKhNIXttHAh6nYFjQbWucyHbd6soDlBaojniSJle_5krgEua7gDT2ONSuVwDEL6mkfNrhB17TWwToO9dSO6TbeA_hJhVTUUV3VsjBNdOp7zA6zR7Uo2CxrUCsOCS0hlrje0kdnmoB_tNbw5tYSorgKiKsfIhXVBEWRQYR0pmGCc4C9S2VnotBjU3x1_IsDQYHdl3p5aulBnNqJMEofyFhQD1JTVT9gmRtyL-iQwg5c-qJ3ypa6P_WT6cf9E9siyQO0HM55We3rof4JIh7nKi7PBCJIgh5bJOsPRcHxTg4clv7hrlQL73oyCcqNkbWsvqkMx4RlqtFrCNYwvq33RgfzUTvV-Vavp6IYHNAmUEeyeA1pSFZ_M3xc6f9_KsoztfDGC5VL9g-33ApXvmXODn_E48UgKajdp_dmVKkh_LXKI4rxpwfrXUicjxF6d9-ebPPg_q5VYjXWNSWywRxF1-Cijt4dQg4hq2zFOdS95TmwNRssEMNEhPvXCiUFdqzBqCLtT7mRtopDzTl-f7zOu-M4B8wnWHT9jz1SwyOkKX5zh1xijZtRaesXkixFNyIiZPHLsxLMzVR84KC2S-yT3b7yBc9DjVcoip7ww6ahCJw42tqKDfzL3QS-KZCVbT1HC0-D0uqrYXxZpNtqWTXVBJ0BFhMVM1duakrwyoNFdnJXZ5rUMWLONXZYVilSXIRh3AbSb_VMg4ajDneA9A3ykc3oFcQFgoxpJJMGxIAvO6gVTe4YsRkRaOyySDJErZ0YkvpeRWnUtfY_12_wjmgDUcKukhHOoKATn1FFoewEmHUFXlEPE1I0sJSD7tygm5Txq_dGnWO-WYFKjFWNvxpGeMpwUFYqdhxZjFq3gUIJVI3gSTnSHXP7Gv_S9YdCdoZOEQcOIB7QojUSgfW_IXlaKT7GbabJ5mHHxxkVR172OVRBdwLC2RpsvuSgLHOR6ZyNIIiQ3k_34VcxQOa0OwF3nFTj3YcP-sTgixZX7Ss\",\"enc\":\"eB-quQhDAVDazN1vnWxQhuNPc6k-u6onF2XlA27fxRk\",\"header\":{\"card_hash\":\"p6Lfv9JJtXRcbDDF8qi9Rc-beBftx9uD12nBqa4u4bk\",\"expires_at\":1790812801000,\"mailbox_id\":\"AAECAwQFBgcICQoLDA0ODw\",\"protocol\":\"agent-mail/1.0\"}}",
+      "packet_id": "C3U1akMWT2VdOzJ06cj6scEu72CtaQbEDso5RrGDiQc"
     }
   },
   "schema_cases": [
@@ -2082,6 +2102,19 @@
         "seqs": [
           2
         ]
+      },
+      {
+        "op": "publish",
+        "card": "long_lived_card",
+        "now": 1790726400000,
+        "expected": "accepted",
+        "accepted_at": 1790726400000
+      },
+      {
+        "op": "deliver",
+        "packet": "long_lived",
+        "now": 1790812801000,
+        "expected": "packet_expired"
       }
     ],
     "relay_registration": [

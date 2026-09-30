@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import quote, urlencode, urljoin, urlparse
 
 try:
@@ -460,11 +460,12 @@ class KnowledgeClient:
         return result
 
 
-def mail_public_network_policy(url: str) -> None:
+def mail_public_network_policy(url: str) -> bool:
     """Optional Mail URL policy: reject non-public addresses, including DNS answers.
 
-    Pass it as ``network_policy`` to opt in. Rebinding-resistant routing still
-    needs the deployment's resolver/egress controls.
+    Pass it as ``network_policy`` to opt in. A policy allows a request by returning
+    a true value; returning a false value or raising rejects it. Rebinding-resistant
+    routing still needs the deployment's resolver/egress controls.
     """
     import ipaddress
     import socket
@@ -475,6 +476,7 @@ def mail_public_network_policy(url: str) -> None:
             raise ValueError('non-public destination')
     except (ValueError, OSError) as exc:
         raise AgentProtocolError('permission_denied', 'Mail network policy rejected destination') from exc
+    return True
 
 
 class MailClient:
@@ -509,7 +511,7 @@ class MailClient:
         parsed = urlparse(url)
         if parsed.scheme != 'https' or parsed.netloc != urlparse(self.base_url).netloc or parsed.username is not None:
             raise AgentProtocolError('invalid_request', 'cross-origin Mail request')
-        if self.network_policy is not None and self.network_policy(url) is False:
+        if self.network_policy is not None and not self.network_policy(url):
             raise AgentProtocolError('permission_denied', 'Mail network policy rejected destination')
         headers = {'Accept': 'application/json'}
         if jwt is not None:
@@ -591,12 +593,17 @@ class MailClient:
         validate_mail_packet_list(page, mailbox_id, limit=limit)
         return page
 
-    def pages(self, mailbox_id: str, owner: str, jwt: str, *, limit: int = 100,
+    def pages(self, mailbox_id: str, owner: str, jwt: str | Callable[[], str], *, limit: int = 100,
               now_ms: int | None = None) -> Iterator[dict[str, Any]]:
-        """Every page of one enumeration; seq must keep increasing across pages."""
+        """Every page of one enumeration; seq must keep increasing across pages.
+
+        ``jwt`` may be a callable that mints a fresh owner token per page, since a
+        long enumeration can outlive one request JWT.
+        """
         cursor, last_seq = None, 0
         while True:
-            page = self.list(mailbox_id, owner, jwt, limit=limit, cursor=cursor, now_ms=now_ms)
+            token = jwt() if callable(jwt) else jwt
+            page = self.list(mailbox_id, owner, token, limit=limit, cursor=cursor, now_ms=now_ms)
             for record in page['result']:
                 if record['seq'] <= last_seq:
                     raise AgentProtocolError('invalid_response', 'Mail pagination repeated or reordered records')

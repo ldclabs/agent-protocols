@@ -17,9 +17,8 @@ from .errors import AgentProtocolError
 from .identity import MAX_SAFE_NONCE, Envelope, MemoryNonceStore, NonceStore, validate_agent_id, validate_origin
 from .mail import (
     MAIL_FUTURE_SKEW_MS, MAIL_MAX_PACKET_BYTES, MAIL_MAX_TTL_MS,
-    MailEncryptionKey, _b64, _decode, _jcs, _now, _require,
-    decrypt_mail, encrypt_mail, mail_packet_id, parse_mail_envelope, parse_mail_packet,
-    validate_mail_envelope, validate_mail_id, validate_mail_packet, validate_mail_schema, validate_mailbox_card,
+    MailEncryptionKey, _b64, _decode, _hash, _jcs, _now, _open_verified, _packet_bytes, _parse_bounded, _require,
+    encrypt_mail, validate_mail_envelope, validate_mail_id, validate_mail_schema, validate_mailbox_card,
     verify_mail_owner_jwt,
 )
 
@@ -94,11 +93,13 @@ class MailKeyring:
             self._entries[card['hash']] = (card, key)
 
     def open(self, packet: dict[str, Any], *, now_ms: int | None = None, packet_id: str | None = None) -> Envelope:
-        validate_mail_packet(packet, packet_id=packet_id)
+        """Verify and decrypt with the retained card the packet names; cards were verified at ``add``."""
+        packet, now = copy.deepcopy(packet), _now(now_ms)
+        raw = _packet_bytes(packet, packet_id)
         with self._lock:
             entry = self._entries.get(packet['header']['card_hash'])
         _require(entry is not None, 'invalid_packet', 'unknown retained mailbox card')
-        return decrypt_mail(packet, entry[0], entry[1], self.owner, now_ms=now_ms, packet_id=packet_id)
+        return _open_verified(packet, raw, entry[0], entry[1], self.owner, now)
 
     def prune(self, *, now_ms: int | None = None) -> int:
         now = _now(now_ms)
@@ -184,7 +185,7 @@ class _Mailbox:
                 self.bytes -= size
 
 
-_CURSOR = re.compile(r'(?:0|[1-9][0-9]*)')
+_CURSOR = re.compile(r'(?:0|[1-9][0-9]{0,15})')  # A decimal safe integer has at most 16 digits.
 
 
 class MailRelayStore:
@@ -211,10 +212,9 @@ class MailRelayStore:
         return {'protocol': 'agent-mail/1.0', 'service': self.origin}
 
     def publish(self, card: Envelope | str | bytes, *, now_ms: int | None = None) -> dict[str, Any]:
-        card = parse_mail_envelope(card, max_bytes=self.max_body_bytes) if isinstance(card, (str, bytes)) else copy.deepcopy(card)
+        card = _parse_bounded(card, self.max_body_bytes, 'invalid_event') if isinstance(card, (str, bytes)) else copy.deepcopy(card)
         now = _now(now_ms)
-        validate_mail_schema(card, 'mailboxCardEnvelope')
-        validate_mail_envelope(card)
+        validate_mail_envelope(card, 'mailboxCardEnvelope')
         e, p = card['event'], card['event']['payload']
         with self._lock:
             box = self._boxes.get(p['mailbox_id'])
@@ -248,11 +248,11 @@ class MailRelayStore:
     def deliver(self, mailbox_id: str, packet: dict[str, Any] | str | bytes, *, now_ms: int | None = None) -> dict[str, Any]:
         now = _now(now_ms)
         validate_mail_id(mailbox_id, size=16)
-        packet = parse_mail_packet(packet, max_body_bytes=self.max_body_bytes) if isinstance(packet, (str, bytes)) else copy.deepcopy(packet)
-        validate_mail_packet(packet)
+        packet = _parse_bounded(packet, self.max_body_bytes, 'invalid_packet') if isinstance(packet, (str, bytes)) else copy.deepcopy(packet)
+        raw = _packet_bytes(packet)
         h = packet['header']
         _require(h['mailbox_id'] == mailbox_id, 'invalid_packet', 'path/header mailbox mismatch')
-        pid = mail_packet_id(packet)
+        pid, size = _hash(raw), len(raw)
         with self._lock:
             box = self._boxes.get(mailbox_id)
             _require(box is not None, 'mailbox_unavailable', 'unknown mailbox')
@@ -266,7 +266,6 @@ class MailRelayStore:
             _require(now < h['expires_at'], 'packet_expired', 'packet expired')
             _require(h['expires_at'] <= min(c['receive_until'], now + MAIL_MAX_TTL_MS + MAIL_FUTURE_SKEW_MS),
                      'invalid_packet', 'packet exceeds accepted lifetime')
-            size = len(_jcs(packet))
             _require(size <= c['max_packet_bytes'], 'payload_too_large', 'packet exceeds card limit')
             box.drop_expired(now)
             _require(len(box.packets) < self.max_packets and box.bytes + size <= self.max_bytes and box.last_seq < MAX_SAFE_NONCE,
@@ -312,12 +311,15 @@ class MailRelayStore:
                 box.bytes -= stored[1]
 
     def prune(self, *, now_ms: int | None = None) -> None:
+        """Drop expired packets and tombstones, then forget mailboxes whose current card's receive_until passed."""
         now = _now(now_ms)
         with self._lock:
-            for box in self._boxes.values():
+            for mailbox_id, box in list(self._boxes.items()):
                 box.drop_expired(now)
                 for pid in [pid for pid, t in box.tombstones.items() if now >= t['expires_at']]:
                     del box.tombstones[pid]
+                if now >= box.current['envelope']['event']['payload']['receive_until']:
+                    del self._boxes[mailbox_id]
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

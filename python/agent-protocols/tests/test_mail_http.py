@@ -55,7 +55,7 @@ def test_all_http_operations_use_fixed_paths_and_validate_bound_responses():
     discovery = {'protocol': 'agent-mail/1.0', 'service': ORIGIN, 'endpoints': {'mailboxes': ORIGIN + '/ignored'}}
     session, adapter = transport(discovery, card, card, (delivery, 202, {}), page, (b'', 204, {}))
     checked = []
-    client = MailClient(ORIGIN, session, network_policy=lambda url: checked.append(url))
+    client = MailClient(ORIGIN, session, network_policy=lambda url: checked.append(url) or True)
     client.protocol()
     assert client.publish(ENVS['card']) == card
     assert client.card(MAILBOX, OWNER, now_ms=NOW) == card
@@ -181,8 +181,9 @@ def test_client_pages_follow_cursors_and_detect_rewinds():
     first = relay.list(MAILBOX, TOKEN, limit=1, now_ms=NOW)
     second = relay.list(MAILBOX, TOKEN, limit=1, cursor=first['next_cursor'], now_ms=NOW)
     session, _ = transport(first, second)
-    pages = list(MailClient(ORIGIN, session).pages(MAILBOX, OWNER, TOKEN, limit=1, now_ms=NOW))
-    assert [r['seq'] for p in pages for r in p['result']] == [1, 2]
+    minted = []
+    pages = list(MailClient(ORIGIN, session).pages(MAILBOX, OWNER, lambda: minted.append(TOKEN) or TOKEN, limit=1, now_ms=NOW))
+    assert [r['seq'] for p in pages for r in p['result']] == [1, 2] and len(minted) == 2
     session, _ = transport(first, first)
     rewound = MailClient(ORIGIN, session).pages(MAILBOX, OWNER, TOKEN, limit=1, now_ms=NOW)
     next(rewound)
@@ -197,10 +198,11 @@ def test_client_pages_follow_cursors_and_detect_rewinds():
 
 def test_local_network_policy_runs_before_transport(monkeypatch):
     session, adapter = transport()
-    client = MailClient(ORIGIN, session, network_policy=lambda _: False)
-    with pytest.raises(AgentProtocolError) as err:
-        client.protocol()
-    assert err.value.code == 'permission_denied' and not adapter.calls
+    for policy in (lambda _: False, lambda _: None):  # Any false value rejects, like the TS allowUrl option.
+        client = MailClient(ORIGIN, session, network_policy=policy)
+        with pytest.raises(AgentProtocolError) as err:
+            client.protocol()
+        assert err.value.code == 'permission_denied' and not adapter.calls
     monkeypatch.setattr('socket.getaddrinfo', lambda *_args, **_kwargs: [(2, 1, 6, '', ('127.0.0.1', 443))])
     with pytest.raises(AgentProtocolError):
         mail_public_network_policy(ORIGIN+'/.well-known/agent-mail')

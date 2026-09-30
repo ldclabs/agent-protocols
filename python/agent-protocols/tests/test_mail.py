@@ -159,6 +159,21 @@ def test_relay_concurrent_delivery_delete_tombstone_and_quota_are_atomic():
     assert [r['seq'] for r in relay.list(MAILBOX, TOKEN, now_ms=NOW)['result']] == [2]
 
 
+def test_relay_prune_forgets_mailbox_after_receive_until():
+    relay = MailRelayStore(ORIGIN)
+    relay.publish(ENVS['card'], now_ms=NOW)
+    relay.deliver(MAILBOX, packet('original'), now_ms=NOW)
+    receive_until = ENVS['card']['event']['payload']['receive_until']
+    relay.prune(now_ms=receive_until - 1)
+    assert relay.card(MAILBOX)['envelope'] == ENVS['card'] and relay.snapshot()['mailboxes'][0]['packets'] == []
+    relay.prune(now_ms=receive_until)
+    assert code_of(lambda: relay.card(MAILBOX)) == 'mailbox_unavailable'
+    assert code_of(lambda: relay.deliver(MAILBOX, packet('original'), now_ms=NOW)) == 'mailbox_unavailable'
+    # A later card is a new registration and must list this relay again.
+    assert code_of(lambda: relay.publish(ENVS['moved_card'], now_ms=NOW)) == 'permission_denied'
+    assert relay.publish(ENVS['rotated_card'], now_ms=NOW)['accepted_at'] == NOW
+
+
 def test_relay_pagination_owner_binding_and_restart():
     relay = MailRelayStore(ORIGIN)
     relay.publish(ENVS['card'], now_ms=NOW)
@@ -170,7 +185,7 @@ def test_relay_pagination_owner_binding_and_restart():
     relay.delete(MAILBOX, first['result'][0]['packet_id'], TOKEN, now_ms=NOW)
     second = relay.list(MAILBOX, TOKEN, limit=2, cursor=first['next_cursor'], now_ms=NOW)
     assert [r['seq'] for r in second['result']] == [2, 3] and 'next_cursor' not in second
-    for cursor in ('', '-1', '01', 'x'):
+    for cursor in ('', '-1', '01', 'x', '1' * 17, '9' * 5000):
         assert code_of(lambda: relay.list(MAILBOX, TOKEN, cursor=cursor, now_ms=NOW)) == 'invalid_request'
     assert code_of(lambda: relay.list(MAILBOX, 'bad', now_ms=NOW)) == 'invalid_token'
     assert code_of(lambda: relay.list(MAILBOX, token(SENDER), now_ms=NOW)) == 'permission_denied'

@@ -119,13 +119,15 @@ impl MailKeyring {
         self.entries.insert(card.hash.clone(), (card, key));
         Ok(())
     }
-    /// Verify and decrypt a packet with the retained card it names.
+    /// Verify and decrypt a packet with the retained card it names; cards were verified at `add`.
     pub fn open(&self, packet: &Packet, now: i64) -> Result<Letter> {
+        clock(now)?;
+        let (packet, bytes) = checked_packet(&serde_json::to_value(packet)?)?;
         let (card, key) = self
             .entries
             .get(&packet.header.card_hash)
             .ok_or_else(|| fail("invalid_packet", "unknown retained card"))?;
-        decrypt_packet(packet, card, key, &self.owner, now)
+        open_verified(&packet, &bytes, card, key, &self.owner, now)
     }
     /// Only keys past the signed `receive_until` are removed. This cannot erase
     /// copies held in snapshots or backups, which the application must manage.
@@ -366,12 +368,12 @@ impl MailRelayStore {
     ) -> Result<DeliveryResult> {
         clock(now)?;
         path_id(mailbox_id, 16)?;
-        let packet = validate_packet(&serde_json::to_value(packet)?)?;
+        let (packet, bytes) = checked_packet(&serde_json::to_value(packet)?)?;
         let h = &packet.header;
         if h.mailbox_id != mailbox_id {
             return Err(fail("invalid_packet", "path mailbox mismatch"));
         }
-        let id = packet_id(&packet)?;
+        let (id, size) = (hash_bytes(&bytes), bytes.len());
         let mailbox = self
             .mailboxes
             .get_mut(mailbox_id)
@@ -399,7 +401,6 @@ impl MailRelayStore {
         {
             return Err(fail("invalid_packet", "packet expiry bound"));
         }
-        let size = canonical_bytes(&packet)?.len();
         if size > p.max_packet_bytes {
             return Err(fail("payload_too_large", "card packet limit"));
         }
@@ -489,13 +490,16 @@ impl MailRelayStore {
         }
         Ok(())
     }
-    /// Pruning keeps ownership, current cards and unexpired tombstones.
+    /// Drop expired packets and tombstones, then forget mailboxes whose
+    /// current card's `receive_until` passed; a later card is a new registration.
     pub fn prune(&mut self, now: i64) -> Result<()> {
         clock(now)?;
         for m in self.mailboxes.values_mut() {
             m.drop_expired(now);
             m.tombstones.retain(|_, (_, expires)| now < *expires);
         }
+        self.mailboxes
+            .retain(|_, m| now < m.current.envelope.event.payload.receive_until);
         Ok(())
     }
     pub fn snapshot(&self) -> Result<Value> {

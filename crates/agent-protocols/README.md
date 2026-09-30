@@ -220,7 +220,8 @@ assert!(matches!(accepted, InboxAcceptance::Accepted(_)));
 - `MailRelayStore` models live card publication, ownership, route checks,
   per-mailbox packet quotas (`rate_limited`), stable sequence numbers, `seq`
   cursors and deletion tombstones. Delivery results never include `seq`. `list`
-  and `delete` require the owner's signed JWT. `publish_with_nonce_store` accepts
+  and `delete` require the owner's signed JWT. `prune` drops expired packets and
+  tombstones and forgets mailboxes whose current card's `receive_until` passed. `publish_with_nonce_store` accepts
   the shared origin-wide Identity `NonceStore`; invalid writes do not consume
   its nonce, and the short-lived nonce cache is not part of the snapshot.
 - All state helpers are **in-memory**, not durable or hosted services. Their

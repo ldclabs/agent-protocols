@@ -242,7 +242,8 @@ dependencies do not guarantee physical erasure of GC-managed memory; use suitabl
 key custody and retention controls where erasure is a security requirement.
 
 `MailRelayStore` is an in-memory component, not a durable relay server. It provides
-atomic publication/sequence allocation, permanent mailbox ownership, live nonce
+atomic publication/sequence allocation, mailbox ownership bound until the current
+card's `receive_until` passes (`prune` then forgets the mailbox), live nonce
 admission, route checks, per-mailbox ciphertext quotas (`rate_limited`),
 idempotent deleted-packet tombstones, owner-only listing/deletion, and plain
 `seq` cursors. Delivery results never include the mailbox `seq`. Its lock
@@ -258,8 +259,9 @@ Install `agent-protocols[http]` for `agent_protocols.http_client.MailClient`.
 fixed at `/v1/mailboxes` and `protocol()` reads the informational discovery
 document. `publish`, `card(mailbox_id, owner)`, `deliver(packet)`,
 `list(mailbox_id, owner, jwt)` and `delete(mailbox_id, packet_id, owner, jwt)`
-validate their inputs and responses; `pages` follows cursors and rejects `seq`
-regressions. Supply/persist a `card_cache` when creating a client; fetching a
+validate their inputs and responses; `pages` follows cursors, rejects `seq`
+regressions, and accepts a callable that mints a fresh owner token per page.
+Supply/persist a `card_cache` when creating a client; fetching a
 closed, moved or expired card still advances its pin.
 
 Delivery and public discovery/card reads carry no identity credentials. Mail uses
@@ -269,6 +271,7 @@ are not inherited. Only explicit owner JWTs accompany private reads/deletes.
 Redirects are disabled, exact response URLs are checked, and streamed responses
 have a configurable byte limit (default 128 MiB). Injected session adapters are
 trusted transport code. Pass `network_policy` to apply local network rules before
-every request; `mail_public_network_policy` rejects destinations with non-public
+every request: a policy allows a URL by returning a true value, and rejects it by
+returning a false value or raising. `mail_public_network_policy` rejects destinations with non-public
 DNS answers, and deployments still need resolver/egress controls against DNS
 rebinding. Signed routes grant no permission to bypass local policy.

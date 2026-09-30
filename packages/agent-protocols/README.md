@@ -203,10 +203,10 @@ The main building blocks are:
 | `MailCardCache.observe/seal/prune/snapshot` | Pins the greatest-nonce card per mailbox; an older or conflicting card fails with `stale_card`. A newer closed/expired card still updates the pin although sending fails, so persist the snapshot on these outcomes. `prune` drops pins once every earlier card has expired. |
 | `MailKeyring.add/open/prune/exportSnapshot/restore` | Retain old verified cards and secrets through their `receive_until`. Snapshots include secrets and require protected storage. |
 | `MailInbox.accept/has/prune/snapshot` | Cross-route, cross-encryption deduplication by letter ID, with concurrent receive protection. The application stores accepted letters. Restore with `new MailInbox(keyring, snapshot)`. |
-| `MailRelayStore` | Live card publication, injectable Identity nonce store, route checks, opaque packets, per-mailbox quotas, tombstones, owner JWT authorization, and `seq` cursors. |
+| `MailRelayStore` | Live card publication, injectable Identity nonce store, route checks, opaque packets, per-mailbox quotas, tombstones, owner JWT authorization, and `seq` cursors. `prune` drops expired packets and tombstones and forgets mailboxes whose current card's `receive_until` passed. |
 | `validateMailReply`, `mailTextPart`, `mailPartText` | Bind a reply to its parent's participants, letter ID, and thread; encode/decode inert UTF-8 content without rendering or executing it. |
 
-`MailRelayStore(service, { clock?, nonceStore?, maxPackets?, maxBytes?, snapshot? })`
+`MailRelayStore(origin, { clock?, nonceStore?, maxPackets?, maxBytes?, snapshot? })`
 provides `publish`, `card`, `deliver`, `list`, `delete`, `prune`, `discovery`, and
 `snapshot`. `publishJson` and `deliverJson` enforce a raw UTF-8 body bound before
 strict parsing. Default per-mailbox quotas are 10,000 packets and 64 MiB and
