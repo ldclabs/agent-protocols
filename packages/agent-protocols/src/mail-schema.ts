@@ -4,7 +4,7 @@ export const MAIL_SCHEMA = {
   $id: "https://agent-protocols.dev/schemas/agent-mail/1.0.schema.json",
   title: "Agent Mail Protocol 1.0",
   description:
-    "Structural definitions; signed objects and packets are closed, while Identity list/discovery extensions are retained. Strict I-JSON, Unicode scalar validity, canonical JCS, parsed URL origins, Ed25519 signatures, HPKE and all-zero X25519 checks, byte lengths, cross-field equality, lifetime bounds, receipt/reply binding, authorization, and stateful lifecycle requirements need semantic validation; passing this schema is not protocol conformance. Select a named definition for HTTP response objects.",
+    "Structural definitions; signed objects and packets are closed, while Identity list/discovery extensions are retained. Strict I-JSON, Unicode scalar validity, canonical JCS, parsed URL origins, Ed25519 signatures, HPKE and all-zero X25519 checks, byte lengths, cross-field equality, lifetime bounds, reply binding, authorization, and stateful lifecycle requirements need semantic validation; passing this schema is not protocol conformance. Select a named definition for HTTP response objects.",
   oneOf: [
     {
       $ref: "#/$defs/envelope",
@@ -54,23 +54,12 @@ export const MAIL_SCHEMA = {
       description:
         "Approximate syntax only. Identity canonical HTTPS origin parsing and serialization are a semantic requirement.",
     },
-    mailboxesEndpoint: {
-      type: "string",
-      pattern: "^https://[^/?#@\\s]+(?:/[^?#\\s]*)?$(?![\\s\\S])",
-      description:
-        "Semantic validation additionally requires the same canonical HTTPS origin as service, no userinfo/query/fragment/trailing slash, and valid URL parsing.",
-      not: {
-        pattern: "/$(?![\\s\\S])",
-      },
-    },
     mailboxCardPayload: {
       type: "object",
       required: [
         "mailbox_id",
-        "enabled",
         "expires_at",
         "receive_until",
-        "key_id",
         "public_key",
         "routes",
         "max_packet_bytes",
@@ -79,17 +68,11 @@ export const MAIL_SCHEMA = {
         mailbox_id: {
           $ref: "#/$defs/id16",
         },
-        enabled: {
-          type: "boolean",
-        },
         expires_at: {
           $ref: "#/$defs/timestampMs",
         },
         receive_until: {
           $ref: "#/$defs/timestampMs",
-        },
-        key_id: {
-          $ref: "#/$defs/id16",
         },
         public_key: {
           $ref: "#/$defs/hash32",
@@ -99,7 +82,7 @@ export const MAIL_SCHEMA = {
           items: {
             $ref: "#/$defs/httpsOrigin",
           },
-          minItems: 1,
+          minItems: 0,
           maxItems: 8,
           uniqueItems: true,
         },
@@ -162,29 +145,6 @@ export const MAIL_SCHEMA = {
         },
         reply_card: {
           $ref: "#/$defs/mailboxCardEnvelope",
-        },
-        receipt_requested: {
-          type: "boolean",
-          default: false,
-        },
-      },
-      additionalProperties: false,
-    },
-    receiptPayload: {
-      type: "object",
-      required: ["to", "expires_at", "message_hash", "status"],
-      properties: {
-        to: {
-          $ref: "#/$defs/agentId",
-        },
-        expires_at: {
-          $ref: "#/$defs/timestampMs",
-        },
-        message_hash: {
-          $ref: "#/$defs/hash32",
-        },
-        status: {
-          const: "received",
         },
       },
       additionalProperties: false,
@@ -271,57 +231,6 @@ export const MAIL_SCHEMA = {
       },
       additionalProperties: false,
     },
-    receiptEvent: {
-      type: "object",
-      required: ["protocol", "type", "actor", "created_at", "nonce", "payload"],
-      properties: {
-        protocol: {
-          const: "agent-mail/1.0",
-        },
-        type: {
-          const: "mail.receipt",
-        },
-        actor: {
-          $ref: "#/$defs/agentId",
-        },
-        created_at: {
-          $ref: "#/$defs/timestampMs",
-        },
-        nonce: {
-          $ref: "#/$defs/positiveSafeInteger",
-        },
-        payload: {
-          $ref: "#/$defs/receiptPayload",
-        },
-      },
-      additionalProperties: false,
-    },
-    receiptEnvelope: {
-      type: "object",
-      required: ["event", "hash", "signature"],
-      properties: {
-        event: {
-          $ref: "#/$defs/receiptEvent",
-        },
-        hash: {
-          $ref: "#/$defs/hash32",
-        },
-        signature: {
-          $ref: "#/$defs/signature",
-        },
-      },
-      additionalProperties: false,
-    },
-    letterEnvelope: {
-      oneOf: [
-        {
-          $ref: "#/$defs/messageEnvelope",
-        },
-        {
-          $ref: "#/$defs/receiptEnvelope",
-        },
-      ],
-    },
     envelope: {
       oneOf: [
         {
@@ -330,14 +239,11 @@ export const MAIL_SCHEMA = {
         {
           $ref: "#/$defs/messageEnvelope",
         },
-        {
-          $ref: "#/$defs/receiptEnvelope",
-        },
       ],
     },
     packetHeader: {
       type: "object",
-      required: ["protocol", "mailbox_id", "card_hash", "key_id", "expires_at"],
+      required: ["protocol", "mailbox_id", "card_hash", "expires_at"],
       properties: {
         protocol: {
           const: "agent-mail/1.0",
@@ -347,9 +253,6 @@ export const MAIL_SCHEMA = {
         },
         card_hash: {
           $ref: "#/$defs/hash32",
-        },
-        key_id: {
-          $ref: "#/$defs/id16",
         },
         expires_at: {
           $ref: "#/$defs/timestampMs",
@@ -396,16 +299,13 @@ export const MAIL_SCHEMA = {
     },
     deliveryResult: {
       type: "object",
-      required: ["packet_id", "accepted_at", "seq"],
+      required: ["packet_id", "accepted_at"],
       properties: {
         packet_id: {
           $ref: "#/$defs/hash32",
         },
         accepted_at: {
           $ref: "#/$defs/timestampMs",
-        },
-        seq: {
-          $ref: "#/$defs/positiveSafeInteger",
         },
       },
       additionalProperties: false,
@@ -458,16 +358,6 @@ export const MAIL_SCHEMA = {
         service: {
           $ref: "#/$defs/httpsOrigin",
         },
-        endpoints: {
-          type: "object",
-          required: [],
-          properties: {
-            mailboxes: {
-              $ref: "#/$defs/mailboxesEndpoint",
-            },
-          },
-          additionalProperties: false,
-        },
         features: {
           type: "array",
           items: {
@@ -477,6 +367,8 @@ export const MAIL_SCHEMA = {
         },
       },
       additionalProperties: true,
+      description:
+        "Mail defines no endpoint names; delivery paths are fixed at each card route. Other members are inert extensions.",
     },
   },
 } as const;

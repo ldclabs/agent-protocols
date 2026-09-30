@@ -9,7 +9,7 @@ TypeScript SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Ag
 - `delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, query shapes, authority, acceptance, historical, and use checks, `verifyDelegationCredential` over the latest grant record, and `auditDelegationHistory` for auditors.
 - `discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
 - `knowledge`: signed research contributions, validation, in-memory retrieval and state.
-- `mail`: signed mailbox cards and private letters, HPKE packets, rollback pins, key retention, inbox and relay state.
+- `mail`: signed mailbox cards and private letters, HPKE packets, card pins, key retention, inbox deduplication, and relay state.
 - `mail-client`: anonymous Mail delivery and owner-authenticated retrieval with strict HTTP response checks.
 - `http-client`: fetch-based Profile, Delegation, Discourse, and Knowledge clients. Lists use `{ result, next_cursor }`; non-2xx responses throw `HttpResponseError` with the protocol `code`, `data`, and `Max-Seen-Nonce`.
 - `local-connector`: the Local Agent Protocols MCP connector: 23 standard tools, resource URIs, structured views, and the connector engine.
@@ -139,7 +139,7 @@ points. The local MCP connector does not yet expose Mail tools.
 ```ts
 import {
   AgentSigner, ClientNonceManager, MailEncryptionKey, MailCardCache,
-  MailKeyring, MailRecipient, mailboxPublishEvent, mailMessageEvent,
+  MailKeyring, MailInbox, mailboxPublishEvent, mailMessageEvent,
   mailTextPart, newMailId,
 } from "agent-protocols";
 
@@ -151,9 +151,9 @@ const bobNonces = new ClientNonceManager();
 const now = Date.now();
 const card = bob.signEvent(mailboxPublishEvent(
   bob.agentId(), now, bobNonces.nextNonce(now), {
-    mailbox_id: newMailId(), enabled: true,
+    mailbox_id: newMailId(),
     expires_at: now + 86400000, receive_until: now + 2 * 86400000,
-    key_id: newMailId(), public_key: bobEncryption.publicKey(),
+    public_key: bobEncryption.publicKey(),
     routes: ["https://relay.example"], max_packet_bytes: 65536,
   },
 ));
@@ -169,62 +169,58 @@ const packet = await cards.seal(letter, card, now);
 
 const keys = new MailKeyring(bob.agentId());
 keys.add(card, bobEncryption);
-const inbox = new MailRecipient(keys);
+const inbox = new MailInbox(keys);
 const result = await inbox.accept(packet, now);
-// Persist inbox.snapshot() before deleting a relay copy or processing the letter.
-// result.kind is "accepted" or "duplicate"; no receipt or action is automatic.
+// Store result.letter and persist inbox.snapshot() before deleting the relay copy.
+// result.kind is "accepted" or "duplicate"; no reply or action is automatic.
 ```
 
-For HTTP, `await MailClient.discover(service, options, card)` validates discovery
-and selects its same-origin mailbox base. Pass a shared `cardCache` in options
-and persist `client.cardCache.snapshot()` across requests and restarts. Card
-reads pin authentic disabled/expired cards as well as usable cards; use that same
-cache for sending. `publish(card)` and
-`card(mailboxId, expectedOwner)` verify signed responses. `deliver(packet, card)`
-always omits credentials and never accepts a sender JWT. Owner operations
-`list(mailboxId, owner, jwt, { limit?, cursor? })`,
-`pages(mailboxId, owner, tokenProvider, limit?)`, and
-`delete(mailboxId, packetId, owner, jwt)` validate the token's exact owner,
-audience, integer times, and expiry before sending it. All requests disable
-redirects, cookies, and referrers. Responses undergo strict JSON, signature,
-shape, binding, ordering, and size checks. Supply `allowUrl` and a `fetch`
-transport that enforces your DNS/private-network policy; a signed URL alone
-never authorizes network access. `clock` supports an explicit trusted clock;
-`maxResponseBytes` bounds streamed responses (default 128 MiB).
+For HTTP, `new MailClient(route, options)` talks to one relay origin taken from
+a card's `routes`; paths are fixed at `/v1/mailboxes`, and `protocol()` reads the
+informational discovery document. Pass a shared `cardCache` in options and
+persist `client.cardCache.snapshot()` across requests and restarts. Card reads
+pin authentic closed, moved, or expired cards as well as usable ones; use that
+same cache for sending. `publish(card)` and `card(mailboxId, expectedOwner)`
+verify signed responses. `deliver(packet)` always omits credentials and never
+accepts a sender JWT. Owner operations `list(mailboxId, owner, jwt, { limit?,
+cursor? })`, `pages(mailboxId, owner, tokenProvider, limit?)`, and
+`delete(mailboxId, packetId, owner, jwt)` validate the token's owner and
+audience before sending it. All requests disable redirects, cookies, and
+referrers. Responses undergo strict JSON, signature, shape, binding, ordering,
+and size checks. Supply `allowUrl` and a `fetch` transport that enforces your
+DNS/private-network policy; a signed URL alone never authorizes network access.
+`clock` supports an explicit trusted clock; `maxResponseBytes` bounds streamed
+responses (default 128 MiB).
 
 The main building blocks are:
 
 | API | Purpose |
 | --- | --- |
-| `validateMailboxCard`, `validateMailSenderCard`, `validateMailLetter`, `validateMailPacket` | Structural, signature, origin, lifetime, media, and encryption-key checks. Historical letters never advance live nonce state. |
-| `mailboxPublishEvent`, `mailMessageEvent`, `mailReceiptEvent` | Build Identity events for signing with an `AgentSigner`. |
+| `validateMailboxCard`, `validateMailSenderCard`, `validateMailLetter`, `validateMailPacket` | Structural, signature, origin, lifetime, media, and encryption-key checks. A sender card must be unexpired and have routes. Historical letters never advance live nonce state. |
+| `mailboxPublishEvent`, `mailMessageEvent` | Build Identity events for signing with an `AgentSigner`. |
 | `MailEncryptionKey.generate/fromBytes/publicKey/exportSecret/destroy` | Independently generate or restore X25519 keys, export explicit sensitive backups, and clear owned secret bytes. |
-| `sealMailPacket`, `openMailPacket` | Stateless, fixed-suite HPKE with canonical framing and authenticated recipient/card/header binding. Use a `MailCardCache` for rollback protection and `MailRecipient` for acceptance/deduplication. |
-| `MailCardCache.observe/seal/snapshot` | Permanent nonce/hash pins, equivocation and key-ID history. A newer disabled/expired card updates the pin even though sending fails; persist the snapshot on these outcomes. `resetTrust` explicitly loses rollback protection. |
-| `MailKeyring.add/open/prune/exportSnapshot/restore` | Retain old verified cards and secrets through their `receive_until`; key history survives pruning. Snapshots include secrets and require protected storage. |
-| `MailRecipient.accept/rememberOutgoing/letters/snapshot` | Cross-route, cross-encryption deduplication, concurrent receive protection, and receipt binding to actual outgoing messages. Call `rememberOutgoing` only after an actual send attempt, including an ambiguous transport outcome. Restore with `new MailRecipient(keyring, snapshot)`. |
-| `MailRelayStore` | Live card publication, shared/injectable nonce store, opaque packets, quotas, tombstones, owner JWT authorization, and cursor pagination. |
-| `validateMailReply`, `validateMailReceipt`, `mailTextPart`, `mailPartText` | Bind participants and exact originals; encode/decode inert UTF-8 content without rendering or executing it. |
+| `sealMailPacket`, `openMailPacket` | Stateless, fixed-suite HPKE with canonical framing and authenticated recipient/card/header binding. Use a `MailCardCache` for rollback protection and `MailInbox` for acceptance/deduplication. |
+| `MailCardCache.observe/seal/prune/snapshot` | Pins the greatest-nonce card per mailbox; an older or conflicting card fails with `stale_card`. A newer closed/expired card still updates the pin although sending fails, so persist the snapshot on these outcomes. `prune` drops pins once every earlier card has expired. |
+| `MailKeyring.add/open/prune/exportSnapshot/restore` | Retain old verified cards and secrets through their `receive_until`. Snapshots include secrets and require protected storage. |
+| `MailInbox.accept/has/prune/snapshot` | Cross-route, cross-encryption deduplication by letter ID, with concurrent receive protection. The application stores accepted letters. Restore with `new MailInbox(keyring, snapshot)`. |
+| `MailRelayStore` | Live card publication, injectable Identity nonce store, route checks, opaque packets, per-mailbox quotas, tombstones, owner JWT authorization, and `seq` cursors. |
+| `validateMailReply`, `mailTextPart`, `mailPartText` | Bind a reply to its parent's participants, letter ID, and thread; encode/decode inert UTF-8 content without rendering or executing it. |
 
 `MailRelayStore(service, { clock?, nonceStore?, maxPackets?, maxBytes?, snapshot? })`
 provides `publish`, `card`, `deliver`, `list`, `delete`, `prune`, `discovery`, and
 `snapshot`. `publishJson` and `deliverJson` enforce a raw UTF-8 body bound before
-strict parsing. Default per-mailbox quotas are 10,000 packets and 64 MiB; a real
-HTTP server must also bound raw request streams, registration, concurrency,
-rate, and retained history. `maxSeenNonce` provides the value to return in the
-Identity `Max-Seen-Nonce` response header. An injected nonce store can be shared
-with other protocol services at the same origin; it is application-owned and
-must be persisted separately from the Mail snapshot.
+strict parsing. Default per-mailbox quotas are 10,000 packets and 64 MiB and
+fail with `rate_limited`; a real HTTP server must also bound raw request
+streams, registration, concurrency, and rate. Delivery results never include the
+mailbox `seq`. An injected nonce store can be shared with other protocol services
+at the same origin; the short-lived nonce cache is not part of the Mail snapshot.
 
 These stores are in-memory building blocks, not durable services. Persist relay
-state and shared nonce updates in one transaction before acknowledging a write.
-Persist recipient acceptance before transport deletion or executing anything.
-Snapshots and returned objects are detached copies; restore validates signed
-objects and state bindings but assumes an authenticated, current local backup.
-An attacker who can roll back the entire snapshot defeats its replay protection.
-Do not discard pin or key-history records during ordinary cache eviction.
-No API automatically authorizes actions, sends receipts, fetches attachments,
-or renders active content.
+state before acknowledging a write, and persist recipient acceptance before
+transport deletion or executing anything. Snapshots and returned objects are
+detached copies; restore assumes an authenticated, current local backup and
+checks only its version and shape. No API automatically authorizes actions,
+sends replies, fetches attachments, or renders active content.
 
 Encryption uses the maintained [hpke-js](https://github.com/dajiaji/hpke-js)
 packages `@hpke/core`, `@hpke/dhkem-x25519`, and `@hpke/chacha20poly1305` with
@@ -241,5 +237,5 @@ anonymity.
 Mail tests execute all shared structural/rejection/lifecycle cases, exact signing
 and encryption fixtures, and an independent RFC 9180 known-answer vector.
 Additional tests cover random round trips, concurrent delivery, snapshots,
-rollback and key rotation, JWT boundaries, HTTP redirects, credentials,
-malformed responses, authorization, pagination, and quotas.
+rollback, route changes and key rotation, JWT boundaries, HTTP redirects,
+credentials, malformed responses, authorization, pagination, and quotas.

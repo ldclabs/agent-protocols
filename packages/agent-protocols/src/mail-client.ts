@@ -1,14 +1,12 @@
 /** Same-origin Mail HTTP client. Packet delivery is anonymous; read/delete require owner-bound JWTs. */
-import { parseStrictJson } from "./identity.js";
+import { parseStrictJson, validateOrigin } from "./identity.js";
 import { protocolError } from "./errors.js";
 import { HttpResponseError, type FetchLike } from "./http-client.js";
-import { validateOrigin } from "./identity.js";
 import {
   MAIL_MAX_PACKET_BYTES,
   MailCardCache,
   decodeMailBytes,
   mailCanonicalBytes,
-  mailPacketId,
   validateMailboxCard,
   validateMailCardRecord,
   validateMailDeliveryResult,
@@ -25,15 +23,14 @@ import {
 } from "./mail.js";
 export interface MailClientOptions {
   fetch?: FetchLike;
-  discovery?: MailDiscovery;
   clock?: () => number;
   maxResponseBytes?: number;
-  /** Reuse and persist this cache across services and client restarts. */
+  /** Reuse and persist this cache across relays and client restarts. */
   cardCache?: MailCardCache;
-  /** Apply DNS/private-network policy in the supplied fetch transport too. */ allowUrl?: (
-    url: string,
-  ) => boolean | Promise<boolean>;
+  /** Apply DNS/private-network policy in the supplied fetch transport too. */
+  allowUrl?: (url: string) => boolean | Promise<boolean>;
 }
+/** Client for one relay origin (a card route). Paths are fixed at `/v1/mailboxes`. */
 export class MailClient {
   readonly cardCache: MailCardCache;
   private readonly fetchImpl: FetchLike;
@@ -55,47 +52,28 @@ export class MailClient {
       this.maxResponseBytes < 1
     )
       throw protocolError("invalid_request", "invalid response limit");
-    if (options.discovery) validateMailDiscovery(options.discovery, service);
-    this.base =
-      options.discovery?.endpoints?.mailboxes ?? service + "/v1/mailboxes";
+    this.base = service + "/v1/mailboxes";
   }
-  static async discover(
-    service: string,
-    options: MailClientOptions = {},
-    card?: MailboxCard,
-  ): Promise<MailClient> {
-    const c = new MailClient(service, options),
-      d = await c.protocol(card);
-    return new MailClient(service, {
-      ...options,
-      discovery: d,
-      cardCache: c.cardCache,
-    });
-  }
-  async protocol(card?: MailboxCard): Promise<MailDiscovery> {
+  /** Informational discovery document; it never changes delivery paths. */
+  async protocol(): Promise<MailDiscovery> {
     const d = await this.request(
       this.service + "/.well-known/agent-mail",
       "GET",
       200,
     );
-    validateMailDiscovery(d, this.service, card);
+    validateMailDiscovery(d, this.service);
     return d;
   }
+  /** Read and pin the current card, even a closed or expired one. Rollback throws `stale_card`. */
   async card(mailboxId: string, owner: string): Promise<MailCardRecord> {
     decodeMailBytes(mailboxId, 16);
     const r = await this.request(`${this.base}/${mailboxId}/card`, "GET", 200);
     validateMailCardRecord(r, owner, mailboxId);
-    if (!r.envelope.event.payload.routes.includes(this.service))
-      throw protocolError("invalid_response", "card does not authorize relay");
-    // An authentic disabled/expired response must still advance rollback state.
     this.cardCache.observe(r.envelope, owner, this.clock(), false);
     return r;
   }
   async publish(card: MailboxCard): Promise<MailCardRecord> {
-    card = structuredClone(card);
     validateMailboxCard(card);
-    if (!card.event.payload.routes.includes(this.service))
-      throw protocolError("invalid_request", "relay not in card routes");
     const r = await this.request(this.base, "POST", 200, card);
     validateMailCardRecord(
       r,
@@ -105,41 +83,16 @@ export class MailClient {
     );
     return r;
   }
-  async deliver(
-    packet: MailPacket,
-    card: MailboxCard,
-  ): Promise<MailDeliveryResult> {
-    packet = structuredClone(packet);
-    card = structuredClone(card);
+  /** Anonymous delivery or exact retransmission of a completed packet. */
+  async deliver(packet: MailPacket): Promise<MailDeliveryResult> {
     validateMailPacket(packet);
-    validateMailboxCard(card);
-    const p = card.event.payload,
-      h = packet.header;
-    if (
-      !p.enabled ||
-      !p.routes.includes(this.service) ||
-      card.hash !== h.card_hash ||
-      p.mailbox_id !== h.mailbox_id ||
-      p.key_id !== h.key_id ||
-      mailCanonicalBytes(packet).length > p.max_packet_bytes ||
-      h.expires_at > p.receive_until
-    )
-      throw protocolError(
-        "invalid_request",
-        "packet/card/relay binding mismatch",
-      );
     const r = await this.request(
-      `${this.base}/${h.mailbox_id}/packets`,
+      `${this.base}/${packet.header.mailbox_id}/packets`,
       "POST",
       202,
       packet,
     );
-    validateMailDeliveryResult(r, mailPacketId(packet));
-    if (r.accepted_at >= h.expires_at)
-      throw protocolError(
-        "invalid_response",
-        "relay claims acceptance after packet expiration",
-      );
+    validateMailDeliveryResult(r, packet);
     return r;
   }
   async list(
@@ -155,8 +108,7 @@ export class MailClient {
       !Number.isSafeInteger(limit) ||
       limit < 1 ||
       limit > 1000 ||
-      (options.cursor !== undefined &&
-        (typeof options.cursor !== "string" || !options.cursor))
+      options.cursor === ""
     )
       throw protocolError("invalid_request", "invalid pagination");
     const u = new URL(`${this.base}/${mailboxId}/packets`);
@@ -167,6 +119,7 @@ export class MailClient {
     validateMailPacketList(r, mailboxId, limit);
     return r;
   }
+  /** Every page of one enumeration; `seq` must keep increasing across pages. */
   async *pages(
     mailboxId: string,
     owner: string,
@@ -175,25 +128,14 @@ export class MailClient {
   ): AsyncGenerator<MailPacketList> {
     let cursor: string | undefined,
       seq = 0;
-    const cursors = new Set<string>(),
-      ids = new Set<string>();
     do {
       const page = await this.list(mailboxId, owner, jwt(), { limit, cursor });
       for (const r of page.result) {
-        if (r.seq <= seq || ids.has(r.packet_id))
-          throw protocolError(
-            "invalid_response",
-            "duplicate or reordered page",
-          );
+        if (r.seq <= seq)
+          throw protocolError("invalid_response", "reordered or repeated page");
         seq = r.seq;
-        ids.add(r.packet_id);
       }
       cursor = page.next_cursor;
-      if (cursor !== undefined) {
-        if (cursors.has(cursor))
-          throw protocolError("invalid_response", "cursor cycle");
-        cursors.add(cursor);
-      }
       yield page;
     } while (cursor !== undefined);
   }

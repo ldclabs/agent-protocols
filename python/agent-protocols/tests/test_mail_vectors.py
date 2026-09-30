@@ -1,5 +1,4 @@
-"""Mail conformance through SDK functions, never the development checker."""
-import copy
+"""Mail conformance through SDK functions, never the development generator."""
 import hashlib
 import json
 from pathlib import Path
@@ -10,7 +9,7 @@ from pyhpke import KEMKey, KEMKeyPair
 
 from agent_protocols import mail
 from agent_protocols.errors import AgentProtocolError
-from agent_protocols.identity import AgentSigner, parse_strict_json
+from agent_protocols.identity import AgentSigner
 from agent_protocols.mail_state import MailCardCache, MailInbox, MailKeyring, MailRelayStore
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -21,6 +20,7 @@ OWNER = V['keys']['recipient_agent_id']
 ORIGIN = 'https://relay.example'
 MAILBOX = ENVS['card']['event']['payload']['mailbox_id']
 TOKEN = V['owner_jwt_cases'][0]['token']
+PIN_CODES = {'rollback': 'stale_card', 'closed': 'mailbox_unavailable', 'card_expired': 'stale_card'}
 
 
 def key_for(card):
@@ -31,6 +31,17 @@ def key_for(card):
     raise AssertionError('missing fixture secret')
 
 
+def ring():
+    keys = MailKeyring(OWNER)
+    for name in ('card', 'rotated_card', 'reopened_card'):
+        keys.add(ENVS[name], key_for(ENVS[name]))
+    return keys
+
+
+def packet(name):
+    return json.loads(json.dumps(V['encryptions'][name]['packet']))
+
+
 def fixed_suite(secret):
     suite = mail._suite()
     sk = X25519PrivateKey.from_private_bytes(secret)
@@ -38,6 +49,14 @@ def fixed_suite(secret):
     original = suite.create_sender_context
     suite.create_sender_context = lambda key, info=b'': original(key, info=info, eks=pair)
     return suite
+
+
+def code_of(callback):
+    try:
+        callback()
+    except AgentProtocolError as exc:
+        return exc.code
+    return None
 
 
 def test_packaged_schema_matches_normative_schema():
@@ -72,14 +91,14 @@ def test_hpke_vectors_match_entire_packet_and_plaintext(name, monkeypatch):
     card, letter = ENVS[vector['card']], ENVS[vector['letter']]
     suite = fixed_suite(bytes.fromhex(vector['ephemeral_secret_hex']))
     monkeypatch.setattr(mail, '_suite', lambda: suite)
-    packet = mail.encrypt_mail(letter, card, now_ms=NOW)
-    assert packet == vector['packet']
-    assert mail.mail_packet_id(packet) == vector['packet_id']
-    assert mail._jcs(packet).decode() == vector['packet_jcs']
-    assert mail._jcs(packet['header']).decode() == vector['aad_jcs']
-    assert mail._info(packet['header']).hex() == vector['info_hex']
+    sealed = mail.encrypt_mail(letter, card, now_ms=NOW)
+    assert sealed == vector['packet']
+    assert mail.mail_packet_id(sealed) == vector['packet_id']
+    assert mail._jcs(sealed).decode() == vector['packet_jcs']
+    assert mail._jcs(sealed['header']).decode() == vector['aad_jcs']
+    assert mail._INFO.hex() == vector['info_hex']
     assert mail.encode_mail_plaintext(letter) == mail._decode(vector['plaintext_b64'])
-    assert mail.decrypt_mail(packet, card, key_for(card), OWNER, now_ms=NOW, packet_id=vector['packet_id']) == letter
+    assert mail.decrypt_mail(sealed, card, key_for(card), OWNER, now_ms=NOW, packet_id=vector['packet_id']) == letter
 
 
 @pytest.mark.parametrize('case', V['schema_cases'], ids=lambda c: c['name'])
@@ -123,79 +142,67 @@ def test_strict_json_rejections(raw):
 @pytest.mark.parametrize('case', V['discovery_cases'], ids=lambda c: c['name'])
 def test_discovery_cases(case):
     if case['expected'] == 'valid':
-        mail.validate_mail_discovery(case['value'], ORIGIN, ENVS['card'])
+        mail.validate_mail_discovery(case['value'], ORIGIN)
     else:
         with pytest.raises(AgentProtocolError):
-            mail.validate_mail_discovery(case['value'], ORIGIN, ENVS['card'])
+            mail.validate_mail_discovery(case['value'], ORIGIN)
 
 
 @pytest.mark.parametrize('case', V['owner_jwt_cases'], ids=lambda c: c['name'])
 def test_owner_jwt_vectors(case):
-    if case['expected'] == 'valid':
-        mail.verify_mail_owner_jwt(case['token'], OWNER, ORIGIN, now_ms=NOW)
-    else:
-        with pytest.raises(AgentProtocolError):
-            mail.verify_mail_owner_jwt(case['token'], OWNER, ORIGIN, now_ms=NOW)
+    result = code_of(lambda: mail.verify_mail_owner_jwt(case['token'], OWNER, ORIGIN, now_ms=NOW))
+    assert result == (None if case['expected'] == 'valid' else case['expected'])
 
 
 @pytest.mark.parametrize('scenario', ['card_cache', 'persistent_card_pin'])
 def test_card_cache_lifecycle(scenario):
     cache = MailCardCache()
     for step in V['lifecycle'][scenario]:
-        if step['expected'] == 'usable':
-            cache.observe(ENVS[step['card']], OWNER, now_ms=step.get('now', NOW))
+        if 'prune' in step:
+            cache.prune(now_ms=step['prune'])
         else:
-            with pytest.raises(AgentProtocolError):
-                cache.observe(ENVS[step['card']], OWNER, now_ms=step.get('now', NOW))
-        # Restart between every operation, including failures that mutate pins.
+            result = code_of(lambda: cache.observe(ENVS[step['card']], OWNER, now_ms=step.get('now', NOW)))
+            assert result == PIN_CODES.get(step['expected']), step
+        # Restart between every operation, including failures that advanced a pin.
         cache = MailCardCache.from_snapshot(json.loads(json.dumps(cache.snapshot())))
-
-
-def ring():
-    keys = MailKeyring(OWNER)
-    for vector in V['encryptions'].values():
-        card = ENVS[vector['card']]
-        keys.add(card, key_for(card))
-    return keys
 
 
 def test_recipient_lifecycle_with_restart_between_packets():
     inbox = MailInbox(ring())
     for step in V['lifecycle']['recipient']:
-        result = inbox.accept(V['encryptions'][step['packet']]['packet'], now_ms=step['now'])
-        assert result['kind'] == step['expected']
+        assert inbox.accept(packet(step['packet']), now_ms=step['now'])['kind'] == step['expected']
         assert len(inbox.snapshot()['accepted']) == step['items']
-        inbox = MailInbox.from_snapshot(MailKeyring.from_snapshot(inbox.keyring.snapshot()), inbox.snapshot())
+        inbox = MailInbox.from_snapshot(MailKeyring.from_snapshot(inbox.keyring.snapshot()), json.loads(json.dumps(inbox.snapshot())))
     historical = V['lifecycle']['historical_card']
-    assert MailInbox(ring()).accept(V['encryptions'][historical['packet']]['packet'], now_ms=historical['now'])['kind'] == historical['expected']
+    assert MailInbox(ring()).accept(packet(historical['packet']), now_ms=historical['now'])['kind'] == historical['expected']
     expired = V['lifecycle']['expired_new_letter']
-    with pytest.raises(AgentProtocolError, match='expired'):
-        MailInbox(ring()).accept(V['encryptions'][expired['packet']]['packet'], now_ms=expired['now'])
+    assert code_of(lambda: MailInbox(ring()).accept(packet(expired['packet']), now_ms=expired['now'])) == 'packet_expired'
+
+
+def test_reply_binding_vectors():
+    case = V['lifecycle']['reply']
+    mail.validate_mail_reply(ENVS[case['valid']], ENVS[case['parent']])
+    with pytest.raises(AgentProtocolError):
+        mail.validate_mail_reply(ENVS[case['valid']], ENVS[case['wrong_parent']])
 
 
 def test_relay_lifecycle_uses_actual_publication_and_authorization():
     relay = MailRelayStore(ORIGIN)
-    relay.publish(ENVS['card'], now_ms=NOW)
     for step in V['lifecycle']['relay']:
-        if step['op'] == 'set_current':
-            relay.publish(ENVS[step['card']], now_ms=NOW)
-        elif step['op'] == 'delete':
+        if step['op'] == 'delete':
             relay.delete(MAILBOX, V['encryptions'][step['packet']]['packet_id'], TOKEN, now_ms=NOW)
         else:
-            packet = V['encryptions'][step['packet']]['packet']
-            if step['expected'] in ('accepted', 'idempotent'):
-                record = relay.deliver(MAILBOX, packet, now_ms=step['now'])
-                assert record['seq'] == step['seq'] and record['accepted_at'] == step['accepted_at']
+            run = ((lambda: relay.publish(ENVS[step['card']], now_ms=step['now'])) if step['op'] == 'publish'
+                   else (lambda: relay.deliver(MAILBOX, packet(step['packet']), now_ms=step['now'])))
+            if 'accepted_at' in step:
+                assert run()['accepted_at'] == step['accepted_at'], step
             else:
-                with pytest.raises(AgentProtocolError):
-                    relay.deliver(MAILBOX, packet, now_ms=step['now'])
+                assert code_of(run) == step['expected'], step
+        page = relay.list(MAILBOX, TOKEN, now_ms=NOW)
         if 'stored' in step:
-            assert len(relay.list_packets(MAILBOX, TOKEN, now_ms=NOW)['result']) == step['stored']
+            assert len(page['result']) == step['stored'], step
+        if 'seqs' in step:
+            assert [r['seq'] for r in page['result']] == step['seqs'], step
         relay = MailRelayStore.from_snapshot(json.loads(json.dumps(relay.snapshot())))
-
-
-def test_receipt_binding_vectors():
-    case = V['lifecycle']['receipt']
-    mail.validate_mail_receipt(ENVS[case['valid']], ENVS[case['original']])
-    with pytest.raises(AgentProtocolError):
-        mail.validate_mail_receipt(ENVS[case['valid']], ENVS[case['wrong_original']])
+    for step in V['lifecycle']['relay_registration']:
+        assert code_of(lambda: MailRelayStore(ORIGIN).publish(ENVS[step['card']], now_ms=NOW)) == step['expected']

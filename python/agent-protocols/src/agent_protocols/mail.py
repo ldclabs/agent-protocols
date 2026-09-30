@@ -1,8 +1,8 @@
 """Agent Mail 1.0: signed correspondence and one-shot RFC 9180 encryption.
 
 HPKE is supplied by PyHPKE, backed by cryptography. This module never fetches,
-executes, or renders message content. Stateful retention/acceptance is provided
-by mail_state; applications must persist that state before acknowledging mail.
+executes, or renders message content. Stateful pinning, key retention and
+deduplication live in mail_state; persist that state before acknowledging mail.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import json
 import secrets
 from importlib.resources import files
 from typing import Any
-from urllib.parse import urlsplit
 
 import rfc8785
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
@@ -24,19 +23,19 @@ from pyhpke import AEADId, CipherSuite, KDFId, KEMId, KEMKey, PyHPKEError
 from .errors import AgentProtocolError
 from .identity import (
     AgentSigner, Envelope, Event, MAX_SAFE_NONCE, create_event, parse_strict_json,
-    unix_ms, validate_origin, verify_envelope, verify_request_jwt,
+    unix_ms, validate_agent_id, validate_origin, verify_envelope, verify_request_jwt,
 )
 
 MAIL_PROTOCOL = 'agent-mail/1.0'
 MAILBOX_PUBLISH = 'mailbox.publish'
 MAIL_MESSAGE = 'mail.message'
-MAIL_RECEIPT = 'mail.receipt'
 MAIL_MAX_TTL_MS = 30 * 86_400_000
 MAIL_FUTURE_SKEW_MS = 300_000
 MAIL_MAX_PACKET_BYTES = 1_048_576
-MAIL_ERROR_CODES = ('mailbox_unavailable', 'stale_card', 'packet_expired', 'invalid_packet', 'mailbox_conflict', 'quota_exceeded')
+MAIL_ERROR_CODES = ('mailbox_unavailable', 'stale_card', 'packet_expired', 'invalid_packet', 'mailbox_conflict')
 MAIL_SCHEMA = parse_strict_json(files(__package__).joinpath('mail.schema.json').read_bytes())
 _VALIDATORS = {name: Draft202012Validator({'$ref': '#/$defs/' + name, '$defs': MAIL_SCHEMA['$defs']}) for name in MAIL_SCHEMA['$defs']}
+_INFO = MAIL_PROTOCOL.encode()
 
 
 def _fail(code: str, message: str) -> None:
@@ -96,7 +95,7 @@ def validate_mail_id(value: Any, *, size: int = 32, code: str = 'invalid_request
 
 
 def new_mail_id() -> str:
-    """Generate an independent random 16-byte mailbox/key/thread identifier."""
+    """Generate an independent random 16-byte mailbox or thread identifier."""
     return _b64(secrets.token_bytes(16))
 
 
@@ -146,10 +145,6 @@ def mail_message_event(actor: str, created_at: int, nonce: int, payload: dict[st
     return create_event(MAIL_PROTOCOL, MAIL_MESSAGE, actor, created_at, nonce, copy.deepcopy(payload))
 
 
-def mail_receipt_event(actor: str, created_at: int, nonce: int, payload: dict[str, Any]) -> Event:
-    return create_event(MAIL_PROTOCOL, MAIL_RECEIPT, actor, created_at, nonce, copy.deepcopy(payload))
-
-
 def sign_mail_event(signer: AgentSigner, event: Event) -> Envelope:
     _require(isinstance(event, dict), 'invalid_event', 'event must be an object')
     _require(event.get('actor') == signer.agent_id(), 'invalid_actor', 'signer must match event actor')
@@ -181,7 +176,7 @@ def decode_mail_part(part: dict[str, Any]) -> bytes:
 
 
 def validate_mail_envelope(envelope: Envelope) -> None:
-    """Historical verification: shape, signature, intrinsic lifetimes and content.
+    """Historical verification of a card or letter: shape, signature, intrinsic lifetimes and content.
 
     No live nonce cache, current-card check or past-age window is applied.
     """
@@ -200,7 +195,7 @@ def validate_mail_envelope(envelope: Envelope) -> None:
         for route in payload['routes']:
             validate_origin(route)
         _public_key(payload['public_key'])
-    elif event['type'] == MAIL_MESSAGE:
+    else:
         for part in payload['parts']:
             decode_mail_part(part)
         if 'reply_card' in payload:
@@ -225,40 +220,29 @@ def _parse_bounded(raw: str | bytes, maximum: int, code: str) -> Any:
 
 def validate_mailbox_card(card: Envelope, expected_owner: str, *, now_ms: int | None = None,
                           for_sending: bool = False) -> None:
+    """Verify a card; with for_sending, also require it to be current, open and unexpired."""
     validate_mail_schema(card, 'mailboxCardEnvelope')
     validate_mail_envelope(card)
     _require(card['event']['actor'] == expected_owner, 'invalid_actor', 'card owner mismatch')
     if for_sending:
         now = _now(now_ms)
         event, payload = card['event'], card['event']['payload']
-        _require(event['created_at'] <= now + MAIL_FUTURE_SKEW_MS, 'invalid_event', 'card timestamp too far in future')
-        _require(payload['enabled'], 'mailbox_unavailable', 'mailbox card is disabled')
+        _require(event['created_at'] <= now + MAIL_FUTURE_SKEW_MS, 'timestamp_out_of_window', 'card is future-dated')
+        _require(bool(payload['routes']), 'mailbox_unavailable', 'mailbox closed')
         _require(now < payload['expires_at'], 'stale_card', 'mailbox card expired')
 
 
 def validate_mail_reply(reply: Envelope, parent: Envelope) -> None:
-    """Bind a known parent and both participants before linking a thread."""
-    validate_mail_schema(reply, 'messageEnvelope')
-    validate_mail_schema(parent, 'messageEnvelope')
+    """Bind a known parent's participants, letter ID and thread before linking a reply."""
     validate_mail_envelope(reply)
     validate_mail_envelope(parent)
+    _require(reply['event']['type'] == MAIL_MESSAGE and parent['event']['type'] == MAIL_MESSAGE,
+             'invalid_event', 'replies bind two letters')
     r, p = reply['event'], parent['event']
     _require(r['actor'] == p['payload']['to'] and r['payload']['to'] == p['actor']
              and r['payload'].get('in_reply_to') == parent['hash']
              and r['payload']['thread_id'] == p['payload']['thread_id'],
              'invalid_event', 'reply participants, parent or thread mismatch')
-
-
-def validate_mail_receipt(receipt: Envelope, sent_message: Envelope) -> None:
-    """The caller must supply an original message it actually sent."""
-    validate_mail_schema(receipt, 'receiptEnvelope')
-    validate_mail_schema(sent_message, 'messageEnvelope')
-    validate_mail_envelope(receipt)
-    validate_mail_envelope(sent_message)
-    r, m = receipt['event'], sent_message['event']
-    _require(r['actor'] == m['payload']['to'] and r['payload']['to'] == m['actor']
-             and r['payload']['message_hash'] == sent_message['hash'],
-             'invalid_event', 'receipt does not match the sent message')
 
 
 def _frame_json(data: bytes) -> bytes:
@@ -268,7 +252,7 @@ def _frame_json(data: bytes) -> bytes:
 
 
 def encode_mail_plaintext(letter: Envelope) -> bytes:
-    validate_mail_schema(letter, 'letterEnvelope')
+    validate_mail_schema(letter, 'messageEnvelope')
     validate_mail_envelope(letter)
     return _frame_json(_jcs(letter))
 
@@ -283,13 +267,12 @@ def decode_mail_plaintext(plaintext: bytes) -> Envelope:
     data = plaintext[4:4+n]
     letter = _parse_bounded(data, MAIL_MAX_PACKET_BYTES, 'invalid_packet')
     _require(_jcs(letter) == data, 'invalid_packet', 'plaintext JSON is not JCS')
-    validate_mail_schema(letter, 'letterEnvelope', 'invalid_packet')
+    validate_mail_schema(letter, 'messageEnvelope', 'invalid_packet')
     validate_mail_envelope(letter)
     return letter
 
 
 def mail_packet_id(packet: dict[str, Any]) -> str:
-    validate_mail_packet(packet)
     return _b64(hashlib.sha3_256(_jcs(packet)).digest())
 
 
@@ -299,9 +282,10 @@ def validate_mail_packet(packet: dict[str, Any], *, packet_id: str | None = None
     _decode(packet['enc'], 32, 'invalid_packet')
     ct = _decode(packet['ciphertext'], code='invalid_packet')
     _require(len(ct) >= 1040 and len(ct) % 1024 == 16, 'invalid_packet', 'invalid ciphertext block length')
-    _require(len(_jcs(packet)) <= min(max_bytes, MAIL_MAX_PACKET_BYTES), 'payload_too_large', 'packet size exceeds limit')
+    raw = _jcs(packet)
+    _require(len(raw) <= min(max_bytes, MAIL_MAX_PACKET_BYTES), 'payload_too_large', 'packet size exceeds limit')
     if packet_id is not None:
-        _require(_b64(hashlib.sha3_256(_jcs(packet)).digest()) == packet_id, 'invalid_packet', 'packet ID mismatch')
+        _require(_b64(hashlib.sha3_256(raw).digest()) == packet_id, 'invalid_packet', 'packet ID mismatch')
 
 
 def parse_mail_packet(raw: str | bytes, *, max_body_bytes: int = MAIL_MAX_PACKET_BYTES + 65536) -> dict[str, Any]:
@@ -315,16 +299,11 @@ def _suite() -> CipherSuite:
     return CipherSuite.new(KEMId.DHKEM_X25519_HKDF_SHA256, KDFId.HKDF_SHA256, AEADId.CHACHA20_POLY1305)
 
 
-def _info(header: dict[str, Any]) -> bytes:
-    return MAIL_PROTOCOL.encode() + b'\0' + _decode(header['card_hash'], 32)
-
-
 def _check_packet_card(packet: dict[str, Any], card: Envelope, owner: str) -> None:
     validate_mailbox_card(card, owner)
     c, h = card['event']['payload'], packet['header']
-    _require(c['enabled'], 'invalid_packet', 'encryption card itself was disabled')
-    _require(h['card_hash'] == card['hash'] and h['mailbox_id'] == c['mailbox_id']
-             and h['key_id'] == c['key_id'], 'invalid_packet', 'packet/card binding mismatch')
+    _require(h['card_hash'] == card['hash'] and h['mailbox_id'] == c['mailbox_id'],
+             'invalid_packet', 'packet/card binding mismatch')
     _require(h['expires_at'] <= c['receive_until'], 'invalid_packet', 'packet exceeds key retention deadline')
     validate_mail_packet(packet, max_bytes=c['max_packet_bytes'])
 
@@ -332,44 +311,37 @@ def _check_packet_card(packet: dict[str, Any], card: Envelope, owner: str) -> No
 def encrypt_mail(letter: Envelope, card: Envelope, *, now_ms: int | None = None) -> dict[str, Any]:
     """Fresh one-shot HPKE encryption; no caller-controlled ephemeral randomness.
 
-    Use MailSender with a persisted MailCardCache/MailOutbox for rollback-safe
-    sending and retries. This stateless primitive cannot know earlier cards.
+    Pin the card with MailCardCache first (MailCardCache.seal does both).
     """
     letter, card, now = copy.deepcopy(letter), copy.deepcopy(card), _now(now_ms)
-    validate_mail_schema(letter, 'letterEnvelope')
+    validate_mail_schema(letter, 'messageEnvelope')
     validate_mail_envelope(letter)
     e, p = letter['event'], letter['event']['payload']
     validate_mailbox_card(card, p['to'], now_ms=now, for_sending=True)
     c = card['event']['payload']
-    _require(e['created_at'] <= now + MAIL_FUTURE_SKEW_MS, 'invalid_event', 'letter timestamp too far in future')
-    _require(now < p['expires_at'] <= c['receive_until'], 'packet_expired', 'letter expired or exceeds receive_until')
+    _require(e['created_at'] <= now + MAIL_FUTURE_SKEW_MS and now < p['expires_at'],
+             'packet_expired', 'letter is expired or future-dated')
+    _require(p['expires_at'] <= c['receive_until'], 'invalid_packet', 'letter exceeds receive_until')
     header = {'protocol': MAIL_PROTOCOL, 'mailbox_id': c['mailbox_id'], 'card_hash': card['hash'],
-              'key_id': c['key_id'], 'expires_at': p['expires_at']}
+              'expires_at': p['expires_at']}
     plaintext = encode_mail_plaintext(letter)
     # Account for exact base64/JSON overhead before encryption and allocation.
     bound = len(_jcs({'header': header, 'enc': 'A' * 43, 'ciphertext': ''})) + ((len(plaintext) + 16) * 8 + 5) // 6
     _require(bound <= min(c['max_packet_bytes'], MAIL_MAX_PACKET_BYTES), 'payload_too_large', 'encrypted packet would exceed limit')
     try:
-        enc, context = _suite().create_sender_context(KEMKey.from_pyca_cryptography_key(_public_key(c['public_key'])), info=_info(header))
+        enc, context = _suite().create_sender_context(KEMKey.from_pyca_cryptography_key(_public_key(c['public_key'])), info=_INFO)
         try:
             ciphertext = context.seal(plaintext, _jcs(header))
         finally:
             del context
     except (PyHPKEError, ValueError) as exc:
         raise AgentProtocolError('invalid_packet', 'HPKE encryption failed') from exc
-    packet = {'header': header, 'enc': _b64(enc), 'ciphertext': _b64(ciphertext)}
-    validate_mail_packet(packet, max_bytes=c['max_packet_bytes'])
-    return packet
+    return {'header': header, 'enc': _b64(enc), 'ciphertext': _b64(ciphertext)}
 
 
 def decrypt_mail(packet: dict[str, Any], card: Envelope, key: MailEncryptionKey, owner: str, *,
-                 now_ms: int | None = None, packet_id: str | None = None,
-                 allow_expired: bool = False) -> Envelope:
-    """Verify/decrypt locally. Acceptance and cross-route dedup use MailInbox.
-
-    allow_expired is only for checking an already accepted duplicate. It never
-    grants permission for new acceptance. Detailed failures stay local.
-    """
+                 now_ms: int | None = None, packet_id: str | None = None) -> Envelope:
+    """Verify/decrypt a queued letter locally. New-acceptance expiry and dedup are MailInbox's job."""
     packet, card, now = copy.deepcopy(packet), copy.deepcopy(card), _now(now_ms)
     validate_mail_packet(packet, packet_id=packet_id)
     _check_packet_card(packet, card, owner)
@@ -377,7 +349,7 @@ def decrypt_mail(packet: dict[str, Any], card: Envelope, key: MailEncryptionKey,
              'invalid_packet', 'recipient secret does not match card')
     h = packet['header']
     try:
-        context = _suite().create_recipient_context(_decode(packet['enc'], 32), KEMKey.from_pyca_cryptography_key(key._private_key), info=_info(h))
+        context = _suite().create_recipient_context(_decode(packet['enc'], 32), KEMKey.from_pyca_cryptography_key(key._private_key), info=_INFO)
         try:
             plaintext = context.open(_decode(packet['ciphertext']), _jcs(h))
         finally:
@@ -387,99 +359,74 @@ def decrypt_mail(packet: dict[str, Any], card: Envelope, key: MailEncryptionKey,
     letter = decode_mail_plaintext(plaintext)
     e, p = letter['event'], letter['event']['payload']
     _require(p['to'] == owner and p['expires_at'] == h['expires_at'], 'invalid_packet', 'recipient or expiration mismatch')
-    _require(e['created_at'] <= now + MAIL_FUTURE_SKEW_MS, 'invalid_event', 'letter timestamp too far in future')
-    if not allow_expired:
-        _require(now < p['expires_at'], 'packet_expired', 'letter acceptance deadline passed')
+    _require(e['created_at'] <= now + MAIL_FUTURE_SKEW_MS, 'timestamp_out_of_window', 'letter timestamp too far in future')
     return letter
 
 
-def validate_mail_discovery(document: dict[str, Any], origin: str, card: Envelope | None = None) -> str:
+def validate_mail_discovery(document: dict[str, Any], origin: str) -> None:
+    """Informational discovery; it never supplies delivery paths."""
     validate_origin(origin)
     validate_mail_schema(document, 'discoveryDocument', 'invalid_response')
-    validate_origin(document['service'])
     _require(document['service'] == origin, 'invalid_response', 'discovery service origin mismatch')
-    if card is not None:
-        validate_mail_envelope(card)
-        _require(card['event']['type'] == MAILBOX_PUBLISH and origin in card['event']['payload']['routes'],
-                 'invalid_response', 'discovery origin is not an authorized card route')
-    endpoint = document.get('endpoints', {}).get('mailboxes', origin + '/v1/mailboxes')
-    try:
-        parsed = urlsplit(endpoint)
-    except ValueError as exc:
-        raise AgentProtocolError('invalid_response', 'invalid mailbox endpoint URL') from exc
-    _require(parsed.scheme == 'https' and parsed.netloc == urlsplit(origin).netloc
-             and parsed.username is None and parsed.password is None
-             and '?' not in endpoint and '#' not in endpoint and not endpoint.endswith('/')
-             and '\\' not in endpoint and not any(ord(c) <= 32 for c in endpoint),
-             'invalid_response', 'invalid same-origin mailbox endpoint')
-    return endpoint
 
 
-def validate_mail_card_record(record: dict[str, Any], owner: str, mailbox_id: str | None = None) -> None:
+def validate_mail_card_record(record: dict[str, Any], owner: str, mailbox_id: str | None = None,
+                              card_hash: str | None = None) -> None:
     validate_mail_schema(record, 'cardAcceptedRecord', 'invalid_response')
     validate_mailbox_card(record['envelope'], owner)
-    if mailbox_id is not None:
-        _require(record['envelope']['event']['payload']['mailbox_id'] == mailbox_id,
-                 'invalid_response', 'card record mailbox mismatch')
+    card = record['envelope']
+    _require((mailbox_id is None or card['event']['payload']['mailbox_id'] == mailbox_id)
+             and (card_hash is None or card['hash'] == card_hash), 'invalid_response', 'card record mismatch')
 
 
-def validate_mail_delivery_result(result: dict[str, Any], packet_id: str | None = None) -> None:
+def validate_mail_delivery_result(result: dict[str, Any], packet: dict[str, Any] | None = None) -> None:
     validate_mail_schema(result, 'deliveryResult', 'invalid_response')
-    if packet_id is not None:
-        _require(result['packet_id'] == packet_id, 'invalid_response', 'delivery result packet mismatch')
+    if packet is not None:
+        _require(result['packet_id'] == mail_packet_id(packet) and result['accepted_at'] < packet['header']['expires_at'],
+                 'invalid_response', 'delivery result mismatch')
 
 
 def validate_mail_packet_record(record: dict[str, Any], mailbox_id: str | None = None) -> None:
     validate_mail_schema(record, 'packetRecord', 'invalid_response')
     validate_mail_packet(record['packet'], packet_id=record['packet_id'])
-    _require(record['accepted_at'] < record['packet']['header']['expires_at'], 'invalid_response', 'record was accepted after expiration')
-    if mailbox_id is not None:
-        _require(record['packet']['header']['mailbox_id'] == mailbox_id, 'invalid_response', 'record mailbox mismatch')
+    _require(record['accepted_at'] < record['packet']['header']['expires_at']
+             and (mailbox_id is None or record['packet']['header']['mailbox_id'] == mailbox_id),
+             'invalid_response', 'packet record mismatch')
 
 
 def validate_mail_packet_list(page: dict[str, Any], mailbox_id: str, *, limit: int = 100) -> None:
     validate_mail_schema(page, 'packetList', 'invalid_response')
-    _require(len(page['result']) <= limit, 'invalid_response', 'page exceeds requested limit')
-    seen, seq = set(), 0
+    _require(len(page['result']) <= limit and ('next_cursor' not in page or bool(page['result'])),
+             'invalid_response', 'invalid page size')
+    seq = 0
     for record in page['result']:
         validate_mail_packet_record(record, mailbox_id)
-        _require(record['seq'] > seq and record['packet_id'] not in seen, 'invalid_response', 'page order or duplicate packet')
+        _require(record['seq'] > seq, 'invalid_response', 'unordered packets')
         seq = record['seq']
-        seen.add(record['packet_id'])
-    _require('next_cursor' not in page or bool(page['result']), 'invalid_response', 'empty nonterminal page')
 
 
 def verify_mail_owner_jwt(token: str, owner: str | None, origin: str, *, now_ms: int | None = None) -> dict[str, Any]:
-    """Strict Identity JWT validation plus optional mailbox ownership binding."""
+    """Identity request JWT for this relay origin; with owner, also require iss == owner."""
     now = _now(now_ms)
     validate_origin(origin)
     try:
-        _require(isinstance(token, str) and len(token) <= 16384, 'invalid_token', 'invalid owner token')
-        parts = token.split('.')
-        _require(len(parts) == 3, 'invalid_token', 'invalid owner token')
-        header = parse_strict_json(_decode(parts[0], code='invalid_token').decode('utf-8'))
-        claims = parse_strict_json(_decode(parts[1], code='invalid_token').decode('utf-8'))
-        _require(isinstance(header, dict) and isinstance(claims, dict), 'invalid_token', 'invalid JWT objects')
-        for name in ('iat', 'exp'):
-            value = claims.get(name)
-            _require(isinstance(value, (int, float)) and not isinstance(value, bool) and value == int(value)
-                     and 0 <= value <= MAX_SAFE_NONCE, 'invalid_token', 'invalid JWT timestamp')
+        _require(isinstance(token, str), 'invalid_token', 'invalid owner token')
         claims = verify_request_jwt(token, audience=origin, now_secs=now // 1000)
-        _require(claims['exp'] > now // 1000, 'invalid_token', 'owner token expired')
-    except (AgentProtocolError, ValueError, KeyError, TypeError, AttributeError, OverflowError, UnicodeError) as exc:
+    except (AgentProtocolError, ValueError, KeyError, TypeError) as exc:
         raise AgentProtocolError('invalid_token', 'invalid owner request JWT') from exc
     if owner is not None:
-        _require(claims['iss'] == claims['sub'] == owner, 'permission_denied', 'requester is not mailbox owner')
+        validate_agent_id(owner)
+        _require(claims['iss'] == owner, 'permission_denied', 'requester is not mailbox owner')
     return claims
 
 
 __all__ = [
-    'MAIL_PROTOCOL', 'MAILBOX_PUBLISH', 'MAIL_MESSAGE', 'MAIL_RECEIPT', 'MAIL_MAX_TTL_MS',
+    'MAIL_PROTOCOL', 'MAILBOX_PUBLISH', 'MAIL_MESSAGE', 'MAIL_MAX_TTL_MS',
     'MAIL_FUTURE_SKEW_MS', 'MAIL_MAX_PACKET_BYTES', 'MAIL_ERROR_CODES', 'MAIL_SCHEMA',
     'MailEncryptionKey', 'new_mail_id', 'mailbox_publish_event', 'mail_message_event',
-    'mail_receipt_event', 'sign_mail_event', 'mail_part', 'decode_mail_part',
+    'sign_mail_event', 'mail_part', 'decode_mail_part',
     'validate_mail_schema', 'validate_mail_id', 'validate_mail_envelope', 'parse_mail_envelope',
-    'validate_mailbox_card', 'validate_mail_reply', 'validate_mail_receipt',
+    'validate_mailbox_card', 'validate_mail_reply',
     'encode_mail_plaintext', 'decode_mail_plaintext', 'mail_packet_id', 'validate_mail_packet',
     'parse_mail_packet', 'encrypt_mail', 'decrypt_mail', 'validate_mail_discovery',
     'validate_mail_card_record', 'validate_mail_delivery_result', 'validate_mail_packet_record',

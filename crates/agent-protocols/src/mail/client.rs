@@ -6,7 +6,8 @@ use std::{
     time::Duration,
 };
 
-/// Mail-only HTTPS transport. It constructs its own credential-free client;
+/// Mail-only HTTPS transport for one relay origin (a card route); paths are
+/// fixed at `/v1/mailboxes`. It constructs its own credential-free client;
 /// callers cannot inject default headers, cookie jars, or redirect policies.
 /// Network allowlists (including private-network/DNS policy) remain the
 /// application's responsibility.
@@ -16,7 +17,7 @@ pub struct MailClient {
     base: String,
     inner: reqwest::Client,
     max_response_bytes: usize,
-    cards: Arc<Mutex<CardCache>>,
+    cards: Arc<Mutex<MailCardCache>>,
 }
 impl fmt::Debug for MailClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -54,24 +55,24 @@ impl MailClient {
             base: format!("{origin}/v1/mailboxes"),
             origin,
             inner,
-            max_response_bytes: 16 * MAX_PACKET_BYTES,
-            cards: Arc::new(Mutex::new(CardCache::new())),
+            max_response_bytes: 128 * MAX_PACKET_BYTES,
+            cards: Arc::new(Mutex::new(MailCardCache::new())),
         })
     }
     /// Share persistent pins across independently constructed clients/origins.
     /// Install a restored cache before the first read; replacing an established
     /// cache with an older snapshot would explicitly lose rollback protection.
     /// Cloning a MailClient automatically shares this cache.
-    pub fn with_card_cache(mut self, cards: Arc<Mutex<CardCache>>) -> Self {
+    pub fn with_card_cache(mut self, cards: Arc<Mutex<MailCardCache>>) -> Self {
         self.cards = cards;
         self
     }
-    pub fn card_cache(&self) -> Arc<Mutex<CardCache>> {
+    pub fn card_cache(&self) -> Arc<Mutex<MailCardCache>> {
         Arc::clone(&self.cards)
     }
-    /// Persist after card reads, including equivocation errors. This contains
+    /// Persist after card reads, including ones that return an error. This contains
     /// contact metadata but no decryption keys. Restore with
-    /// CardCache::from_snapshot and with_card_cache before subsequent reads.
+    /// MailCardCache::from_snapshot and with_card_cache before subsequent reads.
     pub fn card_cache_snapshot(&self) -> Result<Value> {
         self.cards
             .lock()
@@ -85,10 +86,7 @@ impl MailClient {
         self.max_response_bytes = bytes;
         Ok(self)
     }
-    pub fn set_discovery(&mut self, value: &Value) -> Result<()> {
-        self.base = validate_discovery(value, &self.origin, None)?;
-        Ok(())
-    }
+    /// Informational discovery document; it never changes delivery paths.
     pub async fn protocol(&self) -> Result<Value> {
         let value = self
             .send(
@@ -97,16 +95,11 @@ impl MailClient {
                 200,
             )
             .await?;
-        validate_discovery(&value, &self.origin, None)?;
-        Ok(value)
-    }
-    pub async fn discover(&mut self) -> Result<Value> {
-        let value = self.protocol().await?;
-        self.set_discovery(&value)?;
+        validate_discovery(&value, &self.origin)?;
         Ok(value)
     }
     async fn send(&self, request: reqwest::RequestBuilder, expected: u16) -> Result<Value> {
-        let mut response = request.header(reqwest::header::COOKIE, "").send().await?;
+        let mut response = request.send().await?;
         if response.url().origin().ascii_serialization() != self.origin {
             return Err(fail("invalid_response", "unexpected response origin"));
         }
@@ -176,9 +169,9 @@ impl MailClient {
         }
         identity::parse_strict_json(text).map_err(|e| fail("invalid_response", e.to_string()))
     }
-    /// Read a card and permanently pin its signed nonce/hash before returning.
-    /// Disabled/expired cards are returned as historical records and remain
-    /// pinned. Older or equivocating cards are rejected across client clones.
+    /// Read and pin the current card before returning, even a closed or
+    /// expired one. An older or conflicting card fails with `stale_card`
+    /// across client clones.
     pub async fn card(
         &self,
         mailbox: &str,
@@ -201,13 +194,10 @@ impl MailClient {
             .await?;
         validate_mail_schema(&value, "cardAcceptedRecord")?;
         let card = validate_card(&value["envelope"])?;
-        if &card.event.actor != owner
-            || card.event.payload.mailbox_id != mailbox
-            || !card.event.payload.routes.contains(&self.origin)
-        {
+        if &card.event.actor != owner || card.event.payload.mailbox_id != mailbox {
             return Err(fail(
                 "invalid_response",
-                "card response owner/mailbox/route mismatch",
+                "card response owner/mailbox mismatch",
             ));
         }
         self.cards
@@ -218,9 +208,6 @@ impl MailClient {
     }
     pub async fn publish(&self, card: &MailboxCard) -> Result<AcceptedRecord<MailboxCardPayload>> {
         validate_card(&serde_json::to_value(card)?)?;
-        if !card.event.payload.routes.contains(&self.origin) {
-            return Err(fail("invalid_request", "unadvertised relay"));
-        }
         let value = self
             .send(self.inner.post(&self.base).json(card), 200)
             .await?;
@@ -234,35 +221,26 @@ impl MailClient {
         }
         Ok(serde_json::from_value(normalized(&value))?)
     }
-    /// Anonymous completed-packet retransmission. No JWT/cookie argument exists.
-    /// Old cards/expired packets may be resent for idempotent status lookup.
-    pub async fn deliver(&self, card: &MailboxCard, packet: &Packet) -> Result<DeliveryResult> {
-        validate_card(&serde_json::to_value(card)?)?;
-        validate_packet(&serde_json::to_value(packet)?)?;
-        let p = &card.event.payload;
-        let h = &packet.header;
-        if !p.routes.contains(&self.origin)
-            || !p.enabled
-            || h.card_hash != card.hash
-            || h.mailbox_id != p.mailbox_id
-            || h.key_id != p.key_id
-            || h.expires_at > p.receive_until
-            || canonical_bytes(packet)?.len() > p.max_packet_bytes
-        {
-            return Err(fail("invalid_request", "packet/card/relay mismatch"));
-        }
+    /// Anonymous delivery or exact retransmission of a completed packet.
+    /// No JWT/cookie argument exists.
+    pub async fn deliver(&self, packet: &Packet) -> Result<DeliveryResult> {
+        let packet = validate_packet(&serde_json::to_value(packet)?)?;
         let value = self
             .send(
                 self.inner
-                    .post(format!("{}/{}/packets", self.base, p.mailbox_id))
-                    .json(packet),
+                    .post(format!(
+                        "{}/{}/packets",
+                        self.base, packet.header.mailbox_id
+                    ))
+                    .json(&packet),
                 202,
             )
             .await?;
         validate_mail_schema(&value, "deliveryResult")?;
         let result: DeliveryResult = serde_json::from_value(normalized(&value))?;
-        if result.packet_id != packet_id(packet)? {
-            return Err(fail("invalid_response", "delivery packet ID mismatch"));
+        if result.packet_id != packet_id(&packet)? || result.accepted_at >= packet.header.expires_at
+        {
+            return Err(fail("invalid_response", "delivery result mismatch"));
         }
         Ok(result)
     }
@@ -296,14 +274,12 @@ impl MailClient {
         if response.result.is_empty() && response.next_cursor.is_some() {
             return Err(fail("invalid_response", "empty page with continuation"));
         }
-        let mut seen = std::collections::BTreeSet::new();
         let mut previous = 0;
         for record in &response.result {
             validate_packet(&serde_json::to_value(&record.packet)?)?;
             if record.packet.header.mailbox_id != mailbox
                 || packet_id(&record.packet)? != record.packet_id
                 || record.seq <= previous
-                || !seen.insert(&record.packet_id)
                 || record.accepted_at >= record.packet.header.expires_at
             {
                 return Err(fail(

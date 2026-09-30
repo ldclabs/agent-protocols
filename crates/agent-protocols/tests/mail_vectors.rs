@@ -2,7 +2,7 @@ use agent_protocols::{
     identity::{self, AgentSigner, Envelope, NonceStore, RequestBinding, RequestJwtClaims},
     mail::*,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 fn vectors() -> Value {
     serde_json::from_str(include_str!(
         "../../../docs/protocols/agent-mail/1.0.vectors.json"
@@ -47,6 +47,19 @@ fn token(signer: &AgentSigner, origin: &str, now: i64) -> String {
         ))
         .unwrap()
 }
+fn keyring(v: &Value) -> MailKeyring {
+    let c = card(v, "card");
+    let mut keys = MailKeyring::new(c.event.actor.clone());
+    for name in ["card", "rotated_card", "reopened_card"] {
+        let c = card(v, name);
+        keys.add(&c, key(v, &c)).unwrap();
+    }
+    keys
+}
+fn code<T>(result: agent_protocols::Result<T>) -> Option<String> {
+    result.err().map(|e| e.code().unwrap_or("?").to_owned())
+}
+const ORIGIN: &str = "https://relay.example";
 #[test]
 fn shared_schema_signing_and_strict_json_vectors() {
     let v = vectors();
@@ -91,9 +104,6 @@ fn shared_schema_signing_and_strict_json_vectors() {
     for text in v["strict_json_rejections"].as_array().unwrap() {
         assert!(identity::parse_strict_json(text.as_str().unwrap()).is_err());
     }
-    let mut value = v["envelopes"]["letter"].clone();
-    value["event"]["payload"]["subject"] = Value::Null;
-    assert!(parse_letter(&value.to_string()).is_err());
     let card_json = v["envelopes"]["card"].to_string().replacen(
         "\"nonce\":100",
         "\"nonce\":100,\"nonce\":100",
@@ -109,6 +119,7 @@ fn shared_hpke_vectors_and_random_roundtrips() {
         let c = card(&v, e["card"].as_str().unwrap());
         let p = packet(&v, name);
         let l = validate_letter(&v["envelopes"][e["letter"].as_str().unwrap()]).unwrap();
+        assert_eq!(hex(e["info_hex"].as_str().unwrap()), PROTOCOL.as_bytes());
         assert_eq!(
             canonical_bytes(&p).unwrap(),
             e["packet_jcs"].as_str().unwrap().as_bytes()
@@ -171,11 +182,7 @@ fn every_shared_recipient_rejection() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();
     for case in v["recipient_rejections"].as_array().unwrap() {
-        let c = if let Some(value) = case.get("card") {
-            card(&v, value.as_str().unwrap())
-        } else {
-            card(&v, "card")
-        };
+        let c = card(&v, case["card"].as_str().unwrap_or("card"));
         let secret = case["secret_hex"]
             .as_str()
             .unwrap_or(v["keys"]["recipient_secret_hex"].as_str().unwrap());
@@ -218,34 +225,25 @@ fn shared_sender_discovery_and_authorization_cases() {
     }
     for case in v["discovery_cases"].as_array().unwrap() {
         assert_eq!(
-            validate_discovery(&case["value"], "https://relay.example", Some(&c)).is_ok(),
+            validate_discovery(&case["value"], ORIGIN).is_ok(),
             case["expected"] == "valid",
             "{}",
             case["name"]
         );
     }
     for case in v["owner_jwt_cases"].as_array().unwrap() {
-        let result = verify_owner_jwt(
-            case["token"].as_str().unwrap(),
-            &c.event.actor,
-            "https://relay.example",
-            now,
-        );
+        let result = verify_owner_jwt(case["token"].as_str().unwrap(), &c.event.actor, ORIGIN, now);
+        let expected = case["expected"].as_str().unwrap();
         assert_eq!(
-            result.is_ok(),
-            case["expected"] == "valid",
+            code(result).as_deref(),
+            (expected != "valid").then_some(expected),
             "{}",
             case["name"]
         );
-        if let Err(e) = result {
-            assert_eq!(e.code().unwrap(), case["expected"].as_str().unwrap());
-        }
     }
     let jwt = v["owner_jwt_cases"][0]["token"].as_str().unwrap();
     assert_eq!(
-        verify_owner_jwt(jwt, &c.event.actor, "https://relay.example", now + 300_000)
-            .unwrap_err()
-            .code(),
+        code(verify_owner_jwt(jwt, &c.event.actor, ORIGIN, now + 301_000)).as_deref(),
         Some("invalid_token")
     );
     let parts: Vec<_> = jwt.split('.').collect();
@@ -257,7 +255,7 @@ fn shared_sender_discovery_and_authorization_cases() {
         encode_bytes(duplicate.as_bytes()),
         parts[2]
     );
-    assert!(verify_owner_jwt(&malicious, &c.event.actor, "https://relay.example", now).is_err());
+    assert!(verify_owner_jwt(&malicious, &c.event.actor, ORIGIN, now).is_err());
 }
 #[test]
 fn shared_card_cache_lifecycles_survive_snapshots() {
@@ -265,54 +263,51 @@ fn shared_card_cache_lifecycles_survive_snapshots() {
     let c = card(&v, "card");
     let now = v["now"].as_i64().unwrap();
     for scenario in ["card_cache", "persistent_card_pin"] {
-        let mut cache = CardCache::new();
+        let mut cache = MailCardCache::new();
         for step in v["lifecycle"][scenario].as_array().unwrap() {
-            let result = cache.observe(
-                &v["envelopes"][step["card"].as_str().unwrap()],
-                &c.event.actor,
-                step["now"].as_i64().unwrap_or(now),
-            );
-            let actual = match result {
-                Ok(_) => "usable",
-                Err(e) => match e.code() {
-                    Some("card_equivocation") => "equivocation",
-                    Some("mailbox_conflict") => "key_reuse",
-                    Some("mailbox_unavailable") => "disabled",
-                    Some("stale_card") => "rollback",
-                    _ => panic!("unexpected cache error {e}"),
-                },
-            };
-            assert_eq!(actual, step["expected"], "{}", step["card"]);
-            cache = CardCache::from_snapshot(&cache.snapshot().unwrap()).unwrap();
+            if let Some(at) = step["prune"].as_i64() {
+                cache.prune(at).unwrap();
+            } else {
+                let expected = match step["expected"].as_str().unwrap() {
+                    "usable" => None,
+                    "closed" => Some("mailbox_unavailable"),
+                    _ => Some("stale_card"),
+                };
+                let result = cache.observe(
+                    &v["envelopes"][step["card"].as_str().unwrap()],
+                    &c.event.actor,
+                    step["now"].as_i64().unwrap_or(now),
+                );
+                assert_eq!(code(result).as_deref(), expected, "{step}");
+            }
+            cache = MailCardCache::from_snapshot(&cache.snapshot().unwrap()).unwrap();
         }
     }
 }
-fn recipient(v: &Value) -> MailRecipient {
-    let c = card(v, "card");
-    let mut r = MailRecipient::new(c.event.actor.clone());
-    for name in ["card", "rotated_card"] {
-        let c = card(v, name);
-        r.add_key(&c, key(v, &c)).unwrap();
-    }
-    r
-}
 #[test]
-fn shared_recipient_lifecycle_and_receipts() {
+fn shared_recipient_lifecycle_and_replies() {
     let v = vectors();
-    let mut r = recipient(&v);
+    let mut inbox = MailInbox::new(keyring(&v));
     for step in v["lifecycle"]["recipient"].as_array().unwrap() {
         let p = packet(&v, step["packet"].as_str().unwrap());
-        let out = r.receive(&p, None, step["now"].as_i64().unwrap()).unwrap();
+        let out = inbox
+            .accept(&p, None, step["now"].as_i64().unwrap())
+            .unwrap();
         assert_eq!(
-            matches!(out, RecipientAcceptance::Accepted(_)),
+            matches!(out, InboxAcceptance::Accepted(_)),
             step["expected"] == "accepted"
         );
-        assert_eq!(r.letters().len() as u64, step["items"]);
-        r = MailRecipient::from_snapshot(&r.snapshot().unwrap()).unwrap();
+        let snapshot = inbox.snapshot().unwrap();
+        assert_eq!(
+            snapshot["accepted"].as_array().unwrap().len() as u64,
+            step["items"]
+        );
+        let keys = MailKeyring::from_snapshot(&inbox.keyring().snapshot().unwrap()).unwrap();
+        inbox = MailInbox::from_snapshot(keys, &snapshot).unwrap();
     }
     let history = &v["lifecycle"]["historical_card"];
-    assert!(recipient(&v)
-        .receive(
+    assert!(MailInbox::new(keyring(&v))
+        .accept(
             &packet(&v, "original"),
             None,
             history["now"].as_i64().unwrap()
@@ -320,29 +315,22 @@ fn shared_recipient_lifecycle_and_receipts() {
         .is_ok());
     let expired = &v["lifecycle"]["expired_new_letter"];
     assert_eq!(
-        recipient(&v)
-            .receive(
-                &packet(&v, "original"),
-                None,
-                expired["now"].as_i64().unwrap()
-            )
-            .unwrap_err()
-            .code(),
+        code(MailInbox::new(keyring(&v)).accept(
+            &packet(&v, "original"),
+            None,
+            expired["now"].as_i64().unwrap()
+        ))
+        .as_deref(),
         Some("packet_expired")
     );
-    let original = validate_letter(&v["envelopes"]["letter"]).unwrap();
-    let receipt = validate_letter(&v["envelopes"]["receipt"]).unwrap();
-    validate_receipt(&receipt, &original).unwrap();
-    assert!(validate_receipt(
-        &receipt,
-        &validate_letter(&v["envelopes"]["lower_nonce_letter"]).unwrap()
-    )
-    .is_err());
+    let reply = &v["lifecycle"]["reply"];
+    let letter =
+        |name: &str| validate_letter(&v["envelopes"][reply[name].as_str().unwrap()]).unwrap();
+    validate_reply(&letter("valid"), &letter("parent")).unwrap();
+    assert!(validate_reply(&letter("valid"), &letter("wrong_parent")).is_err());
     let now = v["now"].as_i64().unwrap();
-    let generated = sign_receipt(&owner_signer(&v), &original, now + 10000, now, 300).unwrap();
-    validate_receipt(&generated, &original).unwrap();
-    assert!(sign_receipt(&owner_signer(&v), &receipt, now + 10000, now, 301).is_err());
-    let reply = sign_message(
+    let original = letter("parent");
+    let generated = sign_message(
         &owner_signer(&v),
         MessagePayload {
             to: original.event.actor.clone(),
@@ -352,103 +340,86 @@ fn shared_recipient_lifecycle_and_receipts() {
             subject: None,
             in_reply_to: Some(original.hash.clone()),
             reply_card: None,
-            receipt_requested: None,
         },
         now,
         302,
     )
     .unwrap();
-    validate_reply(&reply, &original).unwrap();
-    let mut mutated = r.letters();
-    mutated[0].event.payload["subject"] = json!("changed");
-    assert_ne!(r.letters(), mutated);
+    validate_reply(&generated, &original).unwrap();
 }
 #[test]
 fn relay_shared_lifecycle_snapshots_and_owner_access() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();
-    let owner = owner_signer(&v);
-    let jwt = token(&owner, "https://relay.example", now);
-    let c = card(&v, "card");
-    let mailbox = &c.event.payload.mailbox_id;
-    let mut relay = MailRelay::new("https://relay.example").unwrap();
-    relay.publish(&v["envelopes"]["card"], now).unwrap();
+    let jwt = token(&owner_signer(&v), ORIGIN, now);
+    let mailbox = card(&v, "card").event.payload.mailbox_id;
+    let mut relay = MailRelayStore::new(ORIGIN).unwrap();
     for step in v["lifecycle"]["relay"].as_array().unwrap() {
-        match step["op"].as_str().unwrap() {
-            "set_current" => {
-                relay
-                    .publish(&v["envelopes"][step["card"].as_str().unwrap()], now)
-                    .unwrap();
-            }
-            "delete" => {
-                relay
-                    .delete(
-                        mailbox,
-                        &packet_id(&packet(&v, step["packet"].as_str().unwrap())).unwrap(),
-                        &jwt,
-                        now,
-                    )
-                    .unwrap();
-            }
-            "deliver" => {
-                let result = relay.deliver(
-                    mailbox,
+        let accepted_at = match step["op"].as_str().unwrap() {
+            "publish" => relay
+                .publish(
+                    &v["envelopes"][step["card"].as_str().unwrap()],
+                    step["now"].as_i64().unwrap(),
+                )
+                .map(|r| r.accepted_at),
+            "deliver" => relay
+                .deliver(
+                    &mailbox,
                     &packet(&v, step["packet"].as_str().unwrap()),
                     step["now"].as_i64().unwrap(),
-                );
-                if let Some(seq) = step["seq"].as_u64() {
-                    let result = result.unwrap();
-                    assert_eq!(result.seq, seq);
-                    assert_eq!(result.accepted_at, step["accepted_at"]);
-                } else {
-                    assert_eq!(
-                        result.unwrap_err().code(),
-                        Some(if step["expected"] == "disabled" {
-                            "mailbox_unavailable"
-                        } else {
-                            "stale_card"
-                        })
-                    );
-                }
-            }
-            _ => panic!("unknown lifecycle op"),
-        }
-        if let Some(stored) = step["stored"].as_u64() {
+                )
+                .map(|r| r.accepted_at),
+            _ => relay
+                .delete(
+                    &mailbox,
+                    &packet_id(&packet(&v, step["packet"].as_str().unwrap())).unwrap(),
+                    &jwt,
+                    now,
+                )
+                .map(|_| 0),
+        };
+        if let Some(expected) = step["accepted_at"].as_i64() {
+            assert_eq!(accepted_at.unwrap(), expected, "{step}");
+        } else if step["op"] != "delete" {
             assert_eq!(
-                relay
-                    .list(mailbox, &jwt, now, 100, None)
-                    .unwrap()
-                    .result
-                    .len() as u64,
-                stored
+                code(accepted_at).as_deref(),
+                step["expected"].as_str(),
+                "{step}"
             );
         }
-        relay = MailRelay::from_snapshot(&relay.snapshot().unwrap()).unwrap();
+        let page = relay.list(&mailbox, &jwt, now, 100, None).unwrap();
+        if let Some(stored) = step["stored"].as_u64() {
+            assert_eq!(page.result.len() as u64, stored, "{step}");
+        }
+        if let Some(seqs) = step["seqs"].as_array() {
+            let actual: Vec<_> = page.result.iter().map(|r| r.seq).collect();
+            let expected: Vec<_> = seqs.iter().map(|s| s.as_u64().unwrap()).collect();
+            assert_eq!(actual, expected);
+        }
+        relay = MailRelayStore::from_snapshot(&relay.snapshot().unwrap(), 10_000, 1 << 26).unwrap();
+    }
+    for step in v["lifecycle"]["relay_registration"].as_array().unwrap() {
+        let result = MailRelayStore::new(ORIGIN)
+            .unwrap()
+            .publish(&v["envelopes"][step["card"].as_str().unwrap()], now);
+        assert_eq!(code(result).as_deref(), step["expected"].as_str());
     }
     for case in v["owner_jwt_cases"].as_array().unwrap() {
         let t = case["token"].as_str().unwrap();
+        let expected = case["expected"].as_str().unwrap();
         assert_eq!(
-            relay.list(mailbox, t, now, 100, None).is_ok(),
-            case["expected"] == "valid"
+            code(relay.list(&mailbox, t, now, 100, None)).as_deref(),
+            (expected != "valid").then_some(expected)
         );
-        if case["expected"] != "valid" {
-            assert!(relay
-                .delete(
-                    mailbox,
-                    &packet_id(&packet(&v, "original")).unwrap(),
-                    t,
-                    now
-                )
-                .is_err());
-        }
     }
-    let old = relay
-        .publish(&v["envelopes"]["card"], now + MAX_TTL_MS)
-        .unwrap();
-    assert_eq!(old.envelope.hash, c.hash);
+    let unknown = random_id().unwrap();
     assert_eq!(
-        relay.card(mailbox).unwrap().envelope,
-        card(&v, "reenabled_card")
+        code(relay.list(&unknown, &jwt, now, 100, None)).as_deref(),
+        Some("mailbox_unavailable")
+    );
+    assert_eq!(
+        code(relay.list(&mailbox, "bad", now, 100, None)).as_deref(),
+        Some("invalid_token")
     );
 }
 #[test]
@@ -458,114 +429,115 @@ fn live_control_nonces_quota_pagination_and_failure_atomicity() {
     let original = card(&v, "card");
     let mailbox = original.event.payload.mailbox_id.clone();
     let signer = owner_signer(&v);
-    let jwt = token(&signer, "https://relay.example", now);
-    let mut relay = MailRelay::with_limits("https://relay.example", 2, 10000).unwrap();
+    let jwt = token(&signer, ORIGIN, now);
+    let mut relay = MailRelayStore::with_limits(ORIGIN, 2, 10000).unwrap();
     let mut shared = identity::MemoryNonceStore::new();
     relay
         .publish_with_nonce_store(&v["envelopes"]["card"], now, &mut shared)
         .unwrap();
     let mut p = original.event.payload.clone();
-    p.routes = vec!["https://other.example".into()];
-    let invalid = sign_card(&signer, p, now, 999).unwrap();
-    assert!(relay
-        .publish_with_nonce_store(&serde_json::to_value(invalid).unwrap(), now, &mut shared)
-        .is_err());
+    p.mailbox_id = random_id().unwrap();
+    let stale = sign_card(&signer, p.clone(), now - FUTURE_SKEW_MS - 1, 999).unwrap();
+    assert_eq!(
+        code(relay.publish_with_nonce_store(
+            &serde_json::to_value(stale).unwrap(),
+            now,
+            &mut shared
+        ))
+        .as_deref(),
+        Some("timestamp_out_of_window")
+    );
     assert_eq!(shared.max_nonce(&signer.agent_id(), now), Some(100));
     shared
         .check_and_update(&signer.agent_id(), 200, now, 600000)
         .unwrap();
-    assert!(relay
-        .publish_with_nonce_store(&v["envelopes"]["rotated_card"], now, &mut shared)
-        .is_err());
+    assert_eq!(
+        code(relay.publish_with_nonce_store(&v["envelopes"]["rotated_card"], now, &mut shared))
+            .as_deref(),
+        Some("nonce_not_greater")
+    );
     assert_eq!(relay.card(&mailbox).unwrap().envelope, original);
     let a = relay
         .deliver(&mailbox, &packet(&v, "original"), now)
         .unwrap();
-    let b = relay
+    relay
         .deliver(&mailbox, &packet(&v, "reencrypted"), now)
         .unwrap();
     let before = relay.snapshot().unwrap();
     assert_eq!(
-        relay
-            .deliver(&mailbox, &packet(&v, "lower_nonce"), now)
-            .unwrap_err()
-            .code(),
-        Some("quota_exceeded")
+        code(relay.deliver(&mailbox, &packet(&v, "lower_nonce"), now)).as_deref(),
+        Some("rate_limited")
     );
     assert_eq!(relay.snapshot().unwrap(), before);
     let first = relay.list(&mailbox, &jwt, now, 1, None).unwrap();
-    assert_eq!(first.result[0].seq, a.seq);
+    assert_eq!(first.result[0].seq, 1);
+    assert_eq!(first.next_cursor.as_deref(), Some("1"));
     relay.delete(&mailbox, &a.packet_id, &jwt, now).unwrap();
     let second = relay
         .list(&mailbox, &jwt, now, 1, first.next_cursor.as_deref())
         .unwrap();
-    assert_eq!(second.result[0].seq, b.seq);
+    assert_eq!(second.result[0].seq, 2);
     assert!(second.next_cursor.is_none());
+    for cursor in ["", "-1", "01", "x"] {
+        assert_eq!(
+            code(relay.list(&mailbox, &jwt, now, 1, Some(cursor))).as_deref(),
+            Some("invalid_request")
+        );
+    }
     let third = relay
         .deliver(&mailbox, &packet(&v, "lower_nonce"), now)
         .unwrap();
-    assert_eq!(third.seq, 3);
+    assert_eq!(third.accepted_at, now);
     assert_eq!(
         relay
             .deliver(&mailbox, &packet(&v, "original"), now)
             .unwrap(),
         a
     );
+    let seqs: Vec<_> = relay
+        .list(&mailbox, &jwt, now, 100, None)
+        .unwrap()
+        .result
+        .iter()
+        .map(|r| r.seq)
+        .collect();
+    assert_eq!(seqs, [2, 3]);
+    let expires = packet(&v, "original").header.expires_at;
+    relay.prune(expires).unwrap();
     assert_eq!(
-        relay
-            .list(&mailbox, &jwt, now, 100, None)
-            .unwrap()
-            .result
-            .len(),
-        2
+        code(relay.deliver(&mailbox, &packet(&v, "original"), expires)).as_deref(),
+        Some("stale_card")
     );
-    let mut second_payload = original.event.payload.clone();
-    second_payload.mailbox_id = random_id().unwrap();
-    let second_card = sign_card(&signer, second_payload, now, 201).unwrap();
-    relay
-        .publish(&serde_json::to_value(&second_card).unwrap(), now)
-        .unwrap();
-    assert!(relay
-        .list(
-            &second_card.event.payload.mailbox_id,
-            &jwt,
-            now,
-            1,
-            first.next_cursor.as_deref()
-        )
-        .is_err());
-    let mut result = relay.card(&mailbox).unwrap();
-    result.envelope.event.payload.enabled = false;
-    assert!(relay.card(&mailbox).unwrap().envelope.event.payload.enabled);
 }
 #[test]
-fn recipient_requires_registered_outgoing_before_accepting_receipt() {
+fn keyring_and_card_cache_seal_prune_and_bind_keys() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();
-    let sender = AgentSigner::from_seed(
-        hex(v["keys"]["sender_seed_hex"].as_str().unwrap())
-            .try_into()
-            .unwrap(),
+    let letter = validate_letter(&v["envelopes"]["letter"]).unwrap();
+    let mut cache = MailCardCache::new();
+    let sealed = cache.seal(&letter, &v["envelopes"]["card"], now).unwrap();
+    assert_eq!(keyring(&v).open(&sealed, now).unwrap(), letter);
+    let owner = card(&v, "card").event.actor;
+    cache
+        .observe(&v["envelopes"]["rotated_card"], &owner, now)
+        .unwrap();
+    assert_eq!(
+        code(cache.seal(&letter, &v["envelopes"]["card"], now)).as_deref(),
+        Some("stale_card")
     );
-    let secret = MailEncryptionKey::generate().unwrap();
-    let mut payload = card(&v, "card").event.payload;
-    payload.public_key = secret.public_key();
-    let sender_card = sign_card(&sender, payload, now, 400).unwrap();
-    let receipt = validate_letter(&v["envelopes"]["receipt"]).unwrap();
-    let packet = encrypt_letter(&receipt, &sender_card, now).unwrap();
-    let mut recipient = MailRecipient::new(sender.agent_id());
-    recipient.add_key(&sender_card, secret).unwrap();
-    assert!(recipient.receive(&packet, None, now).is_err());
-    assert!(recipient.letters().is_empty());
-    let outgoing = validate_letter(&v["envelopes"]["letter"]).unwrap();
-    recipient.remember_outgoing(&outgoing).unwrap();
-    recipient = MailRecipient::from_snapshot(&recipient.snapshot().unwrap()).unwrap();
-    assert!(matches!(
-        recipient.receive(&packet, None, now).unwrap(),
-        RecipientAcceptance::Accepted(_)
-    ));
-    let mut snapshot = recipient.snapshot().unwrap();
-    snapshot["outgoing"] = json!([]);
-    assert!(MailRecipient::from_snapshot(&snapshot).is_err());
-    assert!(recipient.remember_outgoing(&receipt).is_err());
+    assert_eq!(
+        code(encrypt_letter(&letter, &card(&v, "closed_card"), now)).as_deref(),
+        Some("mailbox_unavailable")
+    );
+    let mut keys = keyring(&v);
+    let c = card(&v, "card");
+    assert_eq!(
+        code(keys.add(&c, key(&v, &card(&v, "rotated_card")))).as_deref(),
+        Some("invalid_private_key")
+    );
+    keys.prune(c.event.payload.receive_until).unwrap();
+    assert_eq!(
+        code(keys.open(&packet(&v, "original"), now)).as_deref(),
+        Some("invalid_packet")
+    );
 }

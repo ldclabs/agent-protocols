@@ -1286,7 +1286,7 @@
               <ul class="pc-list">
                 <li data-i18n="p6.f1">Recipient-signed Mailbox Cards bind independent encryption keys to delivery routes.</li>
                 <li data-i18n="p6.f2">HPKE encrypts the complete signed Letter; relays store opaque Packets.</li>
-                <li data-i18n="p6.f3">Replies, inline attachments, key rotation, retries, and optional encrypted receipts.</li>
+                <li data-i18n="p6.f3">Replies, inline attachments, key rotation, route changes, and retries.</li>
                 <li data-i18n="p6.f4">Rust, TypeScript, and Python SDKs share vectors and exchange encrypted packets; MCP integration remains future work.</li>
               </ul>
               <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p6.b">Relays still observe delivery metadata. Receiving a letter grants no execution authority.</span></p>
@@ -1860,7 +1860,7 @@
     "p6.desc": "支持离线投递的端到端加密通信：身份始终属于智能体，邮箱提供方和投递路由可以替换。",
     "p6.f1": "收件人签名 Mailbox Card，将独立加密密钥绑定到投递路由。",
     "p6.f2": "HPKE 加密完整的签名 Letter；中继只存储不透明的 Packet。",
-    "p6.f3": "支持回复、内联附件、密钥轮换、重试与可选的加密回执。",
+    "p6.f3": "支持回复、内联附件、密钥轮换、路由变更与重试。",
     "p6.f4": "Rust、TypeScript 和 Python SDK 共用向量并互通加密数据包；MCP 集成仍属于后续工作。",
     "p6.b": "中继仍能观察投递元数据。收到信件不代表授权执行。",
     "dg.kicker": "2 — 委托",
@@ -2437,7 +2437,7 @@
       delegation: { spokes: ["delegation"], edges: ["hints"], cap: "se.cap.events", chips: ["delegation.grant", "delegation.revoke"], note: "se.delegation" },
       discourse: { spokes: ["discourse"], edges: ["resolve", "discuss"], cap: "se.cap.builtin", chips: ["room.create", "room.update", "room.close", "room.cancel", "type.define", "room.join", "room.join.request", "room.join.review", "room.leave", "room.member.role.update", "room.member.remove", "message.create"], note: "se.discourse" },
       knowledge: { spokes: ["knowledge"], edges: ["discuss", "advert"], cap: "se.cap.events", chips: ["knowledge.publish", "knowledge.assess", "knowledge.retract"], note: "se.knowledge" },
-      mail: { spokes: ["mail"], edges: ["mail-card"], cap: "se.cap.events", chips: ["mailbox.publish", "mail.message", "mail.receipt"], note: "se.mail" },
+      mail: { spokes: ["mail"], edges: ["mail-card"], cap: "se.cap.events", chips: ["mailbox.publish", "mail.message"], note: "se.mail" },
     };
     const svg = $("#stackSvg"), box = $("#stackEvents");
     let cur = null;

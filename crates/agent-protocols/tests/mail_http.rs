@@ -175,10 +175,8 @@ fn objects(
         &owner,
         MailboxCardPayload {
             mailbox_id: random_id().unwrap(),
-            enabled: true,
             expires_at: now + 100_000,
             receive_until: now + 200_000,
-            key_id: random_id().unwrap(),
             public_key: key.public_key(),
             routes: vec![origin.into()],
             max_packet_bytes: 65536,
@@ -197,7 +195,6 @@ fn objects(
             subject: None,
             in_reply_to: None,
             reply_card: None,
-            receipt_requested: Some(false),
         },
         now,
         200,
@@ -207,15 +204,15 @@ fn objects(
     (owner, card, letter, packet, now)
 }
 #[test]
-fn mail_https_operations_override_owner_auth_and_anonymous_delivery() {
+fn mail_https_fixed_paths_owner_auth_and_anonymous_delivery() {
     run(async {
         let server = Server::start();
-        let mut client = server.client();
+        let client = server.client();
         let (owner, card, _, packet, now) = objects(&server.origin);
         let mailbox = &card.event.payload.mailbox_id;
-        let discovery = json!({"protocol":PROTOCOL,"service":server.origin,"endpoints":{"mailboxes":format!("{}/custom/mailboxes",server.origin)},"features":["future-feature"]});
+        let discovery = json!({"protocol":PROTOCOL,"service":server.origin,"endpoints":{"mailboxes":format!("{}/ignored",server.origin)},"features":["future-feature"]});
         server.reply(&discovery);
-        client.discover().await.unwrap();
+        client.protocol().await.unwrap();
         let record = json!({"envelope":card,"accepted_at":now});
         server.reply(&record);
         assert_eq!(client.publish(&card).await.unwrap().envelope, card);
@@ -228,9 +225,9 @@ fn mail_https_operations_override_owner_auth_and_anonymous_delivery() {
                 .envelope,
             card
         );
-        let result = json!({"packet_id":packet_id(&packet).unwrap(),"accepted_at":now,"seq":1});
+        let result = json!({"packet_id":packet_id(&packet).unwrap(),"accepted_at":now});
         server.raw(202, &result.to_string(), None);
-        assert_eq!(client.deliver(&card, &packet).await.unwrap().seq, 1);
+        assert_eq!(client.deliver(&packet).await.unwrap().accepted_at, now);
         let jwt = owner
             .sign_request_jwt(&RequestJwtClaims::new(
                 owner.agent_id(),
@@ -263,18 +260,35 @@ fn mail_https_operations_override_owner_auth_and_anonymous_delivery() {
             .unwrap();
         // An authenticated read never contaminates the isolated anonymous delivery.
         server.raw(202, &result.to_string(), None);
-        client.deliver(&card, &packet).await.unwrap();
+        client.deliver(&packet).await.unwrap();
         let requests = server.requests.lock().unwrap();
-        assert_eq!(requests.len(), 7);
-        assert_eq!(requests[1].path, "/custom/mailboxes");
-        assert_eq!(requests[1].method, "POST");
+        let paths: Vec<_> = requests
+            .iter()
+            .map(|r| (r.method.as_str(), r.path.as_str()))
+            .collect();
+        let card_path = format!("/v1/mailboxes/{mailbox}/card");
+        let packets_path = format!("/v1/mailboxes/{mailbox}/packets");
+        let list_path = format!("{packets_path}?limit=10");
+        let delete_path = format!("{packets_path}/{}", packet_id(&packet).unwrap());
+        assert_eq!(
+            paths,
+            [
+                ("GET", "/.well-known/agent-mail"),
+                ("POST", "/v1/mailboxes"),
+                ("GET", card_path.as_str()),
+                ("POST", packets_path.as_str()),
+                ("GET", list_path.as_str()),
+                ("DELETE", delete_path.as_str()),
+                ("POST", packets_path.as_str()),
+            ]
+        );
         assert_eq!(
             serde_json::from_str::<Value>(&requests[1].body).unwrap(),
             serde_json::to_value(&card).unwrap()
         );
         for i in [0, 1, 2, 3, 6] {
             assert!(requests[i].authorization.is_none());
-            assert!(requests[i].cookie.as_deref().unwrap_or("").is_empty());
+            assert!(requests[i].cookie.is_none());
         }
         for i in [4, 5] {
             assert_eq!(
@@ -292,20 +306,20 @@ fn mail_https_redirects_malformed_and_misbound_responses_are_rejected() {
         let (owner, card, _, packet, now) = objects(&server.origin);
         let mailbox = &card.event.payload.mailbox_id;
         server.raw(307, "{}", Some(format!("{}/leaked", server.origin)));
-        assert!(client.deliver(&card, &packet).await.is_err());
+        assert!(client.deliver(&packet).await.is_err());
         assert_eq!(server.requests.lock().unwrap().len(), 1);
         server.raw(
             202,
-            "{\"packet_id\":\"x\",\"packet_id\":\"x\",\"seq\":1,\"accepted_at\":1}",
+            "{\"packet_id\":\"x\",\"packet_id\":\"x\",\"accepted_at\":1}",
             None,
         );
-        assert!(client.deliver(&card, &packet).await.is_err());
+        assert!(client.deliver(&packet).await.is_err());
         server.raw(
             202,
-            &json!({"packet_id":hash_bytes(b"wrong"),"seq":1,"accepted_at":now}).to_string(),
+            &json!({"packet_id":hash_bytes(b"wrong"),"accepted_at":now}).to_string(),
             None,
         );
-        assert!(client.deliver(&card, &packet).await.is_err());
+        assert!(client.deliver(&packet).await.is_err());
         let jwt = owner
             .sign_request_jwt(&RequestJwtClaims::new(
                 owner.agent_id(),
@@ -315,9 +329,7 @@ fn mail_https_redirects_malformed_and_misbound_responses_are_rejected() {
             ))
             .unwrap();
         let item = json!({"packet_id":packet_id(&packet).unwrap(),"packet":packet,"accepted_at":now,"seq":1});
-        let mut duplicate = item.clone();
-        duplicate["seq"] = json!(2);
-        server.reply(&json!({"result":[item.clone(),duplicate]}));
+        server.reply(&json!({"result":[item.clone(),item.clone()]}));
         assert!(client
             .list(mailbox, &owner.agent_id(), &jwt, now, 10, None)
             .await
@@ -349,37 +361,40 @@ fn mail_https_redirects_malformed_and_misbound_responses_are_rejected() {
             .await
             .is_err());
         assert_eq!(server.requests.lock().unwrap().len(), before);
-        let bad = json!({"protocol":PROTOCOL,"service":server.origin,"endpoints":{"mailboxes":"https://attacker.example/collect"}});
-        let mut mutable = client.clone();
-        assert!(mutable.set_discovery(&bad).is_err());
+        server.raw(
+            202,
+            &json!({"packet_id":packet_id(&packet).unwrap(),"seq":1,"accepted_at":now}).to_string(),
+            None,
+        );
+        assert!(client.deliver(&packet).await.is_err());
         server.raw(
             429,
-            "{\"error\":{\"code\":\"quota_exceeded\",\"message\":\"full\"}}",
+            "{\"error\":{\"code\":\"rate_limited\",\"message\":\"full\"}}",
             None,
         );
         assert_eq!(
-            client.deliver(&card, &packet).await.unwrap_err().code(),
-            Some("quota_exceeded")
+            client.deliver(&packet).await.unwrap_err().code(),
+            Some("rate_limited")
         );
         server.mime(
             202,
-            &json!({"packet_id":packet_id(&packet).unwrap(),"seq":1,"accepted_at":now}).to_string(),
+            &json!({"packet_id":packet_id(&packet).unwrap(),"accepted_at":now}).to_string(),
             "text/html",
         );
         assert_eq!(
-            client.deliver(&card, &packet).await.unwrap_err().code(),
+            client.deliver(&packet).await.unwrap_err().code(),
             Some("invalid_response")
         );
         let bounded = server.client().with_response_limit(4096).unwrap();
         server.raw(202, &"x".repeat(4097), None);
         assert_eq!(
-            bounded.deliver(&card, &packet).await.unwrap_err().code(),
+            bounded.deliver(&packet).await.unwrap_err().code(),
             Some("payload_too_large")
         );
     });
 }
 #[test]
-fn card_reads_pin_disabled_expired_and_equivocating_cards_across_clients() {
+fn card_reads_pin_closed_expired_and_conflicting_cards_across_clients() {
     run(async {
         let server = Server::start();
         let client = server.client();
@@ -390,28 +405,27 @@ fn card_reads_pin_disabled_expired_and_equivocating_cards_across_clients() {
         long_payload.receive_until = now + 20 * 86_400_000;
         let long = sign_card(&owner, long_payload.clone(), now, 100).unwrap();
         let mut short_payload = long_payload.clone();
-        short_payload.enabled = false;
+        short_payload.routes = vec![];
         short_payload.expires_at = now + 86_400_000;
         short_payload.receive_until = now + 2 * 86_400_000;
-        let disabled = sign_card(&owner, short_payload, now, 101).unwrap();
+        let closed = sign_card(&owner, short_payload, now, 101).unwrap();
         server.reply(&json!({"envelope":long,"accepted_at":now}));
         client
             .card_at(mailbox, &owner.agent_id(), now)
             .await
             .unwrap();
         let clone = client.clone();
-        server.reply(&json!({"envelope":disabled,"accepted_at":now}));
-        assert!(
-            !clone
-                .card_at(mailbox, &owner.agent_id(), now)
-                .await
-                .unwrap()
-                .envelope
-                .event
-                .payload
-                .enabled
-        );
-        // A short disabled card expiring does not revive the older enabled card.
+        server.reply(&json!({"envelope":closed,"accepted_at":now}));
+        assert!(clone
+            .card_at(mailbox, &owner.agent_id(), now)
+            .await
+            .unwrap()
+            .envelope
+            .event
+            .payload
+            .routes
+            .is_empty());
+        // A short closed card expiring does not revive the older open card.
         let later = now + 3 * 86_400_000;
         server.reply(&json!({"envelope":long,"accepted_at":now}));
         assert_eq!(
@@ -423,7 +437,7 @@ fn card_reads_pin_disabled_expired_and_equivocating_cards_across_clients() {
             Some("stale_card")
         );
         let saved = clone.card_cache_snapshot().unwrap();
-        let restored = Arc::new(Mutex::new(CardCache::from_snapshot(&saved).unwrap()));
+        let restored = Arc::new(Mutex::new(MailCardCache::from_snapshot(&saved).unwrap()));
         let other = server.client().with_card_cache(restored);
         server.reply(&json!({"envelope":long,"accepted_at":now}));
         assert_eq!(
@@ -434,25 +448,7 @@ fn card_reads_pin_disabled_expired_and_equivocating_cards_across_clients() {
                 .code(),
             Some("stale_card")
         );
-        // Even observing the disabled card for the first time after its expiry
-        // must install the pin instead of dropping the historical observation.
-        let late_client = server.client();
-        server.reply(&json!({"envelope":disabled,"accepted_at":now}));
-        late_client
-            .card_at(mailbox, &owner.agent_id(), later)
-            .await
-            .unwrap();
-        server.reply(&json!({"envelope":long,"accepted_at":now}));
-        assert_eq!(
-            late_client
-                .card_at(mailbox, &owner.agent_id(), later)
-                .await
-                .unwrap_err()
-                .code(),
-            Some("stale_card")
-        );
-        // Conflicting signed cards keep an equivocation flag shared with clones.
-        long_payload.enabled = true;
+        // A different card with the pinned nonce is rejected; the pin stays usable.
         let higher = sign_card(&owner, long_payload.clone(), now, 102).unwrap();
         server.reply(&json!({"envelope":higher,"accepted_at":now}));
         client
@@ -468,29 +464,12 @@ fn card_reads_pin_disabled_expired_and_equivocating_cards_across_clients() {
                 .await
                 .unwrap_err()
                 .code(),
-            Some("card_equivocation")
+            Some("stale_card")
         );
         server.reply(&json!({"envelope":higher,"accepted_at":now}));
-        assert_eq!(
-            client
-                .card_at(mailbox, &owner.agent_id(), later)
-                .await
-                .unwrap_err()
-                .code(),
-            Some("card_equivocation")
-        );
-        // Pin snapshots also retain equivocation, rather than only the nonce.
-        let recovered = server.client().with_card_cache(Arc::new(Mutex::new(
-            CardCache::from_snapshot(&client.card_cache_snapshot().unwrap()).unwrap(),
-        )));
-        server.reply(&json!({"envelope":higher,"accepted_at":now}));
-        assert_eq!(
-            recovered
-                .card_at(mailbox, &owner.agent_id(), later)
-                .await
-                .unwrap_err()
-                .code(),
-            Some("card_equivocation")
-        );
+        client
+            .card_at(mailbox, &owner.agent_id(), later)
+            .await
+            .unwrap();
     });
 }

@@ -9,7 +9,7 @@ Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Agent 
 - `agent_protocols.delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, authority, acceptance, historical, and use checks, `verify_delegation_credential` over the latest grant record, and `audit_delegation_history` for auditors.
 - `agent_protocols.discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
 - `agent_protocols.knowledge`: signed research contributions, known-set lifecycle views, evidence and profile bindings, in-memory storage, exact queries with checkpoint-bound pagination, single-page ranked search, discovery, and response validation.
-- `agent_protocols.mail` and `agent_protocols.mail_state`: signed mailbox cards and letters, PyHPKE encryption, historical key retention, permanent card pins, outbox/inbox receipt binding, and synchronized relay state with snapshots.
+- `agent_protocols.mail` and `agent_protocols.mail_state`: signed mailbox cards and letters, PyHPKE encryption, historical key retention, card pins, inbox deduplication, and synchronized relay state with snapshots.
 - `agent_protocols.http_client`: optional requests-based Profile, Delegation, Discourse, Knowledge, and Mail clients. Install with `agent-protocols[http]`. Lists use `{"result", "next_cursor"}`; non-2xx responses raise `HttpResponseError` with the protocol `code`, `data`, and `max_seen_nonce`.
 
 ## Example
@@ -158,10 +158,10 @@ to them automatically.
 ## Mail
 
 Agent Mail 1.0 provides one-recipient, asynchronous encrypted correspondence.
-`mailbox_publish_event`, `mail_message_event`, `mail_receipt_event` and
-`sign_mail_event` build signed Identity envelopes. `MailEncryptionKey.generate()`
-creates an independent X25519 key; never convert an identity seed into a mail key.
-`mail_part` / `decode_mail_part` preserve binary parts and validate UTF-8 text.
+`mailbox_publish_event`, `mail_message_event` and `sign_mail_event` build signed
+Identity envelopes. `MailEncryptionKey.generate()` creates an independent X25519
+key; never convert an identity seed into a mail key. `mail_part` /
+`decode_mail_part` preserve binary parts and validate UTF-8 text.
 
 Encryption uses [PyHPKE](https://pyhpke.readthedocs.io/en/latest/), version
 `>=0.6.5,<0.7`, with the fixed RFC 9180 Base X25519/HKDF-SHA256/ChaCha20Poly1305
@@ -174,9 +174,9 @@ answer are exercised by the SDK tests. This does not replace independent review.
 ```python
 from agent_protocols import (
     AgentSigner, ClientNonceManager, MailCardCache, MailEncryptionKey, MailInbox,
-    MailKeyring, MailOutbox, MailRelayStore, MailSender, RequestBinding,
-    create_request_jwt_claims, mail_message_event, mailbox_publish_event,
-    mail_part, new_mail_id, sign_mail_event, unix_ms,
+    MailKeyring, MailRelayStore, RequestBinding, create_request_jwt_claims,
+    mail_message_event, mailbox_publish_event, mail_part, new_mail_id,
+    sign_mail_event, unix_ms,
 )
 
 sender, owner = AgentSigner.generate(), AgentSigner.generate()
@@ -185,9 +185,9 @@ now = unix_ms()
 owner_nonces, sender_nonces = ClientNonceManager(), ClientNonceManager()
 card = sign_mail_event(owner, mailbox_publish_event(
     owner.agent_id(), now, owner_nonces.next_nonce(now), {
-        'mailbox_id': new_mail_id(), 'enabled': True,
+        'mailbox_id': new_mail_id(),
         'expires_at': now + 86_400_000, 'receive_until': now + 2 * 86_400_000,
-        'key_id': new_mail_id(), 'public_key': key.public_key(),
+        'public_key': key.public_key(),
         'routes': ['https://relay.example'], 'max_packet_bytes': 65536,
     },
 ))
@@ -197,13 +197,11 @@ letter = sign_mail_event(sender, mail_message_event(
         'thread_id': new_mail_id(), 'parts': [mail_part('text/plain', 'Hello privately.')],
     },
 ))
-outbox = MailOutbox(sender.agent_id())
-sending = MailSender(MailCardCache(), outbox)
-packet = sending.prepare(letter, card, now_ms=now)
-# Persist the sender cache, original outgoing letter, and completed packet.
+cards = MailCardCache()
+packet = cards.seal(letter, card, now_ms=now)
+# Persist cards.snapshot(), the original outgoing letter, and the completed packet.
 relay = MailRelayStore('https://relay.example')
 relay.publish(card, now_ms=now)
-outbox.mark_sent(letter['hash'])  # Record the actual attempt, including ambiguous failures.
 result = relay.deliver(card['event']['payload']['mailbox_id'], packet, now_ms=now)
 # A hosted service must persist relay state before returning success externally.
 keys = MailKeyring(owner.agent_id())
@@ -212,68 +210,65 @@ inbox = MailInbox(keys)
 accepted = inbox.accept(packet, packet_id=result['packet_id'], now_ms=now)
 assert accepted['kind'] == 'accepted'
 assert inbox.accept(packet, now_ms=now)['kind'] == 'duplicate'
-# Persist inbox/key state before deleting the transport copy or acting on content.
+# Store accepted['letter'] and persist inbox/key state before deleting the relay copy.
 jwt = owner.sign_request_jwt(create_request_jwt_claims(
     owner.agent_id(), RequestBinding.create('https://relay.example'), now // 1000, 300,
 ))
 relay.delete(card['event']['payload']['mailbox_id'], result['packet_id'], jwt, now_ms=now)
 ```
 
-`encrypt_mail` / `decrypt_mail` are stateless cryptographic operations. Use
-`MailSender` with a persisted `MailCardCache` and `MailOutbox` for sending.
-`MailSender.retry` re-encrypts the original signed letter under a newly verified
-card without changing its ID or expiration. For a byte-identical transport retry,
-retain and submit the completed packet itself. Expired letters are never renewed.
-A cache observation can advance a pin and then reject an expired or disabled card;
-**persist the cache even after such failures**. Equivocation remains blocked until
-a higher nonce arrives. Pins and public key-ID history never expire automatically.
+`encrypt_mail` / `decrypt_mail` are stateless cryptographic operations.
+`MailCardCache.seal` pins the card and encrypts the original signed letter; to
+retry under a newer card, seal the same letter again, which keeps its ID and
+expiration. For a byte-identical transport retry, resubmit the completed packet.
+Expired letters are never renewed. The cache keeps the greatest-nonce card per
+mailbox; an older or conflicting card raises `stale_card`. An observation can
+advance the pin and then reject a closed or expired card, so **persist the cache
+even after such failures**. `prune` drops pins once every earlier card has expired.
 
 `MailKeyring` retains old cards and secrets through their `receive_until`, even
-when the current card rotates or is disabled. `prune` drops expired secrets while
-retaining key-ID consistency history. `MailInbox` verifies before atomically
-suppressing duplicates across all packets, routes and keys. Out-of-order nonces
-are valid letters. Its `policy` callback controls acceptance; no content is
-executed, URL fetched, or receipt automatically generated. Pass the recipient's
-own `MailOutbox` to `MailInbox(keys, outbox)` to receive receipts: a receipt must
-match a message marked sent, including signer, recipient and original letter ID.
-Missing or mismatched originals are rejected, including on snapshot restoration.
-`validate_mail_reply` verifies a known parent's participants, thread and hash.
+when the current card rotates, moves or closes. `MailInbox` verifies before
+atomically suppressing duplicates across all packets, routes and keys; the
+application stores accepted letters. Out-of-order nonces are valid letters. No
+content is executed, URL fetched, or reply automatically generated.
+`validate_mail_reply` verifies a known parent's participants, thread and hash;
+an acknowledgement is an ordinary reply.
 
 All state classes support JSON-serializable `snapshot()` / `from_snapshot(...)`.
 These snapshots are trusted local state, **not a wire protocol or untrusted import
-format**. Keyring snapshots contain raw secrets; inbox/outbox snapshots contain
-plaintext. Encrypt and restrict them at rest. Python and its dependencies do not
-guarantee physical erasure of GC-managed memory; use suitable key custody and
-retention controls where erasure is a security requirement.
+format**, so restoring checks only their version and shape. Keyring snapshots
+contain raw secrets. Encrypt and restrict them at rest. Python and its
+dependencies do not guarantee physical erasure of GC-managed memory; use suitable
+key custody and retention controls where erasure is a security requirement.
 
 `MailRelayStore` is an in-memory component, not a durable relay server. It provides
 atomic publication/sequence allocation, permanent mailbox ownership, live nonce
-admission, ciphertext quotas, idempotent deleted-packet tombstones, owner-only
-listing/deletion, and authenticated snapshot-bound cursors. Its lock prevents
-concurrent duplicate admissions. Snapshot/restore preserves original acceptance
-times, sequences, bindings and cursor validity. Hosting applications must persist
+admission, route checks, per-mailbox ciphertext quotas (`rate_limited`),
+idempotent deleted-packet tombstones, owner-only listing/deletion, and plain
+`seq` cursors. Delivery results never include the mailbox `seq`. Its lock
+prevents concurrent duplicate admissions. Hosting applications must persist
 state transactionally before HTTP success and implement bounded HTTP parsing,
 rate limits and operational storage policy. `deliver` and `publish` can parse
 bounded raw UTF-8 JSON; parsing after an unbounded web-server read is insufficient.
-For a service shared with other protocols, inject one atomic `NonceStore`; the
-thread-safe `MailNonceStore` is provided. Persist/restore an externally injected
-nonce store separately as part of the same service transaction.
+For a service shared with other protocols, inject one atomic Identity
+`NonceStore`; the short-lived nonce cache is not part of the relay snapshot.
 
 Install `agent-protocols[http]` for `agent_protocols.http_client.MailClient`.
-`MailClient.discover(origin)` requires valid discovery and follows same-origin
-endpoint overrides. `publish`, `card(mailbox_id, owner)`, `deliver(packet, card)`,
-`packets(mailbox_id, owner, jwt)` and `delete(mailbox_id, packet_id, owner, jwt)`
-validate their inputs and responses. `packet_pages` rejects repeated packets,
-ordering regressions and cursor cycles. Supply/persist a `card_cache` when creating
-a client; fetching a disabled or expired card still advances its rollback pin.
+`MailClient(route)` talks to one relay origin from a card's `routes`; paths are
+fixed at `/v1/mailboxes` and `protocol()` reads the informational discovery
+document. `publish`, `card(mailbox_id, owner)`, `deliver(packet)`,
+`list(mailbox_id, owner, jwt)` and `delete(mailbox_id, packet_id, owner, jwt)`
+validate their inputs and responses; `pages` follows cursors and rejects `seq`
+regressions. Supply/persist a `card_cache` when creating a client; fetching a
+closed, moved or expired card still advances its pin.
 
 Delivery and public discovery/card reads carry no identity credentials. Mail uses
 fresh prepared requests rather than merging session auth, cookies, default
 headers, query parameters or netrc. TLS client certificates and ambient proxies
 are not inherited. Only explicit owner JWTs accompany private reads/deletes.
 Redirects are disabled, exact response URLs are checked, and streamed responses
-have a configurable byte limit. Injected session adapters are trusted transport
-code. The default `network_policy` rejects destinations with non-public DNS
-answers; applications may supply an explicit policy for private relays and must
-provide resolver/egress controls against DNS rebinding. Signed routes grant no
-permission to bypass that local policy.
+have a configurable byte limit (default 128 MiB). Injected session adapters are
+trusted transport code. Pass `network_policy` to apply local network rules before
+every request; `mail_public_network_policy` rejects destinations with non-public
+DNS answers, and deployments still need resolver/egress controls against DNS
+rebinding. Signed routes grant no permission to bypass local policy.

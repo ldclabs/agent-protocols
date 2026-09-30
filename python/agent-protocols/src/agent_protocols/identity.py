@@ -532,10 +532,12 @@ def verify_request_jwt(token: str, *, audience: str, now_secs: int | None = None
     parts = token.split(".")
     if len(parts) != 3:
         raise AgentProtocolError("invalid_jwt", "expected three compact JWS parts")
-    header = json.loads(_base64url_decode(parts[0]))
-    claims = json.loads(_base64url_decode(parts[1]))
+    header = _jwt_segment(parts[0])
+    claims = _jwt_segment(parts[1])
     signature = _base64url_decode(parts[2])
     signing_input = f"{parts[0]}.{parts[1]}".encode()
+    if any(type(claims.get(name)) is not int for name in ("iat", "exp")):
+        raise AgentProtocolError("invalid_jwt_claim", "iat and exp must be integers")
 
     if header.get("alg") != "EdDSA":
         raise AgentProtocolError("invalid_jwt_claim", "alg must be EdDSA")
@@ -613,6 +615,17 @@ def validate_nonce(nonce: int) -> None:
 
 def _base64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _jwt_segment(value: str) -> dict[str, Any]:
+    """A JWT header or claims segment: canonical base64url of a strict I-JSON object."""
+    try:
+        parsed = parse_strict_json(_base64url_decode(value).decode("utf-8"))
+    except (AgentProtocolError, UnicodeDecodeError) as exc:
+        raise AgentProtocolError("invalid_jwt", "JWT segment is not strict JSON") from exc
+    if not isinstance(parsed, dict):
+        raise AgentProtocolError("invalid_jwt", "JWT segment must be a JSON object")
+    return parsed
 
 
 def _base64url_decode(value: str) -> bytes:

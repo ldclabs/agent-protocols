@@ -1,37 +1,33 @@
 use super::*;
-use crate::identity::{AcceptedRecord, ListResponse, NonceStore};
-use serde::{Deserialize, Serialize};
+use crate::identity::{AcceptedRecord, ListResponse, MemoryNonceStore, NonceStore};
+use serde::Deserialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CardPin {
-    card: MailboxCard,
-    equivocated: bool,
-}
-/// Persistent rollback/equivocation/key-ID tracking. There is deliberately no
-/// TTL eviction. Save `snapshot()` even when `observe()` reports disabled,
-/// expired, or equivocated: those observations still update trust state.
-#[derive(Clone, Default)]
-pub struct CardCache {
-    pins: BTreeMap<String, CardPin>,
-    keys: BTreeMap<String, String>,
+fn version(value: &Value) -> Result<()> {
+    if value["version"] != 1 {
+        return Err(fail(
+            "invalid_request",
+            "unsupported local Mail state version",
+        ));
+    }
+    Ok(())
 }
 fn mailbox_key(owner: &AgentId, mailbox: &str) -> String {
     format!("{owner}/{mailbox}")
 }
-fn key_name(card: &MailboxCard) -> String {
-    format!(
-        "{}/{}/{}",
-        card.event.actor, card.event.payload.mailbox_id, card.event.payload.key_id
-    )
+
+/// Sender-side pins: the greatest-nonce card seen per (owner, mailbox),
+/// including closed or expired cards. Save `snapshot()` after every
+/// observation, even one that returns an error for an unusable new pin.
+#[derive(Clone, Default)]
+pub struct MailCardCache {
+    pins: BTreeMap<String, MailboxCard>,
 }
-impl CardCache {
+impl MailCardCache {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Observe and pin an authenticated card, including disabled/expired cards.
-    /// This is appropriate for historical HTTP reads. The caller must separately
-    /// check current usability before creating a new encrypted packet.
+    /// Pin an authenticated card, including a closed or expired one. This is
+    /// appropriate for card reads; check usability before encrypting.
     pub fn observe_historical(
         &mut self,
         value: &Value,
@@ -46,315 +42,231 @@ impl CardCache {
         if card.event.created_at > now.saturating_add(FUTURE_SKEW_MS) {
             return Err(SdkError::TimestampOutOfWindow);
         }
-        let key = key_name(&card);
-        if self
-            .keys
-            .get(&key)
-            .is_some_and(|old| old != &card.event.payload.public_key)
-        {
-            return Err(fail("mailbox_conflict", "key ID reused"));
-        }
-        self.keys.insert(key, card.event.payload.public_key.clone());
-        let mailbox = mailbox_key(owner, &card.event.payload.mailbox_id);
-        if let Some(pin) = self.pins.get_mut(&mailbox) {
-            if card.event.nonce < pin.card.event.nonce {
-                return Err(fail("stale_card", "card rollback"));
-            }
-            if card.event.nonce == pin.card.event.nonce {
-                if card.hash != pin.card.hash {
-                    pin.equivocated = true;
-                }
-                if pin.equivocated {
-                    return Err(fail(
-                        "card_equivocation",
-                        "conflicting cards require a higher nonce",
-                    ));
-                }
+        let key = mailbox_key(owner, &card.event.payload.mailbox_id);
+        if let Some(pin) = self.pins.get(&key) {
+            if pin.hash != card.hash && card.event.nonce <= pin.event.nonce {
+                return Err(fail(
+                    "stale_card",
+                    "card is older than or conflicts with the pinned card",
+                ));
             }
         }
-        self.pins.insert(
-            mailbox,
-            CardPin {
-                card: card.clone(),
-                equivocated: false,
-            },
-        );
+        self.pins.insert(key, card.clone());
         Ok(card)
     }
-    /// Observe a card and then require that it is usable for new encryption.
-    /// Persist state even on disabled/expired/equivocation errors.
+    /// Pin a card, then require that it is usable for new encryption.
     pub fn observe(&mut self, value: &Value, owner: &AgentId, now: i64) -> Result<MailboxCard> {
         let card = self.observe_historical(value, owner, now)?;
         check_card_usable(&card, owner, now)?;
         Ok(card)
     }
-    /// Explicit trust reset, not routine cache expiry. All rollback protection
-    /// for this mailbox is lost; historical key-ID consistency remains retained.
-    pub fn reset_trust(&mut self, owner: &AgentId, mailbox: &str) {
-        self.pins.remove(&mailbox_key(owner, mailbox));
+    /// Drop pins old enough that every earlier card of the mailbox has expired.
+    pub fn prune(&mut self, now: i64) -> Result<()> {
+        clock(now)?;
+        self.pins
+            .retain(|_, pin| now < pin.event.created_at + MAX_TTL_MS + FUTURE_SKEW_MS);
+        Ok(())
+    }
+    /// Pin the card, then encrypt the original signed letter under it.
+    pub fn seal(&mut self, letter: &Letter, card: &Value, now: i64) -> Result<Packet> {
+        let owner: AgentId = serde_json::from_value(letter.event.payload["to"].clone())?;
+        let card = self.observe(card, &owner, now)?;
+        encrypt_letter(letter, &card, now)
     }
     pub fn snapshot(&self) -> Result<Value> {
-        Ok(json!({"pins":self.pins,"keys":self.keys}))
+        Ok(json!({"version":1,"pins":self.pins.values().collect::<Vec<_>>()}))
     }
     pub fn from_snapshot(value: &Value) -> Result<Self> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Saved {
-            pins: BTreeMap<String, CardPin>,
-            keys: BTreeMap<String, String>,
-        }
-        let state: Saved = serde_json::from_value(value.clone())?;
-        for (name, pin) in &state.pins {
-            validate_card(&serde_json::to_value(&pin.card)?)?;
-            if name != &mailbox_key(&pin.card.event.actor, &pin.card.event.payload.mailbox_id)
-                || state.keys.get(&key_name(&pin.card)) != Some(&pin.card.event.payload.public_key)
-            {
-                return Err(fail("invalid_request", "corrupt card cache snapshot"));
-            }
-        }
-        for key in state.keys.values() {
-            fixed_bytes(key, 32)?;
-        }
+        version(value)?;
+        let pins: Vec<MailboxCard> = serde_json::from_value(value["pins"].clone())?;
         Ok(Self {
-            pins: state.pins,
-            keys: state.keys,
+            pins: pins
+                .into_iter()
+                .map(|card| {
+                    (
+                        mailbox_key(&card.event.actor, &card.event.payload.mailbox_id),
+                        card,
+                    )
+                })
+                .collect(),
         })
     }
 }
-struct KeyEntry {
-    card: MailboxCard,
-    key: MailEncryptionKey,
-}
-/// In-memory recipient state, with retained historical keys and cross-route
-/// deduplication. `receive` never executes content or sends receipts/deletions.
-/// Persist a protected snapshot before acknowledging transport deletion.
-pub struct MailRecipient {
+
+/// Retained verified cards and their secrets, by card hash, through `receive_until`.
+pub struct MailKeyring {
     owner: AgentId,
-    keys: BTreeMap<String, KeyEntry>,
-    key_history: BTreeMap<String, String>,
-    letters: BTreeMap<String, Letter>,
-    outgoing: BTreeMap<String, Letter>,
+    entries: BTreeMap<String, (MailboxCard, MailEncryptionKey)>,
 }
-impl MailRecipient {
+impl MailKeyring {
     pub fn new(owner: AgentId) -> Self {
         Self {
             owner,
-            keys: BTreeMap::new(),
-            key_history: BTreeMap::new(),
-            letters: BTreeMap::new(),
-            outgoing: BTreeMap::new(),
+            entries: BTreeMap::new(),
         }
     }
     pub fn owner(&self) -> &AgentId {
         &self.owner
     }
-    /// Register an original outgoing message before transmission, so later
-    /// receipts can be bound to correspondence this owner actually sent.
-    pub fn remember_outgoing(&mut self, letter: &Letter) -> Result<()> {
-        validate_letter(&serde_json::to_value(letter)?)?;
-        if letter.event.kind != "mail.message" || letter.event.actor != self.owner {
-            return Err(fail(
-                "invalid_actor",
-                "outgoing message must be signed by this owner",
-            ));
+    pub fn add(&mut self, card: &MailboxCard, key: MailEncryptionKey) -> Result<()> {
+        let card = validate_card(&serde_json::to_value(card)?)?;
+        if card.event.actor != self.owner {
+            return Err(fail("invalid_actor", "card owner mismatch"));
         }
-        self.outgoing.insert(letter.hash.clone(), letter.clone());
+        if card.event.payload.public_key != key.public_key() {
+            return Err(fail("invalid_private_key", "key does not match card"));
+        }
+        self.entries.insert(card.hash.clone(), (card, key));
         Ok(())
     }
-    fn check_receipt(&self, letter: &Letter) -> Result<()> {
-        if letter.event.kind == "mail.receipt" {
-            let original = self
-                .outgoing
-                .get(letter.event.payload["message_hash"].as_str().unwrap_or(""))
-                .ok_or_else(|| fail("invalid_event", "receipt for unknown outgoing message"))?;
-            validate_receipt(letter, original)?;
-        }
-        Ok(())
-    }
-    pub fn add_key(&mut self, card: &MailboxCard, key: MailEncryptionKey) -> Result<()> {
-        validate_card(&serde_json::to_value(card)?)?;
-        if card.event.actor != self.owner || card.event.payload.public_key != key.public_key() {
-            return Err(fail("invalid_actor", "key or owner mismatch"));
-        }
-        let name = key_name(card);
-        if self
-            .key_history
-            .get(&name)
-            .is_some_and(|old| old != &key.public_key())
-        {
-            return Err(fail("mailbox_conflict", "key ID reused"));
-        }
-        self.key_history.insert(name, key.public_key());
-        self.keys.insert(
-            card.hash.clone(),
-            KeyEntry {
-                card: card.clone(),
-                key,
-            },
-        );
-        Ok(())
-    }
-    pub fn receive(
-        &mut self,
-        packet: &Packet,
-        claimed_packet_id: Option<&str>,
-        now: i64,
-    ) -> Result<RecipientAcceptance> {
-        if claimed_packet_id.is_some_and(|id| packet_id(packet).is_ok_and(|actual| actual != id)) {
-            return Err(fail("invalid_packet", "packet ID mismatch"));
-        }
-        let entry = self
-            .keys
+    /// Verify and decrypt a packet with the retained card it names.
+    pub fn open(&self, packet: &Packet, now: i64) -> Result<Letter> {
+        let (card, key) = self
+            .entries
             .get(&packet.header.card_hash)
-            .ok_or_else(|| fail("invalid_packet", "unknown historical card/key"))?;
-        let letter = decrypt_packet(packet, &entry.card, &entry.key, &self.owner, now)?;
-        self.check_receipt(&letter)?;
-        if self.letters.contains_key(&letter.hash) {
-            return Ok(RecipientAcceptance::Duplicate(letter.hash));
-        }
-        if now >= packet.header.expires_at {
-            return Err(fail("packet_expired", "letter expired"));
-        }
-        self.letters.insert(letter.hash.clone(), letter.clone());
-        Ok(RecipientAcceptance::Accepted(Box::new(letter)))
+            .ok_or_else(|| fail("invalid_packet", "unknown retained card"))?;
+        decrypt_packet(packet, card, key, &self.owner, now)
     }
-    pub fn letters(&self) -> Vec<Letter> {
-        self.letters.values().cloned().collect()
-    }
-    /// Only keys past the signed receive_until are removed. This cannot erase
-    /// copies held in snapshots/backups, which the application must manage.
-    pub fn prune_expired_keys(&mut self, now: i64) -> Result<()> {
+    /// Only keys past the signed `receive_until` are removed. This cannot erase
+    /// copies held in snapshots or backups, which the application must manage.
+    pub fn prune(&mut self, now: i64) -> Result<()> {
         clock(now)?;
-        self.keys
-            .retain(|_, e| e.card.event.payload.receive_until > now);
+        self.entries
+            .retain(|_, (card, _)| now < card.event.payload.receive_until);
         Ok(())
     }
-    /// Explicit compromise/loss response: pending ciphertext may become unreadable.
-    pub fn discard_key(&mut self, card_hash: &str) {
-        self.keys.remove(card_hash);
-    }
-    /// SENSITIVE: includes plaintext inbox and decryption keys. Protect this
-    /// output at rest; never pass it to a relay or log it. Snapshot provenance
-    /// and atomic durable replacement are the application's responsibility.
+    /// SENSITIVE: includes decryption keys. Protect this output at rest; never
+    /// pass it to a relay or log it.
     pub fn snapshot(&self) -> Result<Value> {
-        let keys: Vec<_> = self
-            .keys
+        let entries: Vec<_> = self
+            .entries
             .values()
-            .map(|e| json!({"card":e.card,"secret":encode_bytes(&e.key.export_secret())}))
+            .map(|(card, key)| json!({"card":card,"secret":encode_bytes(&key.export_secret())}))
             .collect();
-        Ok(
-            json!({"owner":self.owner,"keys":keys,"key_history":self.key_history,"letters":self.letters.values().collect::<Vec<_>>(),"outgoing":self.outgoing.values().collect::<Vec<_>>()}),
-        )
+        Ok(json!({"version":1,"owner":self.owner,"entries":entries}))
     }
     pub fn from_snapshot(value: &Value) -> Result<Self> {
         #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct SavedKey {
+        struct Entry {
             card: MailboxCard,
             secret: String,
         }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Saved {
-            owner: AgentId,
-            keys: Vec<SavedKey>,
-            key_history: BTreeMap<String, String>,
-            letters: Vec<Letter>,
-            outgoing: Vec<Letter>,
-        }
-        let saved: Saved = serde_json::from_value(value.clone())?;
-        let mut out = Self::new(saved.owner);
-        out.key_history = saved.key_history;
-        for key in out.key_history.values() {
-            fixed_bytes(key, 32)?;
-        }
-        for entry in saved.keys {
-            let raw = Zeroizing::new(decode_bytes(&entry.secret)?);
-            out.add_key(&entry.card, MailEncryptionKey::from_secret(&raw)?)?;
-        }
-        for letter in saved.outgoing {
-            out.remember_outgoing(&letter)?;
-        }
-        for letter in saved.letters {
-            validate_letter(&serde_json::to_value(&letter)?)?;
-            if letter.event.payload["to"] != out.owner.as_str() {
-                return Err(fail("invalid_actor", "snapshot letter recipient"));
-            }
-            out.check_receipt(&letter)?;
-            if out.letters.insert(letter.hash.clone(), letter).is_some() {
-                return Err(fail("invalid_request", "duplicate snapshot letter"));
-            }
+        version(value)?;
+        let mut out = Self::new(serde_json::from_value(value["owner"].clone())?);
+        let entries: Vec<Entry> = serde_json::from_value(value["entries"].clone())?;
+        for entry in entries {
+            let raw = Zeroizing::new(fixed_bytes(&entry.secret, 32)?);
+            out.add(&entry.card, MailEncryptionKey::from_secret(&raw)?)?;
         }
         Ok(out)
     }
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RelayNonces {
-    records: BTreeMap<AgentId, (u64, i64)>,
+
+/// Cross-route letter deduplication. The application stores accepted letters;
+/// persist the inbox snapshot with them before deleting relay copies or acting.
+/// `accept` never executes content or sends replies.
+pub struct MailInbox {
+    keyring: MailKeyring,
+    accepted: BTreeMap<String, i64>,
 }
-impl NonceStore for RelayNonces {
-    fn check_and_update(&mut self, actor: &AgentId, nonce: u64, now: i64, ttl: i64) -> Result<u64> {
-        identity::validate_nonce(nonce)?;
-        if let Some(max) = self.max_nonce(actor, now) {
-            if nonce <= max {
-                return Err(SdkError::NonceNotGreater { max_nonce: max });
-            }
+impl MailInbox {
+    pub fn new(keyring: MailKeyring) -> Self {
+        Self {
+            keyring,
+            accepted: BTreeMap::new(),
         }
-        self.records
-            .insert(actor.clone(), (nonce, now.saturating_add(ttl)));
-        Ok(nonce)
     }
-    fn max_nonce(&self, actor: &AgentId, now: i64) -> Option<u64> {
-        self.records
-            .get(actor)
-            .filter(|(_, expires)| *expires > now)
-            .map(|(n, _)| *n)
+    pub fn keyring(&self) -> &MailKeyring {
+        &self.keyring
+    }
+    pub fn keyring_mut(&mut self) -> &mut MailKeyring {
+        &mut self.keyring
+    }
+    pub fn has(&self, letter_id: &str) -> bool {
+        self.accepted.contains_key(letter_id)
+    }
+    pub fn accept(
+        &mut self,
+        packet: &Packet,
+        claimed_packet_id: Option<&str>,
+        now: i64,
+    ) -> Result<InboxAcceptance> {
+        if claimed_packet_id.is_some_and(|id| packet_id(packet).ok().as_deref() != Some(id)) {
+            return Err(fail("invalid_packet", "packet ID mismatch"));
+        }
+        let letter = self.keyring.open(packet, now)?;
+        if self.accepted.contains_key(&letter.hash) {
+            return Ok(InboxAcceptance::Duplicate(Box::new(letter)));
+        }
+        if now >= packet.header.expires_at {
+            return Err(fail(
+                "packet_expired",
+                "expired letter cannot be newly accepted",
+            ));
+        }
+        self.accepted
+            .insert(letter.hash.clone(), packet.header.expires_at);
+        Ok(InboxAcceptance::Accepted(Box::new(letter)))
+    }
+    /// Forget letters whose signed expiration passed; they can no longer be newly accepted.
+    pub fn prune(&mut self, now: i64) -> Result<()> {
+        clock(now)?;
+        self.accepted.retain(|_, expires| now < *expires);
+        Ok(())
+    }
+    pub fn snapshot(&self) -> Result<Value> {
+        Ok(
+            json!({"version":1,"owner":self.keyring.owner,"accepted":self.accepted.iter().collect::<Vec<_>>()}),
+        )
+    }
+    pub fn from_snapshot(keyring: MailKeyring, value: &Value) -> Result<Self> {
+        version(value)?;
+        if value["owner"] != keyring.owner.as_str() {
+            return Err(fail("invalid_request", "inbox owner mismatch"));
+        }
+        let accepted: Vec<(String, i64)> = serde_json::from_value(value["accepted"].clone())?;
+        Ok(Self {
+            keyring,
+            accepted: accepted.into_iter().collect(),
+        })
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Tombstone {
-    result: DeliveryResult,
-    expires_at: i64,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+
 struct RelayMailbox {
-    current: MailboxCard,
-    history: BTreeMap<String, AcceptedRecord<MailboxCardPayload>>,
-    keys: BTreeMap<String, String>,
-    next_seq: u64,
-    packets: BTreeMap<String, PacketRecord>,
-    accepted: BTreeMap<String, Tombstone>,
+    current: AcceptedRecord<MailboxCardPayload>,
+    last_seq: u64,
+    bytes: usize,
+    packets: BTreeMap<String, (PacketRecord, usize)>,
+    tombstones: BTreeMap<String, (i64, i64)>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Cursor {
-    owner: AgentId,
-    mailbox: String,
-    after_seq: u64,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RelayState {
-    origin: String,
-    mailboxes: BTreeMap<String, RelayMailbox>,
-    nonces: RelayNonces,
-    cursors: BTreeMap<String, Cursor>,
-    max_packets: usize,
-    max_bytes: usize,
+impl RelayMailbox {
+    fn drop_expired(&mut self, now: i64) {
+        let bytes = &mut self.bytes;
+        self.packets.retain(|_, (record, size)| {
+            let live = now < record.packet.header.expires_at;
+            if !live {
+                *bytes -= *size;
+            }
+            live
+        });
+    }
 }
 /// Framework-neutral in-memory relay model, NOT a hosted or durable service.
 /// All outputs are owned copies. Save/restore snapshots atomically in a real
 /// service; enforce admission limits and serialized access outside this model.
-pub struct MailRelay {
-    state: RelayState,
+/// The short-lived Identity nonce cache is not part of the snapshot.
+pub struct MailRelayStore {
+    origin: String,
+    max_packets: usize,
+    max_bytes: usize,
+    nonces: MemoryNonceStore,
+    mailboxes: BTreeMap<String, RelayMailbox>,
 }
-impl MailRelay {
+impl MailRelayStore {
     pub fn new(origin: impl Into<String>) -> Result<Self> {
-        Self::with_limits(origin, 1000, 64 * MAX_PACKET_BYTES)
+        Self::with_limits(origin, 10_000, 64 * MAX_PACKET_BYTES)
     }
+    /// Per-mailbox limits on retained packets.
     pub fn with_limits(
         origin: impl Into<String>,
         max_packets: usize,
@@ -362,39 +274,35 @@ impl MailRelay {
     ) -> Result<Self> {
         let origin = origin.into();
         identity::validate_origin(&origin)?;
-        if max_packets == 0 || max_bytes < 4096 {
+        if max_packets == 0 || max_bytes == 0 {
             return Err(fail("invalid_request", "invalid relay quota"));
         }
         Ok(Self {
-            state: RelayState {
-                origin,
-                mailboxes: BTreeMap::new(),
-                nonces: RelayNonces::default(),
-                cursors: BTreeMap::new(),
-                max_packets,
-                max_bytes,
-            },
+            origin,
+            max_packets,
+            max_bytes,
+            nonces: MemoryNonceStore::new(),
+            mailboxes: BTreeMap::new(),
         })
     }
     pub fn origin(&self) -> &str {
-        &self.state.origin
+        &self.origin
     }
     pub fn discovery(&self) -> Value {
-        json!({"protocol":PROTOCOL,"service":self.state.origin})
+        json!({"protocol":PROTOCOL,"service":self.origin})
     }
     pub fn publish(
         &mut self,
         value: &Value,
         now: i64,
     ) -> Result<AcceptedRecord<MailboxCardPayload>> {
-        let mut nonces = std::mem::take(&mut self.state.nonces);
+        let mut nonces = std::mem::take(&mut self.nonces);
         let result = self.publish_with_nonce_store(value, now, &mut nonces);
-        self.state.nonces = nonces;
+        self.nonces = nonces;
         result
     }
-    /// Inject the origin-wide Identity nonce store when multiple protocols share
-    /// a service. All semantic checks precede nonce consumption. The caller must
-    /// persist this external store in the same transaction as the relay snapshot.
+    /// Inject the origin-wide Identity nonce store when several protocols share
+    /// a service. All other checks precede nonce consumption.
     pub fn publish_with_nonce_store<S: NonceStore + ?Sized>(
         &mut self,
         value: &Value,
@@ -404,69 +312,51 @@ impl MailRelay {
         clock(now)?;
         let card = validate_card(value)?;
         let p = &card.event.payload;
-        if !p.routes.iter().any(|r| r == &self.state.origin) {
-            return Err(fail("invalid_event", "relay not authorized by routes"));
-        }
-        if let Some(mailbox) = self.state.mailboxes.get(&p.mailbox_id) {
-            if mailbox.current.event.actor != card.event.actor {
+        if let Some(mailbox) = self.mailboxes.get(&p.mailbox_id) {
+            let current = &mailbox.current.envelope;
+            if current.event.actor != card.event.actor {
                 return Err(fail("mailbox_conflict", "mailbox belongs to another owner"));
             }
-            if let Some(record) = mailbox.history.get(&card.hash) {
-                return Ok(record.clone());
+            if current.hash == card.hash {
+                return Ok(mailbox.current.clone());
             }
-            if card.event.nonce <= mailbox.current.event.nonce {
+            if card.event.nonce <= current.event.nonce {
                 return Err(SdkError::NonceNotGreater {
-                    max_nonce: mailbox.current.event.nonce,
+                    max_nonce: current.event.nonce,
                 });
             }
-            if mailbox
-                .keys
-                .get(&p.key_id)
-                .is_some_and(|old| old != &p.public_key)
-            {
-                return Err(fail("mailbox_conflict", "key ID reused"));
-            }
+        } else if !p.routes.contains(&self.origin) {
+            return Err(SdkError::PermissionDenied);
         }
-        identity::verify_timestamp(
-            card.event.created_at,
-            now,
-            identity::DEFAULT_LIVE_WRITE_WINDOW_MS,
-        )?;
-        nonces.check_and_update(
-            &card.event.actor,
-            card.event.nonce,
-            now,
-            identity::DEFAULT_NONCE_TTL_MS,
-        )?;
+        identity::verify_timestamp(card.event.created_at, now, FUTURE_SKEW_MS)?;
+        nonces.check_and_update(&card.event.actor, card.event.nonce, now, 2 * FUTURE_SKEW_MS)?;
         let record = AcceptedRecord {
             envelope: card.clone(),
             accepted_at: now,
         };
-        let mailbox = self
-            .state
-            .mailboxes
-            .entry(p.mailbox_id.clone())
-            .or_insert_with(|| RelayMailbox {
-                current: card.clone(),
-                history: BTreeMap::new(),
-                keys: BTreeMap::new(),
-                next_seq: 1,
-                packets: BTreeMap::new(),
-                accepted: BTreeMap::new(),
-            });
-        mailbox.keys.insert(p.key_id.clone(), p.public_key.clone());
-        mailbox.current = card.clone();
-        mailbox.history.insert(card.hash, record.clone());
+        match self.mailboxes.get_mut(&p.mailbox_id) {
+            Some(mailbox) => mailbox.current = record.clone(),
+            None => {
+                self.mailboxes.insert(
+                    p.mailbox_id.clone(),
+                    RelayMailbox {
+                        current: record.clone(),
+                        last_seq: 0,
+                        bytes: 0,
+                        packets: BTreeMap::new(),
+                        tombstones: BTreeMap::new(),
+                    },
+                );
+            }
+        }
         Ok(record)
     }
     pub fn card(&self, mailbox_id: &str) -> Result<AcceptedRecord<MailboxCardPayload>> {
-        fixed_bytes(mailbox_id, 16)?;
-        let mailbox = self
-            .state
-            .mailboxes
+        path_id(mailbox_id, 16)?;
+        self.mailboxes
             .get(mailbox_id)
-            .ok_or_else(|| fail("mailbox_unavailable", "unknown mailbox"))?;
-        Ok(mailbox.history[&mailbox.current.hash].clone())
+            .map(|m| m.current.clone())
+            .ok_or_else(|| fail("mailbox_unavailable", "unknown mailbox"))
     }
     pub fn deliver(
         &mut self,
@@ -475,247 +365,203 @@ impl MailRelay {
         now: i64,
     ) -> Result<DeliveryResult> {
         clock(now)?;
+        path_id(mailbox_id, 16)?;
         let packet = validate_packet(&serde_json::to_value(packet)?)?;
-        fixed_bytes(mailbox_id, 16)?;
-        if packet.header.mailbox_id != mailbox_id {
+        let h = &packet.header;
+        if h.mailbox_id != mailbox_id {
             return Err(fail("invalid_packet", "path mailbox mismatch"));
         }
         let id = packet_id(&packet)?;
         let mailbox = self
-            .state
             .mailboxes
             .get_mut(mailbox_id)
             .ok_or_else(|| fail("mailbox_unavailable", "unknown mailbox"))?;
-        if let Some(old) = mailbox.accepted.get(&id) {
-            return Ok(old.result.clone());
+        if let Some((accepted_at, _)) = mailbox.tombstones.get(&id) {
+            return Ok(DeliveryResult {
+                packet_id: id,
+                accepted_at: *accepted_at,
+            });
         }
-        let p = &mailbox.current.event.payload;
-        if !p.enabled {
-            return Err(fail("mailbox_unavailable", "mailbox disabled"));
+        let card = &mailbox.current.envelope;
+        let p = &card.event.payload;
+        if !p.routes.contains(&self.origin) {
+            return Err(fail("mailbox_unavailable", "relay is not a current route"));
         }
-        if packet.header.card_hash != mailbox.current.hash
-            || packet.header.key_id != p.key_id
-            || now >= p.expires_at
-        {
+        if h.card_hash != card.hash || now >= p.expires_at {
             return Err(fail("stale_card", "current card mismatch or expired"));
         }
-        if now >= packet.header.expires_at {
+        if now >= h.expires_at {
             return Err(fail("packet_expired", "packet expired"));
         }
-        if packet.header.expires_at
+        if h.expires_at
             > p.receive_until
                 .min(now.saturating_add(MAX_TTL_MS + FUTURE_SKEW_MS))
         {
             return Err(fail("invalid_packet", "packet expiry bound"));
         }
-        let bytes = canonical_bytes(&packet)?.len();
-        if bytes > p.max_packet_bytes {
+        let size = canonical_bytes(&packet)?.len();
+        if size > p.max_packet_bytes {
             return Err(fail("payload_too_large", "card packet limit"));
         }
-        let live: Vec<_> = mailbox
-            .packets
-            .values()
-            .filter(|r| r.packet.header.expires_at > now)
-            .collect();
-        let used: usize = live
-            .iter()
-            .map(|r| canonical_bytes(&r.packet).map(|b| b.len()))
-            .collect::<Result<Vec<_>>>()?
-            .iter()
-            .sum();
-        if live.len() >= self.state.max_packets
-            || used.saturating_add(bytes) > self.state.max_bytes
-            || mailbox.next_seq > identity::MAX_SAFE_NONCE
+        mailbox.drop_expired(now);
+        if mailbox.packets.len() >= self.max_packets
+            || mailbox.bytes.saturating_add(size) > self.max_bytes
+            || mailbox.last_seq >= identity::MAX_SAFE_NONCE
         {
-            return Err(fail("quota_exceeded", "relay storage capacity"));
+            return Err(fail("rate_limited", "mailbox storage quota exhausted"));
         }
-        let result = DeliveryResult {
-            packet_id: id.clone(),
-            accepted_at: now,
-            seq: mailbox.next_seq,
-        };
-        let record = PacketRecord {
-            packet_id: id.clone(),
-            packet: packet.clone(),
-            accepted_at: now,
-            seq: mailbox.next_seq,
-        };
-        mailbox.next_seq += 1;
-        mailbox.packets.insert(id.clone(), record);
-        mailbox.accepted.insert(
-            id,
-            Tombstone {
-                result: result.clone(),
-                expires_at: packet.header.expires_at,
-            },
+        mailbox.last_seq += 1;
+        mailbox.bytes += size;
+        mailbox
+            .tombstones
+            .insert(id.clone(), (now, packet.header.expires_at));
+        mailbox.packets.insert(
+            id.clone(),
+            (
+                PacketRecord {
+                    packet_id: id.clone(),
+                    packet,
+                    accepted_at: now,
+                    seq: mailbox.last_seq,
+                },
+                size,
+            ),
         );
-        Ok(result)
+        Ok(DeliveryResult {
+            packet_id: id,
+            accepted_at: now,
+        })
     }
-    fn authorize(&self, mailbox: &str, jwt: &str, now: i64) -> Result<AgentId> {
-        // Verify token before revealing mailbox existence.
-        let mut context = identity::RequestAuthContext::new(&self.state.origin);
-        context.now_secs = now / 1000;
-        let claims = identity::verify_request_jwt(jwt, &context)
-            .map_err(|e| fail("invalid_token", e.to_string()))?;
-        let owner = self
-            .state
+    fn owner_box(&self, mailbox: &str, jwt: &str, now: i64) -> Result<&RelayMailbox> {
+        path_id(mailbox, 16)?;
+        let claims = owner_claims(jwt, &self.origin, now)?;
+        let found = self
             .mailboxes
             .get(mailbox)
-            .map(|m| m.current.event.actor.clone())
             .ok_or_else(|| fail("mailbox_unavailable", "unknown mailbox"))?;
-        verify_owner_jwt(jwt, &owner, &self.state.origin, now)?;
-        if claims.iss != owner {
+        if claims.iss != found.current.envelope.event.actor {
             return Err(SdkError::PermissionDenied);
         }
-        Ok(owner)
+        Ok(found)
     }
+    /// The cursor is the decimal `seq` of the last returned record.
     pub fn list(
-        &mut self,
+        &self,
         mailbox: &str,
         jwt: &str,
         now: i64,
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<ListResponse<PacketRecord>> {
-        let owner = self.authorize(mailbox, jwt, now)?;
+        let found = self.owner_box(mailbox, jwt, now)?;
         if !(1..=1000).contains(&limit) {
             return Err(fail("invalid_request", "list limit must be 1..1000"));
         }
-        let after = if let Some(token) = cursor {
-            let c = self
-                .state
-                .cursors
-                .get(token)
-                .ok_or_else(|| fail("invalid_request", "invalid cursor"))?;
-            if c.owner != owner || c.mailbox != mailbox {
-                return Err(fail("invalid_request", "cursor scope mismatch"));
-            }
-            c.after_seq
-        } else {
-            0
+        let after = match cursor {
+            None => 0,
+            Some(text) => text
+                .parse::<u64>()
+                .ok()
+                .filter(|n| n.to_string() == text && *n <= identity::MAX_SAFE_NONCE)
+                .ok_or_else(|| fail("invalid_request", "invalid cursor"))?,
         };
-        let mut rows: Vec<_> = self.state.mailboxes[mailbox]
+        let mut rows: Vec<_> = found
             .packets
             .values()
-            .filter(|r| r.seq > after && r.packet.header.expires_at > now)
+            .map(|(record, _)| record)
+            .filter(|r| r.seq > after && now < r.packet.header.expires_at)
             .cloned()
             .collect();
         rows.sort_by_key(|r| r.seq);
         let more = rows.len() > limit;
         rows.truncate(limit);
-        let next_cursor = if more {
-            let token = random_id()?;
-            self.state.cursors.insert(
-                token.clone(),
-                Cursor {
-                    owner,
-                    mailbox: mailbox.into(),
-                    after_seq: rows.last().unwrap().seq,
-                },
-            );
-            Some(token)
-        } else {
-            None
-        };
         Ok(ListResponse {
+            next_cursor: more.then(|| rows[limit - 1].seq.to_string()),
             result: rows,
-            next_cursor,
         })
     }
     pub fn delete(&mut self, mailbox: &str, id: &str, jwt: &str, now: i64) -> Result<()> {
-        self.authorize(mailbox, jwt, now)?;
-        fixed_bytes(id, 32)?;
-        self.state
-            .mailboxes
-            .get_mut(mailbox)
-            .unwrap()
-            .packets
-            .remove(id);
+        self.owner_box(mailbox, jwt, now)?;
+        path_id(id, 32)?;
+        let found = self.mailboxes.get_mut(mailbox).unwrap();
+        if let Some((_, size)) = found.packets.remove(id) {
+            found.bytes -= size;
+        }
         Ok(())
     }
-    /// Pruning preserves ownership/current cards, nonce high-water history, and
-    /// unexpired tombstones. Cursor storage is service policy; callers may drop
-    /// old cursors only by making the affected cursor explicitly invalid.
+    /// Pruning keeps ownership, current cards and unexpired tombstones.
     pub fn prune(&mut self, now: i64) -> Result<()> {
         clock(now)?;
-        for m in self.state.mailboxes.values_mut() {
-            m.packets.retain(|_, r| r.packet.header.expires_at > now);
-            m.accepted.retain(|_, r| r.expires_at > now);
+        for m in self.mailboxes.values_mut() {
+            m.drop_expired(now);
+            m.tombstones.retain(|_, (_, expires)| now < *expires);
         }
         Ok(())
     }
     pub fn snapshot(&self) -> Result<Value> {
-        Ok(serde_json::to_value(&self.state)?)
+        let mailboxes: Vec<_> = self
+            .mailboxes
+            .values()
+            .map(|m| {
+                json!({
+                    "current": m.current,
+                    "last_seq": m.last_seq,
+                    "packets": m.packets.values().map(|(r, _)| r).collect::<Vec<_>>(),
+                    "tombstones": m.tombstones.iter().map(|(id, (accepted_at, expires_at))| {
+                        json!({"packet_id":id,"accepted_at":accepted_at,"expires_at":expires_at})
+                    }).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok(json!({"version":1,"origin":self.origin,"mailboxes":mailboxes}))
     }
-    pub fn from_snapshot(value: &Value) -> Result<Self> {
-        let state: RelayState = serde_json::from_value(value.clone())?;
-        identity::validate_origin(&state.origin)?;
-        if state.max_packets == 0 || state.max_bytes < 4096 {
-            return Err(fail("invalid_request", "invalid snapshot quota"));
+    /// Restore trusted local state saved by `snapshot`; limits are not part of it.
+    pub fn from_snapshot(value: &Value, max_packets: usize, max_bytes: usize) -> Result<Self> {
+        #[derive(Deserialize)]
+        struct Tombstone {
+            packet_id: String,
+            accepted_at: i64,
+            expires_at: i64,
         }
-        for (id, m) in &state.mailboxes {
-            validate_card(&serde_json::to_value(&m.current)?)?;
-            if m.current.event.payload.mailbox_id != *id
-                || !m.history.contains_key(&m.current.hash)
-                || m.next_seq == 0
-                || m.next_seq > identity::MAX_SAFE_NONCE + 1
-            {
-                return Err(fail("invalid_request", "invalid mailbox snapshot"));
-            }
-            for (hash, record) in &m.history {
-                let c = validate_card(&serde_json::to_value(&record.envelope)?)?;
-                clock(record.accepted_at)?;
-                if c.hash != *hash
-                    || c.event.actor != m.current.event.actor
-                    || c.event.payload.mailbox_id != *id
-                    || m.keys.get(&c.event.payload.key_id) != Some(&c.event.payload.public_key)
-                    || c.event.nonce > m.current.event.nonce
-                    || !c.event.payload.routes.contains(&state.origin)
-                {
-                    return Err(fail("invalid_request", "invalid card snapshot history"));
-                }
-            }
-            let mut seqs = std::collections::BTreeSet::new();
-            for (hash, t) in &m.accepted {
-                fixed_bytes(hash, 32)?;
-                clock(t.expires_at)?;
-                clock(t.result.accepted_at)?;
-                if t.result.packet_id != *hash
-                    || t.result.seq == 0
-                    || t.result.seq >= m.next_seq
-                    || !seqs.insert(t.result.seq)
-                {
-                    return Err(fail("invalid_request", "invalid acceptance snapshot"));
-                }
-            }
-            for (hash, r) in &m.packets {
-                validate_packet(&serde_json::to_value(&r.packet)?)?;
-                if packet_id(&r.packet)? != *hash
-                    || r.packet_id != *hash
-                    || r.packet.header.mailbox_id != *id
-                    || !m.accepted.get(hash).is_some_and(|t| {
-                        t.result.seq == r.seq
-                            && t.result.accepted_at == r.accepted_at
-                            && t.expires_at == r.packet.header.expires_at
-                    })
-                {
-                    return Err(fail("invalid_request", "invalid packet snapshot"));
-                }
-            }
+        #[derive(Deserialize)]
+        struct Saved {
+            current: AcceptedRecord<MailboxCardPayload>,
+            last_seq: u64,
+            packets: Vec<PacketRecord>,
+            tombstones: Vec<Tombstone>,
         }
-        for (nonce, expiry) in state.nonces.records.values() {
-            identity::validate_nonce(*nonce)?;
-            clock(*expiry)?;
-        }
-        for c in state.cursors.values() {
-            if !state
-                .mailboxes
-                .get(&c.mailbox)
-                .is_some_and(|m| m.current.event.actor == c.owner && c.after_seq < m.next_seq)
-            {
-                return Err(fail("invalid_request", "invalid cursor snapshot"));
+        version(value)?;
+        let origin = value["origin"]
+            .as_str()
+            .ok_or_else(|| fail("invalid_request", "snapshot origin"))?;
+        let mut out = Self::with_limits(origin, max_packets, max_bytes)?;
+        let saved: Vec<Saved> = serde_json::from_value(normalized(&value["mailboxes"]))?;
+        for m in saved {
+            let mut mailbox = RelayMailbox {
+                current: m.current,
+                last_seq: m.last_seq,
+                bytes: 0,
+                packets: BTreeMap::new(),
+                tombstones: m
+                    .tombstones
+                    .into_iter()
+                    .map(|t| (t.packet_id, (t.accepted_at, t.expires_at)))
+                    .collect(),
+            };
+            for record in m.packets {
+                let size = canonical_bytes(&record.packet)?.len();
+                mailbox.bytes += size;
+                mailbox
+                    .packets
+                    .insert(record.packet_id.clone(), (record, size));
             }
+            let id = mailbox.current.envelope.event.payload.mailbox_id.clone();
+            out.mailboxes.insert(id, mailbox);
         }
-        Ok(Self { state })
+        Ok(out)
     }
+}
+fn path_id(value: &str, size: usize) -> Result<()> {
+    fixed_bytes(value, size).map_err(|_| fail("invalid_request", "invalid path ID"))?;
+    Ok(())
 }

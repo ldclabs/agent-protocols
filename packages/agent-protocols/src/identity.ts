@@ -930,14 +930,13 @@ export function verifyRequestJwt(
     throw protocolError("invalid_jwt", "expected three compact JWS parts");
   }
 
-  const header = JSON.parse(
-    new TextDecoder().decode(base64UrlDecode(parts[0])),
-  ) as RequestJwtHeader;
-  const claims = JSON.parse(
-    new TextDecoder().decode(base64UrlDecode(parts[1])),
-  ) as RequestJwtClaims;
+  const header = jwtSegment(parts[0]) as unknown as RequestJwtHeader;
+  const claims = jwtSegment(parts[1]) as unknown as RequestJwtClaims;
   const signature = base64UrlDecode(parts[2]);
   const signingInput = `${parts[0]}.${parts[1]}`;
+  if (!Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) {
+    throw protocolError("invalid_jwt_claim", "iat and exp must be integers");
+  }
 
   if (header.alg !== "EdDSA") {
     throw protocolError("invalid_jwt_claim", "alg must be EdDSA");
@@ -1016,6 +1015,22 @@ function base64UrlDecode(value: string): Uint8Array {
     );
   }
   return bytes;
+}
+
+/** A JWT header or claims segment: canonical base64url of a strict I-JSON object. */
+function jwtSegment(value: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = parseStrictJson(
+      new TextDecoder("utf-8", { fatal: true }).decode(base64UrlDecode(value)),
+    );
+  } catch {
+    throw protocolError("invalid_jwt", "JWT segment is not strict JSON");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw protocolError("invalid_jwt", "JWT segment must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function validEventHashBytes(eventHash: Uint8Array): Uint8Array {

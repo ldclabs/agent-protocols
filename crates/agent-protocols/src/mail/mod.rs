@@ -3,6 +3,7 @@
 //! Relays never receive decryption keys. A verified letter is untrusted content,
 //! not authorization to execute a task. State helpers are in-memory models;
 //! applications must persist snapshots atomically before acknowledging delivery.
+//! Relay paths are fixed at `{route}/v1/mailboxes`.
 mod state;
 mod types;
 pub use state::*;
@@ -33,6 +34,8 @@ pub const MAX_TTL_MS: i64 = 30 * 86_400_000;
 pub const FUTURE_SKEW_MS: i64 = 300_000;
 pub const MAX_PACKET_BYTES: usize = 1_048_576;
 pub const SCHEMA_JSON: &str = include_str!("schema.json");
+/// HPKE `info`: the header, including `card_hash`, is bound as AAD.
+const INFO: &[u8] = PROTOCOL.as_bytes();
 type Kem = X25519HkdfSha256;
 type PrivateKey = <Kem as hpke::Kem>::PrivateKey;
 type PublicKey = <Kem as hpke::Kem>::PublicKey;
@@ -166,8 +169,8 @@ pub(crate) fn check_card_usable(card: &MailboxCard, owner: &AgentId, now: i64) -
     if card.event.created_at > now.saturating_add(FUTURE_SKEW_MS) {
         return Err(SdkError::TimestampOutOfWindow);
     }
-    if !card.event.payload.enabled {
-        return Err(fail("mailbox_unavailable", "mailbox disabled"));
+    if card.event.payload.routes.is_empty() {
+        return Err(fail("mailbox_unavailable", "mailbox closed"));
     }
     if now >= card.event.payload.expires_at {
         return Err(fail("stale_card", "card expired"));
@@ -175,30 +178,25 @@ pub(crate) fn check_card_usable(card: &MailboxCard, owner: &AgentId, now: i64) -
     Ok(())
 }
 /// Verify a letter as a historical object. Freshness/deduplication is performed
-/// by `MailRecipient`, so a delayed low-nonce letter is never rejected here.
+/// by `MailInbox`, so a delayed low-nonce letter is never rejected here.
 pub fn validate_letter(value: &Value) -> Result<Letter> {
-    let e = signed(value, "letterEnvelope")?;
-    let expires = e.event.payload["expires_at"]
-        .as_i64()
-        .ok_or_else(|| fail("invalid_event", "missing expiry"))?;
-    lifetime(e.event.created_at, expires)?;
-    if e.event.kind == "mail.message" {
-        let p: MessagePayload = serde_json::from_value(e.event.payload.clone())?;
-        for part in &p.parts {
-            let bytes = decode_bytes(&part.data)?;
-            if part.media_type.starts_with("text/") {
-                std::str::from_utf8(&bytes)
-                    .map_err(|_| fail("invalid_event", "text part is not UTF-8"))?;
-            }
+    let e = signed(value, "messageEnvelope")?;
+    let p: MessagePayload = serde_json::from_value(normalized(&e.event.payload))?;
+    lifetime(e.event.created_at, p.expires_at)?;
+    for part in &p.parts {
+        let bytes = decode_bytes(&part.data)?;
+        if part.media_type.starts_with("text/") {
+            std::str::from_utf8(&bytes)
+                .map_err(|_| fail("invalid_event", "text part is not UTF-8"))?;
         }
-        if let Some(reply) = &p.reply_card {
-            let card = validate_card(reply)?;
-            if card.event.actor != e.event.actor {
-                return Err(fail(
-                    "invalid_actor",
-                    "reply card owner differs from sender",
-                ));
-            }
+    }
+    if let Some(reply) = &p.reply_card {
+        let card = validate_card(reply)?;
+        if card.event.actor != e.event.actor {
+            return Err(fail(
+                "invalid_actor",
+                "reply card owner differs from sender",
+            ));
         }
     }
     Ok(e)
@@ -232,72 +230,22 @@ pub fn sign_message(
     created_at: i64,
     nonce: u64,
 ) -> Result<Letter> {
-    sign_letter(
-        signer,
-        "mail.message",
-        serde_json::to_value(payload)?,
-        created_at,
-        nonce,
-    )
-}
-pub fn sign_receipt(
-    signer: &AgentSigner,
-    original: &Letter,
-    expires_at: i64,
-    created_at: i64,
-    nonce: u64,
-) -> Result<Letter> {
-    validate_letter(&serde_json::to_value(original)?)?;
-    if original.event.kind != "mail.message"
-        || original.event.payload["to"] != signer.agent_id().as_str()
-    {
-        return Err(fail("invalid_event", "receipt recipient binding"));
-    }
-    sign_letter(
-        signer,
-        "mail.receipt",
-        json!({"to":original.event.actor,"expires_at":expires_at,"message_hash":original.hash,"status":"received"}),
-        created_at,
-        nonce,
-    )
-}
-fn sign_letter(
-    signer: &AgentSigner,
-    kind: &str,
-    payload: Value,
-    created_at: i64,
-    nonce: u64,
-) -> Result<Letter> {
     let envelope = signer.sign_event(Event::new(
         PROTOCOL,
-        kind,
+        "mail.message",
         signer.agent_id(),
         created_at,
         nonce,
-        payload,
+        serde_json::to_value(payload)?,
     ))?;
     validate_letter(&serde_json::to_value(&envelope)?)?;
     Ok(envelope)
 }
-pub fn validate_receipt(receipt: &Letter, original: &Letter) -> Result<()> {
-    validate_letter(&serde_json::to_value(receipt)?)?;
-    validate_letter(&serde_json::to_value(original)?)?;
-    if receipt.event.kind != "mail.receipt"
-        || original.event.kind != "mail.message"
-        || receipt.event.actor.as_str() != original.event.payload["to"].as_str().unwrap_or("")
-        || receipt.event.payload["to"] != original.event.actor.as_str()
-        || receipt.event.payload["message_hash"] != original.hash
-    {
-        return Err(fail("invalid_event", "receipt binding mismatch"));
-    }
-    Ok(())
-}
+/// Bind a reply to a known parent: participants, parent letter ID, and thread.
 pub fn validate_reply(reply: &Letter, parent: &Letter) -> Result<()> {
     validate_letter(&serde_json::to_value(reply)?)?;
     validate_letter(&serde_json::to_value(parent)?)?;
-    if reply.event.kind != "mail.message"
-        || parent.event.kind != "mail.message"
-        || reply.event.payload["to"] != parent.event.actor.as_str()
+    if reply.event.payload["to"] != parent.event.actor.as_str()
         || parent.event.payload["to"] != reply.event.actor.as_str()
         || reply.event.payload["in_reply_to"] != parent.hash
         || reply.event.payload["thread_id"] != parent.event.payload["thread_id"]
@@ -380,11 +328,6 @@ pub fn parse_packet(text: &str) -> Result<Packet> {
 pub fn packet_id(packet: &Packet) -> Result<String> {
     Ok(hash_bytes(&canonical_bytes(packet)?))
 }
-fn info(header: &PacketHeader) -> Result<Vec<u8>> {
-    let mut bytes = b"agent-mail/1.0\0".to_vec();
-    bytes.extend(fixed_bytes(&header.card_hash, 32)?);
-    Ok(bytes)
-}
 /// Production encryption: fresh system randomness, one HPKE context per packet.
 /// Caller should observe the card with `CardCache` before using it.
 pub fn encrypt_letter(letter: &Letter, card: &MailboxCard, now: i64) -> Result<Packet> {
@@ -392,17 +335,16 @@ pub fn encrypt_letter(letter: &Letter, card: &MailboxCard, now: i64) -> Result<P
     let owner: AgentId = serde_json::from_value(letter.event.payload["to"].clone())?;
     validate_card_for_sending(&serde_json::to_value(card)?, &owner, now)?;
     let expiry = letter.event.payload["expires_at"].as_i64().unwrap();
-    if letter.event.created_at > now.saturating_add(FUTURE_SKEW_MS)
-        || expiry <= now
-        || expiry > card.event.payload.receive_until
-    {
-        return Err(fail("invalid_event", "letter expiration or clock binding"));
+    if letter.event.created_at > now.saturating_add(FUTURE_SKEW_MS) || expiry <= now {
+        return Err(fail("packet_expired", "letter is expired or future-dated"));
+    }
+    if expiry > card.event.payload.receive_until {
+        return Err(fail("invalid_packet", "letter exceeds receive_until"));
     }
     let header = PacketHeader {
         protocol: PROTOCOL.into(),
         mailbox_id: card.event.payload.mailbox_id.clone(),
         card_hash: card.hash.clone(),
-        key_id: card.event.payload.key_id.clone(),
         expires_at: expiry,
     };
     let json = Zeroizing::new(canonical_bytes(&letter)?);
@@ -421,7 +363,7 @@ pub fn encrypt_letter(letter: &Letter, card: &MailboxCard, now: i64) -> Result<P
     let (enc, ciphertext) = hpke::single_shot_seal::<ChaCha20Poly1305, HkdfSha256, Kem>(
         &OpModeS::Base,
         &pk,
-        &info(&header)?,
+        INFO,
         &plaintext,
         &canonical_bytes(&header)?,
     )
@@ -434,7 +376,7 @@ pub fn encrypt_letter(letter: &Letter, card: &MailboxCard, now: i64) -> Result<P
 }
 /// Stateless authenticated opening of a historical packet. This verifies shape,
 /// cryptography and future skew; callers must enforce new-acceptance expiry and
-/// durable deduplication (`MailRecipient` implements those state transitions).
+/// durable deduplication (`MailInbox` implements those state transitions).
 pub fn decrypt_packet(
     packet: &Packet,
     card: &MailboxCard,
@@ -447,11 +389,9 @@ pub fn decrypt_packet(
     let card = validate_card(&serde_json::to_value(card)?)?;
     let h = &packet.header;
     let p = &card.event.payload;
-    if !p.enabled
-        || &card.event.actor != owner
+    if &card.event.actor != owner
         || h.card_hash != card.hash
         || h.mailbox_id != p.mailbox_id
-        || h.key_id != p.key_id
         || h.expires_at > p.receive_until
         || canonical_bytes(&packet)?.len() > p.max_packet_bytes
         || key.public_key() != p.public_key
@@ -465,7 +405,7 @@ pub fn decrypt_packet(
             &OpModeR::Base,
             &key.0,
             &enc,
-            &info(h)?,
+            INFO,
             &decode_bytes(&packet.ciphertext)?,
             &canonical_bytes(h)?,
         )
@@ -474,87 +414,46 @@ pub fn decrypt_packet(
     let letter = validate_letter(&unframe(&plaintext)?)?;
     if letter.event.payload["to"] != owner.as_str()
         || letter.event.payload["expires_at"] != h.expires_at
-        || letter.event.created_at > now.saturating_add(FUTURE_SKEW_MS)
     {
-        return Err(fail("invalid_packet", "letter binding or future clock"));
+        return Err(fail(
+            "invalid_packet",
+            "letter recipient or expiration binding",
+        ));
+    }
+    if letter.event.created_at > now.saturating_add(FUTURE_SKEW_MS) {
+        return Err(SdkError::TimestampOutOfWindow);
     }
     Ok(letter)
 }
-pub fn validate_discovery(
-    value: &Value,
-    origin: &str,
-    card: Option<&MailboxCard>,
-) -> Result<String> {
+/// Informational discovery document; it never supplies delivery paths.
+pub fn validate_discovery(value: &Value, origin: &str) -> Result<()> {
     validate_mail_schema(value, "discoveryDocument")?;
     identity::validate_origin(origin)?;
-    if value["service"] != origin
-        || card.is_some_and(|c| !c.event.payload.routes.iter().any(|s| s == origin))
-    {
+    if value["service"] != origin {
         return Err(fail("invalid_response", "discovery origin mismatch"));
     }
-    let endpoint = value["endpoints"]["mailboxes"]
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("{origin}/v1/mailboxes"));
-    let url = url::Url::parse(&endpoint)
-        .map_err(|_| fail("invalid_response", "invalid mailbox endpoint"))?;
-    if url.origin().ascii_serialization() != origin
-        || url.scheme() != "https"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || endpoint.ends_with('/')
-        || endpoint.contains('\\')
-        || endpoint.chars().any(|c| c <= ' ')
-    {
-        return Err(fail("invalid_response", "invalid mailbox endpoint"));
-    }
-    Ok(endpoint)
+    Ok(())
 }
-pub fn verify_owner_jwt(token: &str, owner: &AgentId, origin: &str, now: i64) -> Result<()> {
+pub(crate) fn owner_claims(
+    token: &str,
+    origin: &str,
+    now: i64,
+) -> Result<identity::RequestJwtClaims> {
     clock(now)?;
-    identity::validate_origin(origin)?;
-    // Parse JWT segments strictly before the shared typed verifier: unknown
-    // claims remain permitted, but duplicate claims must never be collapsed.
-    let parts: Vec<_> = token.split('.').collect();
-    if parts.len() != 3 {
-        return Err(fail("invalid_token", "invalid JWT"));
-    }
-    for part in &parts[..2] {
-        let bytes =
-            decode_bytes(part).map_err(|_| fail("invalid_token", "invalid JWT encoding"))?;
-        let text =
-            std::str::from_utf8(&bytes).map_err(|_| fail("invalid_token", "invalid JWT UTF-8"))?;
-        let parsed = identity::parse_strict_json(text)
-            .map_err(|_| fail("invalid_token", "invalid JWT JSON"))?;
-        if *part == parts[1] {
-            for field in ["iat", "exp"] {
-                if !parsed[field]
-                    .as_i64()
-                    .is_some_and(|n| n >= 0 && n as u64 <= identity::MAX_SAFE_NONCE)
-                {
-                    return Err(fail(
-                        "invalid_token",
-                        "JWT NumericDate must be a safe nonnegative integer",
-                    ));
-                }
-            }
-            if parsed["exp"].as_i64().unwrap() <= now / 1000 {
-                return Err(fail("invalid_token", "expired JWT"));
-            }
-        }
-    }
-    let claims = identity::verify_request_jwt(
+    identity::verify_request_jwt(
         token,
         &identity::RequestAuthContext {
             audience: origin.into(),
             now_secs: now / 1000,
-            max_ttl_secs: 300,
+            max_ttl_secs: identity::DEFAULT_REQUEST_JWT_TTL_SECS,
         },
     )
-    .map_err(|e| fail("invalid_token", e.to_string()))?;
-    if &claims.iss != owner || &claims.sub != owner {
+    .map_err(|e| fail("invalid_token", e.to_string()))
+}
+/// Identity request JWT for this relay origin whose subject is the mailbox owner.
+pub fn verify_owner_jwt(token: &str, owner: &AgentId, origin: &str, now: i64) -> Result<()> {
+    identity::validate_origin(origin)?;
+    if &owner_claims(token, origin, now)?.iss != owner {
         return Err(SdkError::PermissionDenied);
     }
     Ok(())

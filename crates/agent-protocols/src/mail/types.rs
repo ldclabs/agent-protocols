@@ -8,11 +8,10 @@ pub type Letter = Envelope<Value>;
 #[serde(deny_unknown_fields)]
 pub struct MailboxCardPayload {
     pub mailbox_id: String,
-    pub enabled: bool,
     pub expires_at: i64,
     pub receive_until: i64,
-    pub key_id: String,
     pub public_key: String,
+    /// Zero to eight relay origins; an empty list closes the mailbox.
     pub routes: Vec<String>,
     pub max_packet_bytes: usize,
 }
@@ -29,8 +28,6 @@ pub struct MessagePayload {
     pub in_reply_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_card: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub receipt_requested: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -58,19 +55,10 @@ impl MailPart {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct ReceiptPayload {
-    pub to: AgentId,
-    pub expires_at: i64,
-    pub message_hash: String,
-    pub status: String,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct PacketHeader {
     pub protocol: String,
     pub mailbox_id: String,
     pub card_hash: String,
-    pub key_id: String,
     pub expires_at: i64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -80,12 +68,12 @@ pub struct Packet {
     pub enc: String,
     pub ciphertext: String,
 }
+/// Anonymous delivery result. It never carries the mailbox `seq`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DeliveryResult {
     pub packet_id: String,
     pub accepted_at: i64,
-    pub seq: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -95,8 +83,8 @@ pub struct PacketRecord {
     pub accepted_at: i64,
     pub seq: u64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum RecipientAcceptance {
+#[derive(Clone, Debug, PartialEq)]
+pub enum InboxAcceptance {
     Accepted(Box<Letter>),
-    Duplicate(String),
+    Duplicate(Box<Letter>),
 }
