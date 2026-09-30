@@ -458,3 +458,192 @@ class KnowledgeClient:
         result = self._request('POST', self._endpoints['search'], body=request)
         validate_knowledge_search_response(result, request, self.base_url)
         return result
+
+
+def mail_public_network_policy(url: str) -> None:
+    """Default Mail URL policy: reject non-public addresses, including DNS answers.
+
+    Rebinding-resistant routing needs the deployment's resolver/egress controls.
+    A caller-provided policy can deliberately permit private infrastructure.
+    """
+    import ipaddress
+    import socket
+    parsed = urlparse(url)
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+        if not addresses or any(not ipaddress.ip_address(item[4][0].split('%', 1)[0]).is_global for item in addresses):
+            raise ValueError('non-public destination')
+    except (ValueError, OSError) as exc:
+        raise AgentProtocolError('permission_denied', 'Mail network policy rejected destination') from exc
+
+
+class MailClient:
+    """Same-origin Mail HTTP client with anonymous delivery and explicit owner JWTs.
+
+    A fresh PreparedRequest bypasses ambient Session auth, headers, params,
+    cookies and netrc. send() gets explicit TLS/proxy/redirect settings. Injected
+    adapters remain trusted transport code. URL policy runs before every request;
+    custom network policies must enforce the application's local access rules.
+    """
+    def __init__(self, base_url: str, session: Any | None = None, *,
+                 discovery: dict[str, Any] | None = None, card_cache: Any | None = None,
+                 network_policy: Any | None = None, timeout: float = 30.0,
+                 max_response_bytes: int = 16 * 1024 * 1024):
+        from .mail import validate_mail_discovery
+        from .mail_state import MailCardCache
+        validate_origin(base_url)
+        if requests is None:
+            raise RuntimeError('Install agent-protocols[http] to use MailClient')
+        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not 0 < timeout < float('inf'):
+            raise AgentProtocolError('invalid_request', 'timeout must be finite and positive')
+        if type(max_response_bytes) is not int or max_response_bytes <= 0:
+            raise AgentProtocolError('invalid_request', 'response limit must be positive')
+        self.base_url = base_url
+        self.session = session if session is not None else _requests_session()
+        self.card_cache = card_cache if card_cache is not None else MailCardCache()
+        self.network_policy = network_policy if network_policy is not None else mail_public_network_policy
+        self.timeout, self.max_response_bytes = timeout, max_response_bytes
+        self._discovery = copy.deepcopy(discovery)
+        self._mailboxes = (validate_mail_discovery(discovery, base_url) if discovery is not None
+                           else base_url + '/v1/mailboxes')
+
+    @classmethod
+    def discover(cls, origin: str, session: Any | None = None, **kwargs: Any) -> 'MailClient':
+        client = cls(origin, session, **kwargs)
+        document = client.protocol()
+        from .mail import validate_mail_discovery
+        client._discovery = copy.deepcopy(document)
+        client._mailboxes = validate_mail_discovery(document, origin)
+        return client
+
+    @property
+    def discovery(self) -> dict[str, Any] | None:
+        return copy.deepcopy(self._discovery)
+
+    def _request(self, method: str, url: str, *, status: int = 200, body: Any = None,
+                 jwt: str | None = None, owner: str | None = None, now_ms: int | None = None) -> Any:
+        from .mail import _jcs, verify_mail_owner_jwt
+        parsed = urlparse(url)
+        if parsed.scheme != 'https' or parsed.netloc != urlparse(self.base_url).netloc or parsed.username is not None:
+            raise AgentProtocolError('invalid_request', 'cross-origin Mail request')
+        if self.network_policy(url) is False:
+            raise AgentProtocolError('permission_denied', 'Mail network policy rejected destination')
+        headers = {'Accept': 'application/json'}
+        if jwt is not None:
+            verify_mail_owner_jwt(jwt, owner, self.base_url, now_ms=now_ms)
+            headers['Authorization'] = 'Bearer ' + jwt
+        if body is not None:
+            headers['Content-Type'] = 'application/json'
+        # Do not use session.prepare_request/request: those merge ambient auth,
+        # cookies, URL parameters and netrc, leaking the sender's identity.
+        prepared = requests.Request(method, url, headers=headers,
+                                    data=_jcs(body) if body is not None else None).prepare()
+        response = self.session.send(prepared, allow_redirects=False, timeout=self.timeout,
+                                     verify=True, cert=None, proxies={}, stream=True)
+        try:
+            final_url = getattr(response, 'url', None)
+            if final_url and final_url != prepared.url:
+                raise AgentProtocolError('invalid_response', 'Mail response URL differs from requested URL')
+            chunks, count = [], 0
+            for chunk in response.iter_content(chunk_size=65536):
+                count += len(chunk)
+                if count > self.max_response_bytes:
+                    raise AgentProtocolError('payload_too_large', 'Mail response exceeds configured limit')
+                chunks.append(chunk)
+            data = b''.join(chunks)
+            if response.status_code != status:
+                raise HttpResponseError(response.status_code, data.decode('utf-8', errors='replace'),
+                                        response.headers.get(MAX_NONCE_HEADER))
+            if status == 204:
+                if data:
+                    raise AgentProtocolError('invalid_response', '204 deletion response must have no body')
+                return None
+            try:
+                return parse_strict_json(data.decode('utf-8'))
+            except (AgentProtocolError, UnicodeError, ValueError, RecursionError) as exc:
+                raise AgentProtocolError('invalid_response', 'Mail response is not strict UTF-8 JSON') from exc
+        finally:
+            response.close()
+
+    def protocol(self) -> dict[str, Any]:
+        from .mail import validate_mail_discovery
+        document = self._request('GET', self.base_url + '/.well-known/agent-mail')
+        validate_mail_discovery(document, self.base_url)
+        return document
+
+    def publish(self, card: Envelope) -> dict[str, Any]:
+        from .mail import validate_mail_card_record, validate_mail_schema, validate_mail_envelope
+        card = copy.deepcopy(card)
+        validate_mail_schema(card, 'mailboxCardEnvelope')
+        validate_mail_envelope(card)
+        if self.base_url not in card['event']['payload']['routes']:
+            raise AgentProtocolError('invalid_request', 'relay origin is not in card routes')
+        record = self._request('POST', self._mailboxes, body=card)
+        validate_mail_card_record(record, card['event']['actor'], card['event']['payload']['mailbox_id'])
+        if record['envelope'] != card:
+            raise AgentProtocolError('invalid_response', 'publication response does not contain the submitted card')
+        return record
+
+    def card(self, mailbox_id: str, owner: str, *, now_ms: int | None = None) -> dict[str, Any]:
+        from .mail import validate_mail_card_record, validate_mail_id
+        validate_mail_id(mailbox_id, size=16)
+        record = self._request('GET', self._mailboxes + '/' + mailbox_id + '/card')
+        validate_mail_card_record(record, owner, mailbox_id)
+        if self.base_url not in record['envelope']['event']['payload']['routes']:
+            raise AgentProtocolError('invalid_response', 'card does not authorize this relay origin')
+        # Observe disabled/expired cards too, so later old enabled cards cannot win.
+        self.card_cache.observe(record['envelope'], owner, now_ms=now_ms, require_usable=False)
+        return record
+
+    def deliver(self, packet: dict[str, Any], card: Envelope) -> dict[str, Any]:
+        """Anonymous delivery; exact retries can use an expired historical card."""
+        from .mail import _check_packet_card, mail_packet_id, validate_mail_delivery_result, validate_mail_packet, validate_mail_schema
+        packet, card = copy.deepcopy(packet), copy.deepcopy(card)
+        validate_mail_schema(card, 'mailboxCardEnvelope')
+        validate_mail_packet(packet)
+        _check_packet_card(packet, card, card['event']['actor'])
+        if self.base_url not in card['event']['payload']['routes']:
+            raise AgentProtocolError('invalid_request', 'relay origin is not in card routes')
+        pid = mail_packet_id(packet)
+        result = self._request('POST', self._mailboxes + '/' + packet['header']['mailbox_id'] + '/packets', status=202, body=packet)
+        validate_mail_delivery_result(result, pid)
+        if result['accepted_at'] >= packet['header']['expires_at']:
+            raise AgentProtocolError('invalid_response', 'relay claims acceptance after expiration')
+        return result
+
+    def packets(self, mailbox_id: str, owner: str, jwt: str, *, limit: int = 100,
+                cursor: str | None = None, now_ms: int | None = None) -> dict[str, Any]:
+        from .mail import validate_mail_id, validate_mail_packet_list
+        validate_mail_id(mailbox_id, size=16)
+        if type(limit) is not int or not 1 <= limit <= 1000 or (cursor is not None and (not isinstance(cursor, str) or not cursor)):
+            raise AgentProtocolError('invalid_request', 'invalid Mail pagination request')
+        url = _query(self._mailboxes + '/' + mailbox_id + '/packets', {'limit': limit, 'cursor': cursor})
+        page = self._request('GET', url, jwt=jwt, owner=owner, now_ms=now_ms)
+        validate_mail_packet_list(page, mailbox_id, limit=limit)
+        return page
+
+    def packet_pages(self, mailbox_id: str, owner: str, jwt: str, *, limit: int = 100,
+                     now_ms: int | None = None) -> Iterator[dict[str, Any]]:
+        cursor, last_seq, seen_ids, cursors = None, 0, set(), set()
+        while True:
+            page = self.packets(mailbox_id, owner, jwt, limit=limit, cursor=cursor, now_ms=now_ms)
+            for record in page['result']:
+                if record['seq'] <= last_seq or record['packet_id'] in seen_ids:
+                    raise AgentProtocolError('invalid_response', 'Mail pagination repeated or reordered records')
+                last_seq = record['seq']
+                seen_ids.add(record['packet_id'])
+            cursor = page.get('next_cursor')
+            if cursor is not None:
+                if cursor in cursors:
+                    raise AgentProtocolError('invalid_response', 'Mail pagination cursor cycle')
+                cursors.add(cursor)
+            yield page
+            if cursor is None:
+                return
+
+    def delete(self, mailbox_id: str, packet_id: str, owner: str, jwt: str, *, now_ms: int | None = None) -> None:
+        from .mail import validate_mail_id
+        validate_mail_id(mailbox_id, size=16)
+        validate_mail_id(packet_id)
+        self._request('DELETE', self._mailboxes + '/' + mailbox_id + '/packets/' + packet_id,
+                      status=204, jwt=jwt, owner=owner, now_ms=now_ms)

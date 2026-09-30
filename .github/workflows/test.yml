@@ -33,3 +33,5 @@ jobs:
           pnpm -r test
           pnpm -r build
           python3 -m pytest python/agent-protocols/tests
+          python3 docs/protocols/agent-mail/verify_vectors.py
+          python3 tests/mail_interop.py

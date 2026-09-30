@@ -4,13 +4,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent Protocols — Five protocols. One signed envelope.</title>
+  <title>Agent Protocols — Six protocols. One signed envelope.</title>
   <meta name="description"
-    content="Agent Protocols: five small, composable open specifications for autonomous agents — Identity, Profile, Delegation, Discourse, and Knowledge — built on one Ed25519-signed envelope. No central registry, no required host.">
+    content="Agent Protocols: six small, composable open specifications for autonomous agents — Identity, Profile, Delegation, Discourse, Knowledge, and Mail — built on one Ed25519-signed envelope. No central registry, no required host.">
   <meta name="theme-color" content="#eff1ea">
-  <meta property="og:title" content="Agent Protocols — Five protocols. One signed envelope.">
+  <meta property="og:title" content="Agent Protocols — Six protocols. One signed envelope.">
   <meta property="og:description"
-    content="Open, composable specifications for autonomous agents: Identity, Profile, Delegation, Discourse, and Knowledge.">
+    content="Open, composable specifications for autonomous agents: Identity, Profile, Delegation, Discourse, Knowledge, and Mail.">
   <meta property="og:type" content="website">
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="apple-touch-icon" href="./favicon.svg">
@@ -1027,12 +1027,12 @@
         <div>
           <span class="stamp fade-in"><span data-i18n="hero.eyebrow">Open specification · Draft 1.0 · MIT</span></span>
           <h1>
-            <span class="l"><span data-i18n="hero.t1">Five protocols.</span></span>
+            <span class="l"><span data-i18n="hero.t1">Six protocols.</span></span>
             <span class="l"><span data-i18n="hero.t2">One <em>signed</em> envelope.</span></span>
           </h1>
           <p class="lede fade-in" style="animation-delay:.2s" data-i18n="hero.lede">A shared, verifiable language for
             autonomous agents: prove which key signed, describe an agent, act for a principal, deliberate in rooms with
-            hash-chained records, and build public knowledge together. Five small drafts, composable by design — no
+            hash-chained records, build public knowledge together, and exchange encrypted private letters. Six small drafts, composable by design — no
             central registry, no required host.</p>
           <div class="cta-row fade-in" style="animation-delay:.3s">
             <a class="btn btn-p" href="#stack"><span data-i18n="hero.cta">Read the protocols</span> <span class="arr">→</span></a>
@@ -1042,7 +1042,7 @@
             </button>
           </div>
           <dl class="stats fade-in" style="animation-delay:.4s">
-            <div><dt>5</dt><dd data-i18n="hero.s1">Specifications</dd></div>
+            <div><dt>6</dt><dd data-i18n="hero.s1">Specifications</dd></div>
             <div><dt>Ed25519</dt><dd data-i18n="hero.s2">Signatures</dd></div>
             <div><dt>SHA3 · JCS</dt><dd data-i18n="hero.s3">Canonical hashing</dd></div>
             <div><dt>Rust · TS · Py</dt><dd data-i18n="hero.s4">SDKs, shared vectors</dd></div>
@@ -1143,20 +1143,22 @@
       <div class="wrap">
         <header class="sec-h rv">
           <span class="kicker" data-i18n="st.kicker">1 — The stack</span>
-          <h2 data-i18n="st.title">Five questions. Five protocols. <em>One</em> foundation.</h2>
-          <p data-i18n="st.sub">Each protocol answers one question — and states plainly what it does not prove. Every
-            write in every protocol is an Agent Identity envelope, so read Identity first: it also defines the HTTP
-            conventions the others share.</p>
+          <h2 data-i18n="st.title">Six questions. Six protocols. <em>One</em> foundation.</h2>
+          <p data-i18n="st.sub">Each protocol answers one question — and states plainly what it does not prove. All protocols reuse Agent Identity signed envelopes; Mail encrypts its letters inside opaque packets. Read Identity first: it also defines the shared HTTP conventions.</p>
         </header>
         <div class="stack-grid">
           <div class="stack-vis">
             <div class="stack-sticky">
-              <svg class="stack-svg" id="stackSvg" viewBox="0 20 520 402" role="img" aria-labelledby="stackTitle">
-                <title id="stackTitle">Agent Identity underpins Profile, Delegation, Discourse, and Knowledge</title>
+              <svg class="stack-svg" id="stackSvg" viewBox="0 -30 648 452" role="img" aria-labelledby="stackTitle">
+                <title id="stackTitle">Agent Identity underpins Profile, Delegation, Discourse, Knowledge, and Mail</title>
                 <defs>
                   <marker id="arr-off" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L8 5L1 9" fill="none" stroke="rgba(16,29,23,.25)" stroke-width="1.4" /></marker>
                   <marker id="arr-on" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L8 5L1 9" fill="none" stroke="#101d17" stroke-width="1.4" /></marker>
                 </defs>
+                <g class="edge" data-e="mail-card">
+                  <path d="M36 150 C36 -56 580 -56 580 146" />
+                  <text x="308" y="-12" text-anchor="middle" data-i18n="st.e.mail">advertises mailbox cards</text>
+                </g>
                 <g class="edge" data-e="advert">
                   <path d="M52 150 C52 6 452 6 452 146" />
                   <text x="252" y="36" text-anchor="middle" data-i18n="st.e.advert">advertises knowledge services</text>
@@ -1183,19 +1185,23 @@
                 <g class="spoke" data-p="knowledge"><line x1="452" y1="214" x2="452" y2="318" />
                   <g class="env"><rect x="446" y="296" width="12" height="8.5" rx="1" /><path d="M446 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="446" y="296" width="12" height="8.5" rx="1" /><path d="M446 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="446" y="296" width="12" height="8.5" rx="1" /><path d="M446 296.5l6 4.5 6-4.5" /></g></g>
 
+                <g class="spoke" data-p="mail"><line x1="580" y1="214" x2="580" y2="318" />
+                  <g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g>                  <g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g>                  <g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g></g>
+
                 <g class="pl" data-p="profile" tabindex="0" role="button" aria-label="Agent Profile"><rect x="8" y="150" width="120" height="64" rx="9" /><text x="68" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Profile</text><text class="sub mono" x="68" y="197" text-anchor="middle">agent-profile/1.0</text></g>
                 <g class="pl" data-p="delegation" tabindex="0" role="button" aria-label="Agent Delegation"><rect x="136" y="150" width="120" height="64" rx="9" /><text x="196" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Delegation</text><text class="sub mono" x="196" y="197" text-anchor="middle">agent-delegation/1.0</text></g>
                 <g class="pl" data-p="discourse" tabindex="0" role="button" aria-label="Agent Discourse"><rect x="264" y="150" width="120" height="64" rx="9" /><text x="324" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Discourse</text><text class="sub mono" x="324" y="197" text-anchor="middle">agent-discourse/1.0</text></g>
                 <g class="pl" data-p="knowledge" tabindex="0" role="button" aria-label="Agent Knowledge"><rect x="392" y="150" width="120" height="64" rx="9" /><text x="452" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Knowledge</text><text class="sub mono" x="452" y="197" text-anchor="middle">agent-knowledge/1.0</text></g>
+                <g class="pl" data-p="mail" tabindex="0" role="button" aria-label="Agent Mail"><rect x="520" y="150" width="120" height="64" rx="9" /><text x="580" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Mail</text><text class="sub mono" x="580" y="197" text-anchor="middle">agent-mail/1.0</text></g>
 
                 <g class="fnd" data-p="identity" tabindex="0" role="button" aria-label="Agent Identity">
-                  <rect class="b" x="8" y="318" width="504" height="100" rx="10" />
-                  <circle class="tick" cx="68" cy="318" r="2.5" /><circle class="tick" cx="196" cy="318" r="2.5" /><circle class="tick" cx="324" cy="318" r="2.5" /><circle class="tick" cx="452" cy="318" r="2.5" />
+                  <rect class="b" x="8" y="318" width="632" height="100" rx="10" />
+                  <circle class="tick" cx="68" cy="318" r="2.5" /><circle class="tick" cx="196" cy="318" r="2.5" /><circle class="tick" cx="324" cy="318" r="2.5" /><circle class="tick" cx="452" cy="318" r="2.5" /><circle class="tick" cx="580" cy="318" r="2.5" />
                   <text x="28" y="352" font-size="17" font-weight="500">Agent Identity</text>
                   <text class="sub mono" x="28" y="378">did:agent · signed envelope · JCS · SHA3-256 · Ed25519</text>
                   <text class="sub mono" x="28" y="398">request JWT · errors · lists · accepted records · discovery</text>
-                  <text class="sub mono" x="492" y="352" text-anchor="end">agent-identity/1.0</text>
-                  <rect class="sealdot" x="480" y="384" width="12" height="12" rx="2" />
+                  <text class="sub mono" x="620" y="352" text-anchor="end">agent-identity/1.0</text>
+                  <rect class="sealdot" x="608" y="384" width="12" height="12" rx="2" />
                 </g>
               </svg>
               <div class="stack-events" id="stackEvents" aria-live="polite"></div>
@@ -1206,10 +1212,10 @@
             <article class="pcard rv" data-p="identity" id="p-identity">
               <div class="pc-top"><span class="pc-n">01</span><span class="pc-q" data-i18n="p1.q">Which key signed?</span></div>
               <div class="pc-name"><h3>Agent Identity</h3><code>agent-identity/1.0</code><span class="stamp" data-i18n="draft">Draft</span></div>
-              <p class="pc-desc" data-i18n="p1.desc">A self-certifying identity derived from an Ed25519 public key — and the signed envelope every other protocol writes with.</p>
+              <p class="pc-desc" data-i18n="p1.desc">A self-certifying identity derived from an Ed25519 public key — and the signed envelope every other protocol builds on.</p>
               <ul class="pc-list">
                 <li data-i18n="p1.f1"><code>did:agent:</code> IDs encode the raw 32-byte public key. There is no registry to consult.</li>
-                <li data-i18n="p1.f2">One envelope for everything: <code>SHA3-256(JCS(event))</code>, signed with Ed25519.</li>
+                <li data-i18n="p1.f2">One envelope for signed events: <code>SHA3-256(JCS(event))</code>, signed with Ed25519.</li>
                 <li data-i18n="p1.f3">Strict, cofactorless verification rules, so every implementation accepts exactly the same signatures.</li>
                 <li data-i18n="p1.f4">Replay resistance from a live-write window, one monotonic nonce per key, and idempotent resubmission.</li>
               </ul>
@@ -1271,6 +1277,20 @@
               </ul>
               <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p5.b">Relevance, signed provenance, and disciplinary validation are separate from universal truth.</span></p>
               <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
+            </article>
+
+            <article class="pcard rv" data-p="mail" id="p-mail">
+              <div class="pc-top"><span class="pc-n">06</span><span class="pc-q" data-i18n="p6.q">How can agents exchange private letters asynchronously?</span></div>
+              <div class="pc-name"><h3>Agent Mail</h3><code>agent-mail/1.0</code><span class="stamp" data-i18n="draft">Draft</span></div>
+              <p class="pc-desc" data-i18n="p6.desc">End-to-end encrypted correspondence with offline delivery: identity stays with the agent, while mailbox providers and routes can change.</p>
+              <ul class="pc-list">
+                <li data-i18n="p6.f1">Recipient-signed Mailbox Cards bind independent encryption keys to delivery routes.</li>
+                <li data-i18n="p6.f2">HPKE encrypts the complete signed Letter; relays store opaque Packets.</li>
+                <li data-i18n="p6.f3">Replies, inline attachments, key rotation, retries, and optional encrypted receipts.</li>
+                <li data-i18n="p6.f4">Rust, TypeScript, and Python SDKs share vectors and exchange encrypted packets; MCP integration remains future work.</li>
+              </ul>
+              <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p6.b">Relays still observe delivery metadata. Receiving a letter grants no execution authority.</span></p>
+              <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
             </article>
           </div>
         </div>
@@ -1446,7 +1466,7 @@
         <header class="sec-h rv">
           <span class="kicker" data-i18n="pr.kicker">5 — Design</span>
           <h2 data-i18n="pr.title">Small cores. <em>Honest</em> boundaries.</h2>
-          <p data-i18n="pr.sub">The considerations that run through all five specifications.</p>
+          <p data-i18n="pr.sub">The considerations that run through all six specifications.</p>
         </header>
         <div class="prin rv">
           <div class="pr"><span class="n">01</span><svg viewBox="0 0 32 32"><circle class="dr" cx="11" cy="20" r="6" /><path class="dr" d="M15.5 15.5L27 4M22 9l4 4" /><circle class="s" cx="11" cy="20" r="1.5" /></svg><h3 data-i18n="pr.1t">Self-certifying identity</h3><p data-i18n="pr.1d">An Agent ID is its public key. Verification needs no registry, account, or host.</p></div>
@@ -1468,7 +1488,7 @@
           <div class="rv">
             <span class="kicker" data-i18n="sdk.kicker">6 — SDKs</span>
             <h2 style="margin:16px 0 18px" data-i18n="sdk.title">Three languages. <em>One</em> set of vectors.</h2>
-            <p style="font-size:17px;color:var(--ink-soft);margin:0" data-i18n="sdk.sub">Framework-agnostic building blocks for clients and services. Helper names stay parallel across Rust, TypeScript, and Python, and every SDK runs the same normative test vectors. Private keys stay with the agent.</p>
+            <p style="font-size:17px;color:var(--ink-soft);margin:0" data-i18n="sdk.sub">Framework-agnostic building blocks for Identity, Profile, Delegation, Discourse, Knowledge, and Mail. Rust, TypeScript, and Python run shared normative vectors and exchange freshly encrypted Mail packets. Applications supply durable mailbox storage; Mail MCP integration remains future work.</p>
             <div class="inst">
               <button type="button" data-copy="cargo add agent-protocols"><span class="lg">Rust</span><code>cargo add agent-protocols</code><span class="cp" data-i18n="copy">copy</span></button>
               <button type="button" data-copy="npm install agent-protocols"><span class="lg">TypeScript</span><code>npm install agent-protocols</code><span class="cp" data-i18n="copy">copy</span></button>
@@ -1482,6 +1502,7 @@
                 <tr><td data-i18n="sdk.m3">Knowledge store &amp; retrieval</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
                 <tr><td data-i18n="sdk.m4">HTTP clients</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
                 <tr><td data-i18n="sdk.m5">Local MCP connector</td><td class="y">✓</td><td class="y">✓</td><td class="no">—</td></tr>
+                <tr><td data-i18n="sdk.m6">Mail encryption &amp; delivery</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
               </tbody>
             </table>
           </div>
@@ -1503,7 +1524,7 @@
           <div class="rv">
             <span class="kicker" data-i18n="mcp.kicker">MCP</span>
             <h3 data-i18n="mcp.title">Plug any MCP-capable agent in.</h3>
-            <p data-i18n="mcp.sub">A local connector sits beside the agent and owns the hard parts — keys, signing, nonces, request JWTs, room state, and live SSE sync — behind 23 agent-friendly tools. It never exposes raw signing, and it is an adapter, not a new protocol.</p>
+            <p data-i18n="mcp.sub">A local connector sits beside the agent and owns the hard parts — keys, signing, nonces, request JWTs, room state, and live SSE sync — behind 23 agent-friendly tools. It never exposes raw signing, and it is an adapter, not a new protocol. Its inbox handles Discourse updates; Agent Mail is not yet supported.</p>
             <div class="tools">
               <div class="tg"><b data-i18n="mcp.g1">Identity</b><div><code><i>…_</i>identity_current</code></div></div>
               <div class="tg"><b data-i18n="mcp.g2">Delegation</b><div><code><i>…_</i>principal_resolve</code><code><i>…_</i>delegation_check</code><code><i>…_</i>delegations_list</code><code><i>…_</i>delegation_grant</code><code><i>…_</i>delegation_revoke</code></div></div>
@@ -1531,7 +1552,7 @@
           <div>
             <span class="kicker" data-i18n="cta.kicker">Implement</span>
             <h2 style="margin-top:14px" data-i18n="cta.title">Build on the drafts. <em>Break</em> the vectors.</h2>
-            <p data-i18n="cta.sub">All five specifications are drafts and may still change incompatibly before 1.0. Test vectors are normative: an implementation that disagrees with a vector does not conform. Feedback and interoperability reports are welcome.</p>
+            <p data-i18n="cta.sub">All six specifications are drafts and may still change incompatibly before 1.0. Test vectors are normative: an implementation that disagrees with a vector does not conform. Feedback and interoperability reports are welcome.</p>
           </div>
           <div class="btns">
             <a class="btn btn-p" href="https://github.com/ldclabs/agent-protocols/tree/main/docs/protocols"><span data-i18n="cta.b1">Read the specifications</span> <span class="arr">→</span></a>
@@ -1560,6 +1581,7 @@
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.md">Agent Delegation</a></li>
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.md">Agent Discourse</a></li>
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.md">Agent Knowledge</a></li>
+            <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.md">Agent Mail</a></li>
           </ul>
         </div>
         <div>
@@ -1613,7 +1635,7 @@
      ================================================================ */
   const DYN = {
     en: {
-      "doc.title": "Agent Protocols — Five protocols. One signed envelope.",
+      "doc.title": "Agent Protocols — Six protocols. One signed envelope.",
       copied: "copied",
       "desk.hint": "edit me", "desk.fields": "6 fields", "desk.reused": "old sig", "desk.valid": "valid", "desk.invalid": "invalid",
       "desk.tamper": "Tamper", "desk.resign": "Re-sign",
@@ -1631,6 +1653,7 @@
       "se.delegation": "Signed by a Controller key listed at the principal's HTTPS URL.",
       "se.discourse": "Everything else is declared per room — inline, or imported from type packs.",
       "se.knowledge": "A capsule's ID is its envelope hash; every relation points at an exact version.",
+      "se.mail": "The recipient signs its Mailbox Card. Senders encrypt signed Letters locally; relays only store Packets.",
       "dg.o1ok": "document.id equals the signed principal_id",
       "dg.o1bad": "{a} redirects to {b}; the signed principal_id is an alias, so it is rejected",
       "dg.o2ok": "credential found; grant_event_id names the accepted record",
@@ -1697,7 +1720,7 @@
       "mcp.s1": "Wake", "mcp.s2": "Read", "mcp.s3": "Decide", "mcp.s3t": "silence is valid", "mcp.s4": "Set status", "mcp.s5": "Write", "mcp.s6": "Acknowledge",
     },
     zh: {
-      "doc.title": "Agent Protocols — 五个协议，同一个签名信封",
+      "doc.title": "Agent Protocols — 六个协议，同一个签名信封",
       copied: "已复制",
       "desk.hint": "改我", "desk.fields": "6 个字段", "desk.reused": "旧签名", "desk.valid": "有效", "desk.invalid": "无效",
       "desk.tamper": "篡改", "desk.resign": "重新签名",
@@ -1715,6 +1738,7 @@
       "se.delegation": "由主体 HTTPS URL 上列出的 Controller 密钥签名。",
       "se.discourse": "其余一切都由 Room 自行声明——内联定义，或从类型包导入。",
       "se.knowledge": "胶囊 ID 就是其信封哈希；每条关系都指向确切版本。",
+      "se.mail": "收件人签名 Mailbox Card；发件人在本地加密签名 Letter，中继只存储 Packet。",
       "dg.o1ok": "document.id 与签名中的 principal_id 完全一致",
       "dg.o1bad": "{a} 会重定向到 {b}；签名中的 principal_id 是别名，因此被拒绝",
       "dg.o2ok": "找到凭证；grant_event_id 指向已接受记录",
@@ -1785,22 +1809,22 @@
   const ZH = {
     "nav.stack": "协议", "nav.delegation": "委托", "nav.discourse": "研讨", "nav.knowledge": "知识", "nav.principles": "设计", "nav.sdks": "SDK",
     "hero.eyebrow": "开放规范 · 1.0 草案 · MIT",
-    "hero.t1": "五个协议，",
+    "hero.t1": "六个协议，",
     "hero.t2": "同一个<em>签名</em>信封。",
-    "hero.lede": "为自治智能体提供一套共享、可验证的语言：证明由哪把密钥签名、描述智能体、代表主体行事、在以哈希链记录的 Room 中研讨，并共同构建公开知识。五个精简草案，天然可组合——无需中心注册表，不依赖特定宿主。",
+    "hero.lede": "为自治智能体提供一套共享、可验证的语言：证明由哪把密钥签名、描述智能体、代表主体行事、在以哈希链记录的 Room 中研讨，共同构建公开知识，并交换加密私信。六个精简草案，天然可组合——无需中心注册表，不依赖特定宿主。",
     "hero.cta": "阅读协议规范",
     "hero.s1": "协议规范", "hero.s2": "签名算法", "hero.s3": "规范化哈希", "hero.s4": "SDK · 共享测试向量",
     "desk.env": "信封", "desk.jcs": "JCS 字节", "desk.verify": "验证", "desk.loading": "正在浏览器中重算测试向量…",
     "desk.key": "新密钥", "desk.tamper": "篡改", "desk.reset": "向量",
     "st.kicker": "1 — 协议栈",
-    "st.title": "五个问题，五个协议，<em>一个</em>基础。",
-    "st.sub": "每个协议只回答一个问题，并明确说明它不能证明什么。所有协议的每一次写入都是 Agent Identity 信封，因此请先阅读 Identity：它还定义了其他协议共用的 HTTP 约定。",
-    "st.e.advert": "声明知识服务", "st.e.resolve": "解析展示档案", "st.e.hints": "委托线索", "st.e.discuss": "讨论知识胶囊",
+    "st.title": "六个问题，六个协议，<em>一个</em>基础。",
+    "st.sub": "每个协议只回答一个问题，并明确说明它不能证明什么。所有协议复用 Agent Identity 签名信封；Mail 将签名信件加密为不透明的数据包。请先阅读 Identity：它还定义了共用的 HTTP 约定。",
+    "st.e.mail": "声明收件卡", "st.e.advert": "声明知识服务", "st.e.resolve": "解析展示档案", "st.e.hints": "委托线索", "st.e.discuss": "讨论知识胶囊",
     draft: "草案", bound: "边界", "l.spec": "规范全文", "l.vectors": "测试向量", "l.packs": "类型包",
     "p1.q": "由哪把密钥签名？",
-    "p1.desc": "由 Ed25519 公钥派生的自验证身份——以及其他所有协议写入时共用的签名信封。",
+    "p1.desc": "由 Ed25519 公钥派生的自验证身份——以及其他所有协议共同复用的签名信封。",
     "p1.f1": "<code>did:agent:</code> 标识直接编码 32 字节原始公钥，无需查询任何注册表。",
-    "p1.f2": "所有写入共用一种信封：对 <code>SHA3-256(JCS(event))</code> 进行 Ed25519 签名。",
+    "p1.f2": "签名事件共用一种信封：对 <code>SHA3-256(JCS(event))</code> 进行 Ed25519 签名。",
     "p1.f3": "严格的无余因子验证规则，确保所有实现接受完全相同的签名。",
     "p1.f4": "以实时写入时间窗、每个密钥单调递增的 Nonce 和幂等重提交抵御重放。",
     "p1.b": "签名有效不等于获得应用授权。",
@@ -1832,6 +1856,13 @@
     "p5.f3": "显式关系：<code>derived_from</code>、<code>tests</code>、<code>extends</code>、<code>contradicts</code>、<code>supersedes</code>……",
     "p5.f4": "文本与结构化查询、批量读取、基于检查点的分页，以及可选的排序搜索。",
     "p5.b": "相关性、签名来源与学科校验，都不等同于普适真理。",
+    "p6.q": "智能体如何异步交换私密信件？",
+    "p6.desc": "支持离线投递的端到端加密通信：身份始终属于智能体，邮箱提供方和投递路由可以替换。",
+    "p6.f1": "收件人签名 Mailbox Card，将独立加密密钥绑定到投递路由。",
+    "p6.f2": "HPKE 加密完整的签名 Letter；中继只存储不透明的 Packet。",
+    "p6.f3": "支持回复、内联附件、密钥轮换、重试与可选的加密回执。",
+    "p6.f4": "Rust、TypeScript 和 Python SDK 共用向量并互通加密数据包；MCP 集成仍属于后续工作。",
+    "p6.b": "中继仍能观察投递元数据。收到信件不代表授权执行。",
     "dg.kicker": "2 — 委托",
     "dg.title": "核验智能体<em>代表谁</em>发言。",
     "dg.sub": "一个智能体请求 <code>https://dmsg.net</code> 代 Yan 起草消息。依赖方在行动之前执行七项检查——并按规范要求，将签名、历史授权与当前可用性作为三项结果分别报告。选择一个场景，看看哪一步会失败。",
@@ -1876,7 +1907,7 @@
     "kg.f3t": "检索有明确范围", "kg.f3d": "查询会标明服务与检查点。用 <code>after_seq</code> 轮询；排序搜索报告的是相关性与覆盖度，而非正确性。",
     "pr.kicker": "5 — 设计",
     "pr.title": "精简内核，<em>诚实</em>边界。",
-    "pr.sub": "贯穿全部五个规范的设计考量。",
+    "pr.sub": "贯穿全部六个规范的设计考量。",
     "pr.1t": "自验证身份", "pr.1d": "Agent ID 就是它的公钥。验证无需注册表、账户或宿主。",
     "pr.2t": "宿主中立", "pr.2d": "任何服务都能验证任何智能体的操作。没有哪个提供方拥有身份或记录。",
     "pr.3t": "确定性字节", "pr.3d": "JCS 规范化 JSON、SHA3-256 与严格的 Ed25519 规则：所有实现的哈希与验证结果完全一致。",
@@ -1887,18 +1918,18 @@
     "pr.8t": "始终可验证", "pr.8d": "哈希链记录、有界的生命周期，以及可离线重放的归档——包括每一个类型定义。",
     "sdk.kicker": "6 — SDK",
     "sdk.title": "三种语言，<em>一套</em>测试向量。",
-    "sdk.sub": "面向客户端与服务端、与框架无关的构建模块。Rust、TypeScript 与 Python 的辅助函数命名保持一致，所有 SDK 都运行同一套规范性测试向量。私钥始终留在智能体一侧。",
+    "sdk.sub": "面向 Identity、Profile、Delegation、Discourse、Knowledge 与 Mail 的框架无关构建模块。Rust、TypeScript 与 Python 运行共享规范性向量，并互通新加密的 Mail 数据包。应用负责持久化邮箱存储；Mail MCP 集成仍属于后续工作。",
     copy: "复制",
-    "sdk.m": "模块", "sdk.m2": "Discourse 内核与归档", "sdk.m3": "知识存储与检索", "sdk.m4": "HTTP 客户端", "sdk.m5": "本地 MCP 连接器",
+    "sdk.m": "模块", "sdk.m2": "Discourse 内核与归档", "sdk.m3": "知识存储与检索", "sdk.m4": "HTTP 客户端", "sdk.m5": "本地 MCP 连接器", "sdk.m6": "Mail 加密与投递",
     "sdk.note": "示例基于当前草案源码（v0.10.0）。完整 API 请参阅各 SDK 的 README。",
     "mcp.kicker": "MCP",
     "mcp.title": "接入任何支持 MCP 的智能体。",
-    "mcp.sub": "本地连接器运行在智能体旁边，承担最棘手的部分——密钥、签名、Nonce、请求 JWT、Room 状态与 SSE 实时同步——并以 23 个面向智能体的工具对外提供。它从不暴露原始签名能力；它是适配层，而非新协议。",
+    "mcp.sub": "本地连接器运行在智能体旁边，承担最棘手的部分——密钥、签名、Nonce、请求 JWT、Room 状态与 SSE 实时同步——并以 23 个面向智能体的工具对外提供。它从不暴露原始签名能力；它是适配层，而非新协议。这里的收件箱处理 Discourse 更新，尚不支持 Agent Mail。",
     "mcp.g1": "身份", "mcp.g2": "委托", "mcp.g3": "Room", "mcp.g4": "收件箱", "mcp.g5": "写入",
     "mcp.core1": "23 个工具 · stdio 或本地回环 HTTP", "mcp.core2": "密钥保存在系统钥匙串中",
     "cta.kicker": "实现",
     "cta.title": "基于草案构建，<em>挑战</em>测试向量。",
-    "cta.sub": "五个规范目前都是草案，在 1.0 之前仍可能发生不兼容的修订。测试向量具有规范效力：与向量不一致的实现即不符合规范。欢迎反馈与互操作性报告。",
+    "cta.sub": "六个规范目前都是草案，在 1.0 之前仍可能发生不兼容的修订。测试向量具有规范效力：与向量不一致的实现即不符合规范。欢迎反馈与互操作性报告。",
     "cta.b1": "阅读协议规范", "cta.b2": "参与贡献",
     "foot.tag": "面向自治智能体的可组合开放协议，以英文与简体中文双语发布。",
     "foot.specs": "协议规范", "foot.sdks": "SDK 与工具", "foot.mcp": "MCP 本地连接器", "foot.project": "项目",
@@ -2401,11 +2432,12 @@
      ================================================================ */
   function stack() {
     const P = {
-      identity: { spokes: ["profile", "delegation", "discourse", "knowledge"], edges: [], cap: "se.cap.wire", chips: ["did:agent:<base64url-public-key>", "hash = SHA3-256(JCS(event))", "signature = Ed25519(event_hash)", "Authorization: Bearer <EdDSA JWT>"], note: "se.identity" },
-      profile: { spokes: ["profile"], edges: ["hints", "resolve", "advert"], cap: "se.cap.events", chips: ["profile.update"], note: "se.profile" },
+      identity: { spokes: ["profile", "delegation", "discourse", "knowledge", "mail"], edges: [], cap: "se.cap.wire", chips: ["did:agent:<base64url-public-key>", "hash = SHA3-256(JCS(event))", "signature = Ed25519(event_hash)", "Authorization: Bearer <EdDSA JWT>"], note: "se.identity" },
+      profile: { spokes: ["profile"], edges: ["hints", "resolve", "advert", "mail-card"], cap: "se.cap.events", chips: ["profile.update"], note: "se.profile" },
       delegation: { spokes: ["delegation"], edges: ["hints"], cap: "se.cap.events", chips: ["delegation.grant", "delegation.revoke"], note: "se.delegation" },
       discourse: { spokes: ["discourse"], edges: ["resolve", "discuss"], cap: "se.cap.builtin", chips: ["room.create", "room.update", "room.close", "room.cancel", "type.define", "room.join", "room.join.request", "room.join.review", "room.leave", "room.member.role.update", "room.member.remove", "message.create"], note: "se.discourse" },
       knowledge: { spokes: ["knowledge"], edges: ["discuss", "advert"], cap: "se.cap.events", chips: ["knowledge.publish", "knowledge.assess", "knowledge.retract"], note: "se.knowledge" },
+      mail: { spokes: ["mail"], edges: ["mail-card"], cap: "se.cap.events", chips: ["mailbox.publish", "mail.message", "mail.receipt"], note: "se.mail" },
     };
     const svg = $("#stackSvg"), box = $("#stackEvents");
     let cur = null;

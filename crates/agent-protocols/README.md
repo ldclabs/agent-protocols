@@ -1,6 +1,6 @@
 # agent-protocols Rust SDK
 
-Rust SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols.
+Rust SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, Agent Knowledge, and Agent Mail protocols.
 
 The crate is intentionally framework-neutral:
 
@@ -15,6 +15,7 @@ The crate is intentionally framework-neutral:
 - `delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, query shapes, authority, acceptance, historical, and use checks, `verify_delegation_credential` over the latest grant record, and `audit_delegation_history` for auditors.
 - `discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records (`ArchiveRecord`), server records, and archive verification.
 - `knowledge`: signed contributions, evidence/profile checks, dependency graph views, discovery, portable queries, checkpoint-bound pagination, and the in-memory Knowledge store.
+- `mail`: signed mailbox cards and letters, HPKE packets, card/key lifecycle, recipient deduplication, and an in-memory relay with snapshot persistence boundaries.
 - `http_client`: optional `reqwest` clients behind the `http-client` feature. Lists use `ListResponse`; non-2xx responses become `SdkError::HttpStatus` with the protocol `code`, `data`, and `Max-Seen-Nonce`.
 - `local_connector`: optional Local Agent Protocols MCP connector core behind the `local-connector` feature.
 
@@ -164,3 +165,90 @@ procedures.
 `cargo test -p agent-protocols --all-features` runs the shared Knowledge signed
 fixtures and every applicable layered vector in native Rust, plus real local
 HTTPS client tests and additional pagination, numeric, and store-limit tests.
+
+## Agent Mail
+
+`mail` implements `agent-mail/1.0`: signed mailbox cards and letters, strict
+wire validation, independent X25519 keys, RFC 9180 HPKE Base encryption, padded
+packets, private attachments, reply/receipt bindings, and lifecycle state.
+The fixed suite uses the maintained [`hpke`](https://docs.rs/hpke/0.14.1/hpke/)
+crate with X25519/HKDF-SHA256/ChaCha20Poly1305. Secret keys and temporary
+plaintext frames are zeroized on drop; deliberately exported secrets, decoded
+letters, and application backups still need protected storage.
+
+```rust
+use agent_protocols::{identity::AgentSigner, mail::*};
+
+# fn main() -> agent_protocols::Result<()> {
+let now = agent_protocols::identity::unix_ms();
+let owner = AgentSigner::generate();
+let sender = AgentSigner::generate();
+let key = MailEncryptionKey::generate()?;
+let card = sign_card(&owner, MailboxCardPayload {
+    mailbox_id: random_id()?, enabled: true,
+    expires_at: now + 86_400_000, receive_until: now + 172_800_000,
+    key_id: random_id()?, public_key: key.public_key(),
+    routes: vec!["https://relay.example".into()], max_packet_bytes: 65536,
+}, now, now as u64)?;
+let mut pins = CardCache::new();
+pins.observe(&serde_json::to_value(&card)?, &owner.agent_id(), now)?;
+let letter = sign_message(&sender, MessagePayload {
+    to: owner.agent_id(), expires_at: now + 86_400_000,
+    thread_id: random_id()?, parts: vec![MailPart::text("A private question")],
+    subject: None, in_reply_to: None, reply_card: None, receipt_requested: None,
+}, now, now as u64)?;
+let packet = encrypt_letter(&letter, &card, now)?;
+let mut inbox = MailRecipient::new(owner.agent_id());
+inbox.add_key(&card, key)?;
+let accepted = inbox.receive(&packet, Some(&packet_id(&packet)?), now)?;
+assert!(matches!(accepted, RecipientAcceptance::Accepted(_)));
+# Ok(())
+# }
+```
+
+- `validate_card`, `validate_letter`, `validate_packet` validate raw JSON values;
+  `parse_card`, `parse_letter`, `parse_packet` also reject duplicate JSON names.
+  Typed deserialization alone is not a wire validation boundary.
+- `CardCache::observe` retains permanent high-water pins, equivocation, and key
+  history. Persist its snapshot **even when observation returns disabled,
+  expired, or equivocated**. `reset_trust` explicitly loses rollback protection.
+- `MailRecipient` retains old card/key pairs and deduplicates letters across
+  re-encryption, routes and mailboxes. `remember_outgoing` records an original
+  sent message; a receipt for an unregistered or differently bound message is
+  rejected. Receipt creation remains an explicit caller decision after local
+  persistence and consent. Lower nonces arriving later are accepted.
+- `MailRelay` models live card publication, ownership, packet quotas, stable
+  sequence numbers, pagination and deletion tombstones. `list` and `delete`
+  require the owner's signed JWT. `publish_with_nonce_store` accepts the shared
+  origin-wide Identity `NonceStore`; invalid writes do not consume its nonce.
+- All state helpers are **in-memory**, not durable or hosted services. Their
+  `snapshot` / `from_snapshot` APIs support application-managed persistence.
+  Authenticate snapshots and replace them atomically; persist recipient state
+  before transport deletion, relay state before success, and externally supplied
+  nonce state in the same transaction. Recipient snapshots contain **private
+  decryption keys and plaintext letters**. Every returned object is an owned
+  copy, so modifying it cannot mutate retained state.
+
+With `http-client`, `mail::MailClient` (also exported from `http_client`) provides
+`discover`, `card`, `publish`, anonymous `deliver`, and owner-authenticated
+`list` / `delete`. It constructs a separate HTTPS transport with redirects
+permanently disabled; callers cannot supply a credential-bearing HTTP client
+or builder. `with_tls_roots` supports explicitly trusted private relay CAs.
+Card reads automatically install permanent rollback/equivocation pins, including
+historical disabled/expired cards; cloned clients share the same cache.
+`card_at` accepts an explicit verification clock. Use `card_cache_snapshot` for
+persistence and `with_card_cache(Arc<Mutex<CardCache>>)` to restore/share pins
+across independent clients and relay origins. Persist after reads and after
+an equivocation error; replacing pins with an older snapshot loses protection.
+Responses are bounded, parsed as strict JSON, and checked for shape, signatures,
+origin, expected IDs, mailbox bindings and list ordering. Applications remain
+responsible for private-network/DNS access policy, persistent retry state,
+quarantine, and authorization of any action described by a letter. A relay
+acknowledgment is not a recipient receipt. This implementation supplies neither
+forward secrecy against retained-recipient-key compromise nor a ratchet.
+
+`tests/mail_vectors.rs` executes shared Mail vectors directly through this SDK,
+including the RFC known answer, signed messages, rejection cases, lifecycle and
+snapshot restoration; `tests/mail_http.rs` uses a local authenticated TLS fixture.
+`examples/mail_interop.rs` is a public-fixture-only cross-language test adapter,
+not an application key-management example.

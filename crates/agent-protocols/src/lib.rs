@@ -1,4 +1,4 @@
-//! Rust SDK for the Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols.
+//! Rust SDK for the Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, Agent Knowledge, and Agent Mail protocols.
 //!
 //! The crate intentionally keeps the core protocol logic framework-neutral so the
 //! same types and verification helpers can be used by clients, servers, tests,
@@ -13,6 +13,7 @@ pub mod identity;
 pub mod knowledge;
 #[cfg(feature = "local-connector")]
 pub mod local_connector;
+pub mod mail;
 pub mod profile;
 
 pub use error::{Result, SdkError};

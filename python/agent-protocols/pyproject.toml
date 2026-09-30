@@ -1,7 +1,7 @@
 [project]
 name = "agent-protocols"
 version = "0.10.0"
-description = "Python SDK for Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols"
+description = "Python SDK for Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, Agent Knowledge, and Agent Mail protocols"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -9,13 +9,14 @@ authors = [{ name = "LDCLabs" }]
 keywords = ["agent", "protocol", "ed25519", "sdk"]
 dependencies = [
   "cryptography>=42",
+  "pyhpke>=0.6.5,<0.7",
   "jsonschema>=4.17,<5",
   "rfc8785>=0.1.4,<0.2",
 ]
 
 [project.optional-dependencies]
 http = ["requests>=2.31,<3"]
-test = ["pytest>=8,<10"]
+test = ["pytest>=8,<10", "requests>=2.31,<3"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -25,4 +26,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-agent_protocols = ["knowledge.schema.json"]
+agent_protocols = ["knowledge.schema.json", "mail.schema.json"]

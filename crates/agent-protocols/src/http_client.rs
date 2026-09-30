@@ -885,3 +885,6 @@ impl KnowledgeClient {
         Ok(response)
     }
 }
+
+/// Agent Mail transport with anonymous delivery and owner-authorized reads.
+pub use crate::mail::MailClient;

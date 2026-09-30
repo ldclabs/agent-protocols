@@ -1,7 +1,7 @@
 {
   "name": "agent-protocols",
   "version": "0.10.1",
-  "description": "TypeScript SDK for Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols",
+  "description": "TypeScript SDK for Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, Agent Knowledge, and Agent Mail protocols",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -41,6 +41,14 @@
     "./knowledge": {
       "types": "./dist/knowledge.d.ts",
       "import": "./dist/knowledge.js"
+    },
+    "./mail": {
+      "types": "./dist/mail.d.ts",
+      "import": "./dist/mail.js"
+    },
+    "./mail-client": {
+      "types": "./dist/mail-client.d.ts",
+      "import": "./dist/mail-client.js"
     }
   },
   "files": [
@@ -53,6 +61,9 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
+    "@hpke/chacha20poly1305": "^1.8.0",
+    "@hpke/core": "^1.9.0",
+    "@hpke/dhkem-x25519": "^1.8.0",
     "@noble/hashes": "^2.4.0",
     "canonicalize": "^4.0.0",
     "tweetnacl": "^1.0.3"

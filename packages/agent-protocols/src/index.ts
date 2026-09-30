@@ -6,3 +6,5 @@ export * from "./discourse.js";
 export * from "./http-client.js";
 export * from "./local-connector.js";
 export * from "./knowledge.js";
+export * from "./mail.js";
+export * from "./mail-client.js";

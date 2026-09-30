@@ -1,0 +1,102 @@
+use crate::identity::{AgentId, Envelope};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+pub type MailboxCard = Envelope<MailboxCardPayload>;
+pub type Letter = Envelope<Value>;
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MailboxCardPayload {
+    pub mailbox_id: String,
+    pub enabled: bool,
+    pub expires_at: i64,
+    pub receive_until: i64,
+    pub key_id: String,
+    pub public_key: String,
+    pub routes: Vec<String>,
+    pub max_packet_bytes: usize,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MessagePayload {
+    pub to: AgentId,
+    pub expires_at: i64,
+    pub thread_id: String,
+    pub parts: Vec<MailPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_card: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_requested: Option<bool>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MailPart {
+    pub media_type: String,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+impl MailPart {
+    pub fn text(text: &str) -> Self {
+        Self {
+            media_type: "text/plain".into(),
+            data: super::encode_bytes(text.as_bytes()),
+            name: None,
+        }
+    }
+    pub fn bytes(media_type: impl Into<String>, bytes: &[u8], name: Option<String>) -> Self {
+        Self {
+            media_type: media_type.into(),
+            data: super::encode_bytes(bytes),
+            name,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptPayload {
+    pub to: AgentId,
+    pub expires_at: i64,
+    pub message_hash: String,
+    pub status: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketHeader {
+    pub protocol: String,
+    pub mailbox_id: String,
+    pub card_hash: String,
+    pub key_id: String,
+    pub expires_at: i64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Packet {
+    pub header: PacketHeader,
+    pub enc: String,
+    pub ciphertext: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryResult {
+    pub packet_id: String,
+    pub accepted_at: i64,
+    pub seq: u64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PacketRecord {
+    pub packet_id: String,
+    pub packet: Packet,
+    pub accepted_at: i64,
+    pub seq: u64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum RecipientAcceptance {
+    Accepted(Box<Letter>),
+    Duplicate(String),
+}

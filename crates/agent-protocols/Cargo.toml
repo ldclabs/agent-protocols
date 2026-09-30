@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Rust SDK for Agent Identity, Agent Profile, Agent Delegation, Agent Discourse, and Agent Knowledge protocols"
+description = "Rust SDK for Agent Identity, Profile, Delegation, Discourse, Knowledge, and Mail protocols"
 readme = "README.md"
 keywords = ["agent", "protocol", "ed25519", "sdk"]
 categories = ["authentication", "api-bindings"]
@@ -29,6 +29,8 @@ sha3.workspace = true
 thiserror.workspace = true
 url.workspace = true
 reqwest = { workspace = true, optional = true }
+hpke = { version = "0.14.1", default-features = false, features = ["alloc", "getrandom", "x25519", "chacha"] }
+zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 rustls = { version = "0.23", default-features = false, features = [

@@ -177,3 +177,11 @@ from .knowledge import *
 from .knowledge import __all__ as _knowledge_exports
 
 __all__ += _knowledge_exports
+
+# Mail uses an independent X25519/HPKE key and has no HTTP dependency.
+from .mail import *
+from .mail import __all__ as _mail_exports
+from .mail_state import *
+from .mail_state import __all__ as _mail_state_exports
+
+__all__ += _mail_exports + _mail_state_exports
