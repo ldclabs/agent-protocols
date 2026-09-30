@@ -94,6 +94,26 @@ fn malformed_agent_ids_are_rejected() {
 }
 
 #[test]
+fn agent_urls_parse_into_components_and_format_back_exactly() {
+    let vectors = vectors();
+    for vector in vectors["agent_urls"]["valid"].as_array().unwrap() {
+        let parsed = parse_agent_url(text(&vector["value"])).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), vector["parsed"]);
+        assert_eq!(format_agent_url(&parsed).unwrap(), text(&vector["value"]));
+    }
+    for vector in vectors["agent_urls"]["invalid"].as_array().unwrap() {
+        assert!(
+            parse_agent_url(text(&vector["value"])).is_err(),
+            "{}",
+            vector["name"]
+        );
+    }
+    let mut half = parse_agent_url(text(&vectors["agent_ids"]["valid"][0])).unwrap();
+    half.protocol = Some("mail".into());
+    assert!(format_agent_url(&half).is_err());
+}
+
+#[test]
 fn signed_json_is_parsed_strictly() {
     let vectors = vectors();
     for vector in vectors["json"]["valid"].as_array().unwrap() {

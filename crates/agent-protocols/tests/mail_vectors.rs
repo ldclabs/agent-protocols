@@ -510,6 +510,23 @@ fn live_control_nonces_quota_pagination_and_failure_atomicity() {
     );
 }
 #[test]
+fn mail_address_vectors_parse_and_format() {
+    let v = vectors();
+    for case in v["address_cases"].as_array().unwrap() {
+        let value = case["value"].as_str().unwrap();
+        if case["expected"] == "valid" {
+            let parsed = parse_mail_address(value).unwrap();
+            assert_eq!(serde_json::to_value(&parsed).unwrap(), case["parsed"]);
+            assert_eq!(
+                format_mail_address(&parsed.owner, &parsed.mailbox_id, &parsed.routes).unwrap(),
+                value
+            );
+        } else {
+            assert!(parse_mail_address(value).is_err(), "{}", case["name"]);
+        }
+    }
+}
+#[test]
 fn relay_prune_forgets_mailbox_after_receive_until() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();

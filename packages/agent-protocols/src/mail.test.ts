@@ -151,6 +151,20 @@ for (const c of v.discovery_cases)
     if (c.expected === "valid") m.validateMailDiscovery(c.value, service);
     else assert.throws(() => m.validateMailDiscovery(c.value, service));
   });
+for (const c of v.address_cases)
+  test(`Mail address vector: ${c.name}`, () => {
+    if (c.expected === "valid") {
+      assert.deepEqual(m.parseMailAddress(c.value), c.parsed);
+      assert.equal(
+        m.formatMailAddress(
+          c.parsed.owner,
+          c.parsed.mailbox_id,
+          c.parsed.routes,
+        ),
+        c.value,
+      );
+    } else assert.throws(() => m.parseMailAddress(c.value));
+  });
 for (const c of v.owner_jwt_cases)
   test(`Mail owner JWT vector: ${c.name}`, () => {
     if (c.expected === "valid")

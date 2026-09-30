@@ -1084,6 +1084,110 @@ pub fn validate_origin(value: &str) -> Result<()> {
     }
 }
 
+pub const AGENT_URL_MAX_ROUTES: usize = 8;
+
+/// A parsed Agent URL (Agent Identity Section 3.5):
+/// `did:agent:<key>[/<protocol>/<resource>][?route=<origin>...]`.
+/// `protocol` and `resource` are both present or both absent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentUrl {
+    pub agent_id: AgentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    #[serde(default)]
+    pub routes: Vec<String>,
+}
+
+fn invalid_agent_url(message: &str) -> SdkError {
+    SdkError::InvalidPayload(format!("invalid agent URL: {message}"))
+}
+
+fn valid_agent_url_path(protocol: &str, resource: &str) -> bool {
+    !protocol.is_empty()
+        && protocol.bytes().all(|b| b.is_ascii_lowercase())
+        && !resource.is_empty()
+        && resource
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+pub fn parse_agent_url(value: &str) -> Result<AgentUrl> {
+    if !value.bytes().all(|b| (0x21..=0x7e).contains(&b)) || value.contains(['#', '%']) {
+        return Err(invalid_agent_url(
+            "must be printable ASCII without fragment or percent-encoding",
+        ));
+    }
+    let (head, query) = match value.split_once('?') {
+        Some((head, query)) => (head, Some(query)),
+        None => (value, None),
+    };
+    let segments: Vec<&str> = head.split('/').collect();
+    let mut url = AgentUrl {
+        agent_id: segments[0].parse()?,
+        protocol: None,
+        resource: None,
+        routes: Vec::new(),
+    };
+    if segments.len() != 1 {
+        if segments.len() != 3 || !valid_agent_url_path(segments[1], segments[2]) {
+            return Err(invalid_agent_url("path must be /<protocol>/<resource>"));
+        }
+        url.protocol = Some(segments[1].to_owned());
+        url.resource = Some(segments[2].to_owned());
+    }
+    if let Some(query) = query {
+        for item in query.split('&') {
+            let route = item
+                .strip_prefix("route=")
+                .ok_or_else(|| invalid_agent_url("query allows only route parameters"))?;
+            validate_origin(route)?;
+            if url.routes.iter().any(|known| known == route) {
+                return Err(invalid_agent_url("duplicate route"));
+            }
+            url.routes.push(route.to_owned());
+        }
+        if url.routes.len() > AGENT_URL_MAX_ROUTES {
+            return Err(invalid_agent_url("at most eight routes"));
+        }
+    }
+    Ok(url)
+}
+
+pub fn format_agent_url(url: &AgentUrl) -> Result<String> {
+    url.agent_id.as_str().parse::<AgentId>()?;
+    let path = match (&url.protocol, &url.resource) {
+        (None, None) => String::new(),
+        (Some(protocol), Some(resource)) if valid_agent_url_path(protocol, resource) => {
+            format!("/{protocol}/{resource}")
+        }
+        _ => return Err(invalid_agent_url("path must be /<protocol>/<resource>")),
+    };
+    let unique: std::collections::BTreeSet<&String> = url.routes.iter().collect();
+    if url.routes.len() > AGENT_URL_MAX_ROUTES || unique.len() != url.routes.len() {
+        return Err(invalid_agent_url(
+            "routes must be at most eight unique origins",
+        ));
+    }
+    for route in &url.routes {
+        validate_origin(route)?;
+    }
+    let query = if url.routes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "?{}",
+            url.routes
+                .iter()
+                .map(|route| format!("route={route}"))
+                .collect::<Vec<_>>()
+                .join("&")
+        )
+    };
+    Ok(format!("{}{path}{query}", url.agent_id.as_str()))
+}
+
 /// Derives the request JWT `aud` from a request URL: the service origin —
 /// scheme, host, and non-default port, with no path (Agent Identity Section 7).
 pub fn service_origin(url: &str) -> Result<String> {

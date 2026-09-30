@@ -12,7 +12,7 @@ import hashlib
 import json
 import secrets
 from importlib.resources import files
-from typing import Any
+from typing import Any, Iterable
 
 import rfc8785
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
@@ -22,8 +22,8 @@ from pyhpke import AEADId, CipherSuite, KDFId, KEMId, KEMKey, PyHPKEError
 
 from .errors import AgentProtocolError
 from .identity import (
-    AgentSigner, Envelope, Event, MAX_SAFE_NONCE, create_event, parse_strict_json,
-    unix_ms, validate_agent_id, validate_origin, verify_envelope, verify_request_jwt,
+    AgentSigner, Envelope, Event, MAX_SAFE_NONCE, create_event, format_agent_url, parse_agent_url,
+    parse_strict_json, unix_ms, validate_agent_id, validate_origin, verify_envelope, verify_request_jwt,
 )
 
 MAIL_PROTOCOL = 'agent-mail/1.0'
@@ -100,6 +100,23 @@ def validate_mail_id(value: Any, *, size: int = 32, code: str = 'invalid_request
 def new_mail_id() -> str:
     """Generate an independent random 16-byte mailbox or thread identifier."""
     return _b64(secrets.token_bytes(16))
+
+
+def parse_mail_address(value: Any) -> dict[str, Any]:
+    """Parse ``did:agent:<key>/mail/<mailbox_id>[?route=<origin>...]`` (Mail Section 3.3).
+
+    Returns ``{"owner", "mailbox_id", "routes"}``; ``routes`` is empty for the stable form.
+    """
+    url = parse_agent_url(value)
+    _require(url['protocol'] == 'mail', 'invalid_url', 'not a mailbox address')
+    _decode(url['resource'], 16, 'invalid_url')
+    return {'owner': url['agent_id'], 'mailbox_id': url['resource'], 'routes': url['routes']}
+
+
+def format_mail_address(owner: str, mailbox_id: str, routes: Iterable[str] = ()) -> str:
+    """Format the stable address, or a contact address when routes are given."""
+    _decode(mailbox_id, 16, 'invalid_url')
+    return format_agent_url(owner, 'mail', mailbox_id, routes)
 
 
 def _public_key(value: str) -> X25519PublicKey:
@@ -427,7 +444,8 @@ def verify_mail_owner_jwt(token: str, owner: str | None, origin: str, *, now_ms:
 __all__ = [
     'MAIL_PROTOCOL', 'MAILBOX_PUBLISH', 'MAIL_MESSAGE', 'MAIL_MAX_TTL_MS',
     'MAIL_FUTURE_SKEW_MS', 'MAIL_MAX_PACKET_BYTES', 'MAIL_SCHEMA',
-    'MailEncryptionKey', 'new_mail_id', 'mailbox_publish_event', 'mail_message_event',
+    'MailEncryptionKey', 'new_mail_id', 'parse_mail_address', 'format_mail_address',
+    'mailbox_publish_event', 'mail_message_event',
     'sign_mail_event', 'mail_part', 'decode_mail_part',
     'validate_mail_schema', 'validate_mail_id', 'validate_mail_envelope', 'parse_mail_envelope',
     'validate_mailbox_card', 'validate_mail_reply',

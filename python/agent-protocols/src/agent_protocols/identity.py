@@ -78,6 +78,58 @@ def validate_agent_id(agent_id: AgentId) -> AgentId:
     return agent_id
 
 
+AGENT_URL_MAX_ROUTES = 8
+_AGENT_URL_ASCII = re.compile(r"[\x21-\x7e]*")
+_AGENT_URL_PROTOCOL = re.compile(r"[a-z]+")
+_AGENT_URL_RESOURCE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def parse_agent_url(value: Any) -> dict[str, Any]:
+    """Parses an Agent URL (Agent Identity Section 3.5):
+    ``did:agent:<key>[/<protocol>/<resource>][?route=<origin>...]``.
+
+    Returns ``{"agent_id", "protocol", "resource", "routes"}``; ``protocol`` and
+    ``resource`` are both ``None`` for a bare Agent ID."""
+    if not isinstance(value, str) or not _AGENT_URL_ASCII.fullmatch(value) or "#" in value or "%" in value:
+        raise AgentProtocolError("invalid_url", "agent URL must be printable ASCII without fragment or percent-encoding")
+    head, separator, query = value.partition("?")
+    segments = head.split("/")
+    url: dict[str, Any] = {"agent_id": validate_agent_id(segments[0]), "protocol": None, "resource": None, "routes": []}
+    if len(segments) != 1:
+        if len(segments) != 3 or not _AGENT_URL_PROTOCOL.fullmatch(segments[1]) or not _AGENT_URL_RESOURCE.fullmatch(segments[2]):
+            raise AgentProtocolError("invalid_url", "agent URL path must be /<protocol>/<resource>")
+        url["protocol"], url["resource"] = segments[1], segments[2]
+    if separator:
+        for item in query.split("&"):
+            if not item.startswith("route="):
+                raise AgentProtocolError("invalid_url", "agent URL query allows only route parameters")
+            route = item[len("route="):]
+            validate_origin(route)
+            if route in url["routes"]:
+                raise AgentProtocolError("invalid_url", "duplicate agent URL route")
+            url["routes"].append(route)
+        if len(url["routes"]) > AGENT_URL_MAX_ROUTES:
+            raise AgentProtocolError("invalid_url", "agent URL allows at most eight routes")
+    return url
+
+
+def format_agent_url(agent_id: AgentId, protocol: str | None = None, resource: str | None = None,
+                     routes: Iterable[str] = ()) -> str:
+    """Formats an Agent URL; ``protocol`` and ``resource`` go together, ``routes`` are optional."""
+    validate_agent_id(agent_id)
+    if (protocol is None) != (resource is None) or (
+            protocol is not None and (not _AGENT_URL_PROTOCOL.fullmatch(protocol) or not _AGENT_URL_RESOURCE.fullmatch(resource))):
+        raise AgentProtocolError("invalid_url", "agent URL path must be /<protocol>/<resource>")
+    routes = list(routes)
+    if len(routes) > AGENT_URL_MAX_ROUTES or len(set(routes)) != len(routes):
+        raise AgentProtocolError("invalid_url", "agent URL routes must be at most eight unique origins")
+    for route in routes:
+        validate_origin(route)
+    path = "" if protocol is None else f"/{protocol}/{resource}"
+    query = "?" + "&".join("route=" + route for route in routes) if routes else ""
+    return agent_id + path + query
+
+
 @dataclass(frozen=True)
 class RequestBinding:
     audience: str

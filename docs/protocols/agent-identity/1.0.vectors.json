@@ -1,6 +1,6 @@
 {
   "protocol": "agent-identity/1.0",
-  "description": "Normative Agent Identity 1.0 test vectors (Appendix A). Implementations MUST reproduce every event's jcs, hash, and signature from its seed and event; MUST verify exactly the signatures marked valid; MUST reject every invalid Agent ID, JSON text, origin, and request JWT; MUST verify every valid origin and request JWT; MUST produce every submission outcome in order; and MUST apply the Max-Seen-Nonce bound.",
+  "description": "Normative Agent Identity 1.0 test vectors (Appendix A). Implementations MUST reproduce every event's jcs, hash, and signature from its seed and event; MUST verify exactly the signatures marked valid; MUST reject every invalid Agent ID, Agent URL, JSON text, origin, and request JWT; MUST verify every valid origin and request JWT and parse every valid Agent URL into its components; MUST produce every submission outcome in order; and MUST apply the Max-Seen-Nonce bound.",
   "keys": [
     {
       "name": "seed of 32 bytes 0x07",
@@ -280,6 +280,132 @@
       "http://api.example.com",
       "api.example.com",
       "https://"
+    ]
+  },
+  "agent_urls": {
+    "valid": [
+      {
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+        "parsed": {
+          "agent_id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "routes": []
+        }
+      },
+      {
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw",
+        "parsed": {
+          "agent_id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "protocol": "mail",
+          "resource": "AAECAwQFBgcICQoLDA0ODw",
+          "routes": []
+        }
+      },
+      {
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw?route=https://relay.example&route=https://mirror.example:8443",
+        "parsed": {
+          "agent_id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "protocol": "mail",
+          "resource": "AAECAwQFBgcICQoLDA0ODw",
+          "routes": [
+            "https://relay.example",
+            "https://mirror.example:8443"
+          ]
+        }
+      },
+      {
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/knowledge/MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY?route=https://knowledge.example",
+        "parsed": {
+          "agent_id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "protocol": "knowledge",
+          "resource": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY",
+          "routes": [
+            "https://knowledge.example"
+          ]
+        }
+      },
+      {
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw?route=https://profile.example",
+        "parsed": {
+          "agent_id": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "routes": [
+            "https://profile.example"
+          ]
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "fragment",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw#x"
+      },
+      {
+        "name": "unknown query parameter",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw?route=https://relay.example&card=1"
+      },
+      {
+        "name": "empty query",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw?"
+      },
+      {
+        "name": "empty route parameter",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw?route="
+      },
+      {
+        "name": "trailing slash",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw/"
+      },
+      {
+        "name": "single path segment",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail"
+      },
+      {
+        "name": "three path segments",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw/card"
+      },
+      {
+        "name": "empty path segment",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw//AAECAwQFBgcICQoLDA0ODw"
+      },
+      {
+        "name": "uppercase protocol name",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/Mail/AAECAwQFBgcICQoLDA0ODw"
+      },
+      {
+        "name": "percent-encoded resource",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0OD%77"
+      },
+      {
+        "name": "route is not an origin",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw?route=https://relay.example/v1"
+      },
+      {
+        "name": "route is not https",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw?route=http://relay.example"
+      },
+      {
+        "name": "duplicate route",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw?route=https://relay.example&route=https://relay.example"
+      },
+      {
+        "name": "nine routes",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw/mail/AAECAwQFBgcICQoLDA0ODw?route=https://r0.example&route=https://r1.example&route=https://r2.example&route=https://r3.example&route=https://r4.example&route=https://r5.example&route=https://r6.example&route=https://r7.example&route=https://r8.example"
+      },
+      {
+        "name": "malformed agent id",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw=/mail/AAECAwQFBgcICQoLDA0ODw"
+      },
+      {
+        "name": "whitespace",
+        "value": "did:agent:6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw /mail/AAECAwQFBgcICQoLDA0ODw"
+      },
+      {
+        "name": "email-like form",
+        "value": "AAECAwQFBgcICQoLDA0ODw@relay.example"
+      },
+      {
+        "name": "https card URL",
+        "value": "https://relay.example/v1/mailboxes/AAECAwQFBgcICQoLDA0ODw/card"
+      }
     ]
   },
   "request_jwts": {

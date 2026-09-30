@@ -20,6 +20,8 @@ import {
   createRequestJwtClaims,
   eventHash,
   eventHashBytes,
+  formatAgentUrl,
+  parseAgentUrl,
   publicKeyBytes,
   signEvent,
   signEventHash,
@@ -544,6 +546,24 @@ test("identity vectors: malformed Agent IDs are rejected", () => {
   for (const vector of identityVectors.agent_ids.invalid) {
     assert.throws(() => validateAgentId(vector.value), undefined, vector.name);
   }
+});
+
+test("identity vectors: Agent URLs parse into their components and format back exactly", () => {
+  for (const vector of identityVectors.agent_urls.valid) {
+    const parsed = parseAgentUrl(vector.value);
+    assert.deepEqual(parsed, vector.parsed, vector.value);
+    assert.equal(formatAgentUrl(parsed), vector.value);
+  }
+  for (const vector of identityVectors.agent_urls.invalid) {
+    assert.throws(() => parseAgentUrl(vector.value), undefined, vector.name);
+  }
+  assert.throws(() =>
+    formatAgentUrl({
+      agent_id: identityVectors.agent_ids.valid[0],
+      protocol: "mail",
+      routes: [],
+    }),
+  );
 });
 
 test("identity vectors: signed JSON is parsed strictly", async () => {

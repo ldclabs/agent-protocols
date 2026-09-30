@@ -162,6 +162,11 @@ Agent Mail 1.0 provides one-recipient, asynchronous encrypted correspondence.
 Identity envelopes. `MailEncryptionKey.generate()` creates an independent X25519
 key; never convert an identity seed into a mail key. `mail_part` /
 `decode_mail_part` preserve binary parts and validate UTF-8 text.
+`parse_mail_address` / `format_mail_address` handle the stable address
+`did:agent:<key>/mail/<mailbox_id>` and the contact address with `?route=<origin>`
+hints (Mail Section 3.3), built on Identity's `parse_agent_url` /
+`format_agent_url`; routes in an address are unauthenticated hints, and the
+pinned card's routes win.
 
 Encryption uses [PyHPKE](https://pyhpke.readthedocs.io/en/latest/), version
 `>=0.6.5,<0.7`, with the fixed RFC 9180 Base X25519/HKDF-SHA256/ChaCha20Poly1305

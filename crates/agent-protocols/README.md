@@ -209,6 +209,11 @@ assert!(matches!(accepted, InboxAcceptance::Accepted(_)));
 - `validate_card`, `validate_letter`, `validate_packet` validate raw JSON values;
   `parse_card`, `parse_letter`, `parse_packet` also reject duplicate JSON names.
   Typed deserialization alone is not a wire validation boundary.
+- `parse_mail_address` / `format_mail_address` handle the stable address
+  `did:agent:<key>/mail/<mailbox_id>` and the contact address with
+  `?route=<origin>` hints (Mail Section 3.3), built on Identity's
+  `parse_agent_url` / `format_agent_url`. Routes in an address are
+  unauthenticated hints; the pinned card's routes win.
 - `MailCardCache::observe` pins the greatest-nonce card per mailbox; an older
   or conflicting card fails with `stale_card`. Persist its snapshot **even when
   observation returns a closed or expired card**. `prune` drops pins once every

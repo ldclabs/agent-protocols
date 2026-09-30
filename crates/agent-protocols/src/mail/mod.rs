@@ -73,6 +73,30 @@ pub fn random_id() -> Result<String> {
     getrandom::fill(&mut bytes).map_err(|e| SdkError::Random(e.to_string()))?;
     Ok(encode_bytes(&bytes))
 }
+/// Parse `did:agent:<key>/mail/<mailbox_id>[?route=<origin>...]` (Mail Section 3.3).
+pub fn parse_mail_address(value: &str) -> Result<MailAddress> {
+    let url = identity::parse_agent_url(value)?;
+    let mailbox_id = match (url.protocol.as_deref(), url.resource) {
+        (Some("mail"), Some(mailbox_id)) => mailbox_id,
+        _ => return Err(fail("invalid_url", "not a mailbox address")),
+    };
+    fixed_bytes(&mailbox_id, 16).map_err(|_| fail("invalid_url", "mailbox_id must be an id16"))?;
+    Ok(MailAddress {
+        owner: url.agent_id,
+        mailbox_id,
+        routes: url.routes,
+    })
+}
+/// Format the stable address, or a contact address when routes are given.
+pub fn format_mail_address(owner: &AgentId, mailbox_id: &str, routes: &[String]) -> Result<String> {
+    fixed_bytes(mailbox_id, 16).map_err(|_| fail("invalid_url", "mailbox_id must be an id16"))?;
+    identity::format_agent_url(&identity::AgentUrl {
+        agent_id: owner.clone(),
+        protocol: Some("mail".into()),
+        resource: Some(mailbox_id.into()),
+        routes: routes.to_vec(),
+    })
+}
 /// Validate a named structural definition; signatures and semantics are separate.
 pub fn validate_mail_schema(value: &Value, definition: &str) -> Result<()> {
     static VALIDATORS: OnceLock<Mutex<BTreeMap<String, jsonschema::Validator>>> = OnceLock::new();

@@ -148,6 +148,16 @@ def test_discovery_cases(case):
             mail.validate_mail_discovery(case['value'], ORIGIN)
 
 
+@pytest.mark.parametrize('case', V['address_cases'], ids=lambda c: c['name'])
+def test_mail_address_vectors(case):
+    if case['expected'] == 'valid':
+        assert mail.parse_mail_address(case['value']) == case['parsed']
+        assert mail.format_mail_address(case['parsed']['owner'], case['parsed']['mailbox_id'], case['parsed']['routes']) == case['value']
+    else:
+        with pytest.raises(AgentProtocolError):
+            mail.parse_mail_address(case['value'])
+
+
 @pytest.mark.parametrize('case', V['owner_jwt_cases'], ids=lambda c: c['name'])
 def test_owner_jwt_vectors(case):
     result = code_of(lambda: mail.verify_mail_owner_jwt(case['token'], OWNER, ORIGIN, now_ms=NOW))

@@ -83,6 +83,14 @@ pub struct PacketRecord {
     pub accepted_at: i64,
     pub seq: u64,
 }
+/// A parsed mailbox address (Mail Section 3.3). `routes` is empty for the stable form.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MailAddress {
+    pub owner: AgentId,
+    pub mailbox_id: String,
+    pub routes: Vec<String>,
+}
 #[derive(Clone, Debug, PartialEq)]
 pub enum InboxAcceptance {
     Accepted(Box<Letter>),

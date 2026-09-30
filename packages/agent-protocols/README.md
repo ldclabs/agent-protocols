@@ -198,6 +198,7 @@ The main building blocks are:
 | --- | --- |
 | `validateMailboxCard`, `validateMailSenderCard`, `validateMailLetter`, `validateMailPacket` | Structural, signature, origin, lifetime, media, and encryption-key checks. A sender card must be unexpired and have routes. Historical letters never advance live nonce state. |
 | `mailboxPublishEvent`, `mailMessageEvent` | Build Identity events for signing with an `AgentSigner`. |
+| `parseMailAddress`, `formatMailAddress` | The stable address `did:agent:<key>/mail/<mailbox_id>` and the contact address with `?route=<origin>` hints (Mail Section 3.3), built on Identity's `parseAgentUrl` / `formatAgentUrl`. Routes in an address are unauthenticated hints; the pinned card's routes win. |
 | `MailEncryptionKey.generate/fromBytes/publicKey/exportSecret/destroy` | Independently generate or restore X25519 keys, export explicit sensitive backups, and clear owned secret bytes. |
 | `sealMailPacket`, `openMailPacket` | Stateless, fixed-suite HPKE with canonical framing and authenticated recipient/card/header binding. Use a `MailCardCache` for rollback protection and `MailInbox` for acceptance/deduplication. |
 | `MailCardCache.observe/seal/prune/snapshot` | Pins the greatest-nonce card per mailbox; an older or conflicting card fails with `stale_card`. A newer closed/expired card still updates the pin although sending fails, so persist the snapshot on these outcomes. `prune` drops pins once every earlier card has expired. |

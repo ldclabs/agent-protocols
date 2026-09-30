@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +31,8 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from agent_protocols.errors import AgentProtocolError
 from agent_protocols.identity import (
-    AgentSigner, parse_strict_json, validate_origin, verify_event_hash, verify_request_jwt, verify_signature,
+    AgentSigner, parse_strict_json, validate_agent_id, validate_origin, verify_event_hash, verify_request_jwt,
+    verify_signature,
 )
 
 DOCS = ROOT / 'docs/protocols/agent-mail'
@@ -303,6 +305,29 @@ def check_discovery(document, origin):
     require(document['service'] == origin, 'discovery_origin')
 
 
+ADDRESS = re.compile(r'(did:agent:[A-Za-z0-9_-]{43})/mail/([A-Za-z0-9_-]{22})(?:\?(route=[^&#?]+(?:&route=[^&#?]+)*))?')
+
+
+def parse_address(value):
+    """Independent check of Mail §3.3: did:agent:<key>/mail/<mailbox_id>[?route=<origin>...]."""
+    match = ADDRESS.fullmatch(value)
+    require(match, 'address')
+    owner, mailbox, query = match.groups()
+    try:
+        validate_agent_id(owner)
+    except AgentProtocolError as exc:
+        raise Reject('address') from exc
+    require(len(unb64(mailbox)) == 16, 'address')
+    routes = [item[len('route='):] for item in query.split('&')] if query else []
+    for route in routes:
+        try:
+            validate_origin(route)
+        except AgentProtocolError as exc:
+            raise Reject('address') from exc
+    require(len(routes) <= 8 and len(set(routes)) == len(routes), 'address')
+    return {'owner': owner, 'mailbox_id': mailbox, 'routes': routes}
+
+
 def check_owner_token(token, owner, origin, now):
     try:
         claims = verify_request_jwt(token, audience=origin, now_secs=now // 1000)
@@ -563,6 +588,24 @@ def generate():
     for case in discovery_cases:
         assert outcome(lambda: check_discovery(case['value'], RELAY)) == case['expected'], case['name']
 
+    stable = f'{owner}/mail/{p["mailbox_id"]}'
+    address_cases = [
+        {'name': 'stable address', 'value': stable, 'expected': 'valid',
+         'parsed': {'owner': owner, 'mailbox_id': p['mailbox_id'], 'routes': []}},
+        {'name': 'contact address', 'value': f'{stable}?route={RELAY}&route={MIRROR}', 'expected': 'valid',
+         'parsed': {'owner': owner, 'mailbox_id': p['mailbox_id'], 'routes': [RELAY, MIRROR]}},
+        {'name': 'bare agent id is not a mailbox address', 'value': owner, 'expected': 'address'},
+        {'name': 'other protocol resource', 'value': f'{owner}/knowledge/{p["mailbox_id"]}', 'expected': 'address'},
+        {'name': 'mailbox_id is not an id16', 'value': f'{owner}/mail/{card["hash"]}', 'expected': 'address'},
+        {'name': 'wrong owner key length', 'value': f'{owner[:-1]}/mail/{p["mailbox_id"]}', 'expected': 'address'},
+        {'name': 'route is not an origin', 'value': f'{stable}?route={RELAY}/v1/mailboxes', 'expected': 'address'},
+        {'name': 'nine routes', 'value': stable + '?' + '&'.join(f'route=https://r{i}.example' for i in range(9)), 'expected': 'address'},
+        {'name': 'email-like form', 'value': f'{p["mailbox_id"]}@relay.example', 'expected': 'address'},
+    ]
+    for case in address_cases:
+        assert outcome(lambda: parse_address(case['value'])) == case['expected'], case['name']
+        assert case['expected'] != 'valid' or parse_address(case['value']) == case['parsed'], case['name']
+
     token_cases = []
     for name, signer, audience, expected in [('owner read/delete', recipient, RELAY, 'valid'),
                                              ('different identity read/delete', sender, RELAY, 'permission_denied'),
@@ -675,6 +718,7 @@ def generate():
                                 'plaintext_sha3_256': digest(frame(b'x' * n))} for n in [1, 1020, 1021, 2044, 2045]],
         'strict_json_rejections': ['{"x":1,"x":2}', '{"x":NaN}', '{"x":9007199254740992}', '{"x":"\\ud800"}'],
         'discovery_cases': discovery_cases,
+        'address_cases': address_cases,
         'owner_jwt_cases': token_cases,
         'lifecycle': {
             'card_cache': card_cache, 'persistent_card_pin': persistent_pin,

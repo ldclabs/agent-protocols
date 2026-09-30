@@ -13,6 +13,8 @@ from agent_protocols.identity import (
     ClientNonceManager,
     MemoryNonceStore,
     canonical_event_bytes,
+    format_agent_url,
+    parse_agent_url,
     parse_envelope_json,
     parse_strict_json,
     validate_agent_id,
@@ -66,6 +68,18 @@ def test_malformed_agent_ids_are_rejected():
     for vector in VECTORS["agent_ids"]["invalid"]:
         with pytest.raises(AgentProtocolError):
             validate_agent_id(vector["value"])
+
+
+def test_agent_urls_parse_into_components_and_format_back_exactly():
+    for vector in VECTORS["agent_urls"]["valid"]:
+        parsed = parse_agent_url(vector["value"])
+        assert {k: v for k, v in parsed.items() if v is not None} == vector["parsed"], vector["value"]
+        assert format_agent_url(parsed["agent_id"], parsed["protocol"], parsed["resource"], parsed["routes"]) == vector["value"]
+    for vector in VECTORS["agent_urls"]["invalid"]:
+        with pytest.raises(AgentProtocolError):
+            parse_agent_url(vector["value"])
+    with pytest.raises(AgentProtocolError):
+        format_agent_url(VECTORS["agent_ids"]["valid"][0], "mail", None)
 
 
 def test_signed_json_is_parsed_strictly():

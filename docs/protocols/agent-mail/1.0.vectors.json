@@ -1900,6 +1900,66 @@
       "expected": "schema"
     }
   ],
+  "address_cases": [
+    {
+      "name": "stable address",
+      "value": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o/mail/AAECAwQFBgcICQoLDA0ODw",
+      "expected": "valid",
+      "parsed": {
+        "owner": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o",
+        "mailbox_id": "AAECAwQFBgcICQoLDA0ODw",
+        "routes": []
+      }
+    },
+    {
+      "name": "contact address",
+      "value": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o/mail/AAECAwQFBgcICQoLDA0ODw?route=https://relay.example&route=https://mirror.example",
+      "expected": "valid",
+      "parsed": {
+        "owner": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o",
+        "mailbox_id": "AAECAwQFBgcICQoLDA0ODw",
+        "routes": [
+          "https://relay.example",
+          "https://mirror.example"
+        ]
+      }
+    },
+    {
+      "name": "bare agent id is not a mailbox address",
+      "value": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o",
+      "expected": "address"
+    },
+    {
+      "name": "other protocol resource",
+      "value": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o/knowledge/AAECAwQFBgcICQoLDA0ODw",
+      "expected": "address"
+    },
+    {
+      "name": "mailbox_id is not an id16",
+      "value": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o/mail/H9EPk6UOIlqCS3AR719rJ8d0dEx7NXwR98cac_hqP0I",
+      "expected": "address"
+    },
+    {
+      "name": "wrong owner key length",
+      "value": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8/mail/AAECAwQFBgcICQoLDA0ODw",
+      "expected": "address"
+    },
+    {
+      "name": "route is not an origin",
+      "value": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o/mail/AAECAwQFBgcICQoLDA0ODw?route=https://relay.example/v1/mailboxes",
+      "expected": "address"
+    },
+    {
+      "name": "nine routes",
+      "value": "did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o/mail/AAECAwQFBgcICQoLDA0ODw?route=https://r0.example&route=https://r1.example&route=https://r2.example&route=https://r3.example&route=https://r4.example&route=https://r5.example&route=https://r6.example&route=https://r7.example&route=https://r8.example",
+      "expected": "address"
+    },
+    {
+      "name": "email-like form",
+      "value": "AAECAwQFBgcICQoLDA0ODw@relay.example",
+      "expected": "address"
+    }
+  ],
   "owner_jwt_cases": [
     {
       "name": "owner read/delete",

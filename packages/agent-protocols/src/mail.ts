@@ -11,6 +11,8 @@ import { protocolError } from "./errors.js";
 import {
   MemoryNonceStore,
   createEvent,
+  formatAgentUrl,
+  parseAgentUrl,
   parseStrictJson,
   validateAgentId,
   validateOrigin,
@@ -183,6 +185,42 @@ function pathId(value: string, length: number): void {
 }
 export function newMailId(): string {
   return base64UrlEncode(nacl.randomBytes(16));
+}
+/** A parsed mailbox address (Mail Section 3.3). `routes` is empty for the stable form. */
+export interface MailAddress {
+  owner: string;
+  mailbox_id: string;
+  routes: string[];
+}
+/** Parse `did:agent:<key>/mail/<mailbox_id>[?route=<origin>...]`. */
+export function parseMailAddress(value: unknown): MailAddress {
+  const url = parseAgentUrl(value);
+  requireMail(
+    url.protocol === "mail" &&
+      url.resource !== undefined &&
+      base64UrlDecodeCanonical(url.resource)?.length === 16,
+    "invalid_url",
+    "not a mailbox address",
+  );
+  return { owner: url.agent_id, mailbox_id: url.resource, routes: url.routes };
+}
+/** Format the stable address, or a contact address when routes are given. */
+export function formatMailAddress(
+  owner: string,
+  mailboxId: string,
+  routes: string[] = [],
+): string {
+  requireMail(
+    base64UrlDecodeCanonical(mailboxId)?.length === 16,
+    "invalid_url",
+    "mailbox_id must be an id16",
+  );
+  return formatAgentUrl({
+    agent_id: owner,
+    protocol: "mail",
+    resource: mailboxId,
+    routes,
+  });
 }
 export function mailTextPart(text: string, name?: string): MailPart {
   strictString(text);

@@ -487,6 +487,106 @@ export function validateAgentId(agentId: AgentId): AgentId {
   return agentId;
 }
 
+export const AGENT_URL_MAX_ROUTES = 8;
+const AGENT_URL_PROTOCOL = /^[a-z]+$/;
+const AGENT_URL_RESOURCE = /^[A-Za-z0-9_-]+$/;
+/**
+ * A parsed Agent URL (Agent Identity Section 3.5):
+ * `did:agent:<key>[/<protocol>/<resource>][?route=<origin>...]`.
+ * `protocol` and `resource` are both present or both absent.
+ */
+export interface AgentUrl {
+  agent_id: AgentId;
+  protocol?: string;
+  resource?: string;
+  routes: string[];
+}
+
+export function parseAgentUrl(value: unknown): AgentUrl {
+  if (
+    typeof value !== "string" ||
+    !/^[\x21-\x7e]*$/.test(value) ||
+    value.includes("#") ||
+    value.includes("%")
+  ) {
+    throw protocolError(
+      "invalid_url",
+      "agent URL must be printable ASCII without fragment or percent-encoding",
+    );
+  }
+  const query = value.indexOf("?");
+  const segments = (query < 0 ? value : value.slice(0, query)).split("/");
+  const url: AgentUrl = { agent_id: validateAgentId(segments[0]), routes: [] };
+  if (segments.length !== 1) {
+    if (
+      segments.length !== 3 ||
+      !AGENT_URL_PROTOCOL.test(segments[1]) ||
+      !AGENT_URL_RESOURCE.test(segments[2])
+    ) {
+      throw protocolError(
+        "invalid_url",
+        "agent URL path must be /<protocol>/<resource>",
+      );
+    }
+    url.protocol = segments[1];
+    url.resource = segments[2];
+  }
+  if (query >= 0) {
+    for (const item of value.slice(query + 1).split("&")) {
+      if (!item.startsWith("route=")) {
+        throw protocolError(
+          "invalid_url",
+          "agent URL query allows only route parameters",
+        );
+      }
+      const route = item.slice("route=".length);
+      validateOrigin(route);
+      if (url.routes.includes(route)) {
+        throw protocolError("invalid_url", "duplicate agent URL route");
+      }
+      url.routes.push(route);
+    }
+    if (url.routes.length > AGENT_URL_MAX_ROUTES) {
+      throw protocolError(
+        "invalid_url",
+        "agent URL allows at most eight routes",
+      );
+    }
+  }
+  return url;
+}
+
+export function formatAgentUrl(url: AgentUrl): string {
+  validateAgentId(url.agent_id);
+  const path =
+    url.protocol === undefined ? "" : `/${url.protocol}/${url.resource}`;
+  if (
+    (url.protocol === undefined) !== (url.resource === undefined) ||
+    (url.protocol !== undefined &&
+      (!AGENT_URL_PROTOCOL.test(url.protocol) ||
+        !AGENT_URL_RESOURCE.test(url.resource!)))
+  ) {
+    throw protocolError(
+      "invalid_url",
+      "agent URL path must be /<protocol>/<resource>",
+    );
+  }
+  if (
+    url.routes.length > AGENT_URL_MAX_ROUTES ||
+    new Set(url.routes).size !== url.routes.length
+  ) {
+    throw protocolError(
+      "invalid_url",
+      "agent URL routes must be at most eight unique origins",
+    );
+  }
+  url.routes.forEach(validateOrigin);
+  const query = url.routes.length
+    ? "?" + url.routes.map((route) => "route=" + route).join("&")
+    : "";
+  return url.agent_id + path + query;
+}
+
 export function canonicalEventBytes(event: Event<unknown>): Uint8Array {
   const canonical = canonicalize(event);
   if (canonical === undefined) {
