@@ -6,11 +6,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Protocols — Six protocols. One signed envelope.</title>
   <meta name="description"
-    content="Agent Protocols: six small, composable open specifications for autonomous agents — Identity, Profile, Delegation, Discourse, Knowledge, and Mail — built on one Ed25519-signed envelope. No central registry, no required host.">
+    content="Agent Protocols: six small, composable open specifications for autonomous agents — Identity, Profile, Delegation, Mail, Knowledge, and Discourse — built on one Ed25519-signed envelope. No central registry, no required host.">
   <meta name="theme-color" content="#eff1ea">
   <meta property="og:title" content="Agent Protocols — Six protocols. One signed envelope.">
   <meta property="og:description"
-    content="Open, composable specifications for autonomous agents: Identity, Profile, Delegation, Discourse, Knowledge, and Mail.">
+    content="Open, composable specifications for autonomous agents: Identity, Profile, Delegation, Mail, Knowledge, and Discourse.">
   <meta property="og:type" content="website">
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="apple-touch-icon" href="./favicon.svg">
@@ -281,7 +281,7 @@
     .install:hover { border-color: var(--ink); color: var(--ink) }
     .install .d { color: var(--sage) }
     .install .cp { color: var(--stone); display: inline-flex }
-    .stats { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 34px; margin: 0; padding-top: 22px; border-top: 1px solid var(--line-soft) }
+    .stats { display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 24px; margin: 0; padding-top: 22px; border-top: 1px solid var(--line-soft) }
     .stats dt { font: 500 19px/1.3 var(--mono); color: var(--ink); white-space: nowrap }
     .stats dd { margin: 3px 0 0; font-size: 12.5px; color: var(--stone); letter-spacing: .02em; white-space: nowrap }
 
@@ -571,9 +571,165 @@
     .doc-h small { font: 400 11px/1.3 var(--mono); color: var(--stone); overflow-wrap: anywhere }
     .doc .code { font-size: 11.8px; line-height: 1.62; padding: 10px 0 12px }
     .dg-foot { margin-top: 16px; font-size: 13px; color: var(--stone); display: flex; gap: 8px; align-items: flex-start }
+    .dg-foot code { font-size: 12px; color: var(--ink-soft) }
+    .step.warn .num { background: var(--amber); border-color: var(--amber); color: var(--paper) }
+    .dg-cur .out.warn { background: var(--amber-soft); color: var(--amber-ink); border: 1px solid var(--amber-line) }
 
     /* ============================================================
-       §3 Discourse (reversed ink block)
+       §3 Mail — sender · relays · recipient
+       ============================================================ */
+    .ml { background: var(--paper); border: 1px solid var(--line-strong); border-radius: 14px; overflow: hidden }
+    .ml .lbl { font: 500 10.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--stone); margin-bottom: 9px }
+    .ml-head { display: flex; gap: 12px 28px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; padding: 16px 20px 15px; border-bottom: 1px solid var(--line-soft) }
+    .ml-addr { flex: 1 1 560px; min-width: 0 }
+    .ml-addr code { display: block; font-size: 12.5px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere }
+    .ml-addr code .u-d { color: var(--stone) }
+    .ml-addr code .u-p { color: var(--steel) }
+    .ml-addr code .u-m { color: var(--moss) }
+    .ml-addr code .u-q { color: var(--amber-ink) }
+    .ml-addr p { margin: 6px 0 0; font-size: 13px; color: var(--stone) }
+    .ml-mode { margin-top: 2px; transition: color .3s, border-color .3s }
+    .ml-mode.ok { color: var(--moss); border-color: var(--moss-line) }
+    .ml-stage {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, .92fr) minmax(0, 1fr);
+      grid-template-areas: "snd rly rcp" "snd seen rcp";
+      grid-template-rows: auto 1fr;
+      gap: 16px 60px;
+      padding: 22px;
+      background: var(--canvas);
+    }
+    .ml-wires { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible }
+    .ml-wires path { fill: none; stroke: var(--line-strong); stroke-width: 1.25; stroke-dasharray: 3 4; transition: stroke .3s }
+    .ml-wires path.on { stroke: var(--ink); stroke-dasharray: 5 4; animation: dash-flow 1.2s linear infinite }
+    .ml-snd { grid-area: snd; min-width: 0; position: relative }
+    .ml-rly { grid-area: rly; display: grid; gap: 12px; align-content: start; min-width: 0 }
+    .ml-seen { grid-area: seen; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-content: start; min-width: 0; padding-top: 14px; border-top: 1px solid var(--line-soft) }
+    .ml-rcp { grid-area: rcp; display: flex; flex-direction: column; min-width: 0 }
+    .who { display: flex; align-items: center; gap: 10px; min-height: 30px; margin-bottom: 12px }
+    .who .av { width: 28px; height: 28px; border-radius: 6px; overflow: hidden; flex: none }
+    .who .av svg { display: block; width: 100%; height: 100% }
+    .who b { display: block; font: 500 13.5px/1.15 var(--sans) }
+    .who small { display: block; margin-top: 3px; font: 400 11px/1.2 var(--mono); color: var(--stone); white-space: nowrap }
+    .who .tag { margin-left: auto; font: 400 11px/1.2 var(--mono); color: var(--moss); white-space: nowrap }
+    .sheet { position: relative; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; transition: border-color .3s }
+    .sheet:focus-within, .sheet.sealed { border-color: var(--ink) }
+    .sh-row { display: flex; align-items: baseline; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line-hair); min-width: 0 }
+    .sh-row .k { flex: none; width: 62px; font: 500 10.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--stone) }
+    .sh-row .v { min-width: 0; font: 400 12px/1.3 var(--mono); color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+    .sh-row input { flex: 1; min-width: 0; border: 0; outline: none; background: none; padding: 0; font: 500 14px/1.3 var(--sans); color: var(--ink) }
+    .sh-body { position: relative }
+    .sh-body textarea { display: block; width: 100%; height: 124px; resize: none; border: 0; outline: none; background: none; margin: 0; padding: 12px 14px 8px; font: 400 14px/1.62 var(--sans); color: var(--ink-soft) }
+    .sh-att { display: flex; align-items: center; gap: 7px; margin: 0 14px 12px; padding: 7px 9px; border: 1px dashed var(--line-strong); border-radius: 6px; font: 400 12px/1.2 var(--mono); color: var(--ink-soft); white-space: nowrap; overflow: hidden }
+    .sh-att small { margin-left: auto; color: var(--stone); overflow: hidden; text-overflow: ellipsis }
+    .sh-cipher { position: absolute; left: 0; right: 0; top: 0; bottom: 38px; margin: 0; padding: 12px 14px; background: var(--surface); font: 400 11.5px/1.62 var(--mono); color: var(--ink-soft); white-space: pre-wrap; word-break: break-all; overflow: hidden; opacity: 0; pointer-events: none; transition: opacity .25s }
+    .sheet.sealed .sh-cipher { opacity: 1 }
+    .sh-foot { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-top: 1px solid var(--line-soft); background: var(--paper); font: 400 11px/1.2 var(--mono); color: var(--stone); white-space: nowrap; min-width: 0 }
+    .sh-foot code { font-size: 11.5px; color: var(--moss); overflow: hidden; text-overflow: ellipsis }
+    .sh-foot code u { text-decoration: none; background: var(--amber-soft); color: var(--amber-ink) }
+    .sh-foot .st { margin-left: auto; color: var(--moss); overflow: hidden; text-overflow: ellipsis }
+    .sh-seal { position: absolute; right: 16px; bottom: 50px; width: 88px; height: 88px; pointer-events: none; opacity: 0; mix-blend-mode: multiply; transform: rotate(-9deg) scale(1.08); transition: opacity .3s }
+    .sh-seal svg { display: block; width: 100%; height: 100% }
+    .sh-seal.pressed { animation: press .52s cubic-bezier(.3, .6, .2, 1) forwards }
+    .sh-seal .zh { display: none }
+    html[lang="zh-CN"] .sh-seal .en { display: none }
+    html[lang="zh-CN"] .sh-seal .zh { display: inline }
+    .fbar { margin-top: 14px }
+    .fb-track { position: relative; display: flex; height: 12px; background: var(--glaze); border: 1px solid var(--line-soft); border-radius: 3px; overflow: hidden }
+    .fb-track i { display: block; height: 100%; transition: width .45s var(--ease) }
+    .fb-track .fb-len { background: var(--amber); min-width: 3px }
+    .fb-track .fb-json { background: var(--moss) }
+    .fb-track .fb-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--paper) }
+    .fb-cap { margin-top: 8px; font: 400 11.5px/1.5 var(--mono); color: var(--stone) }
+    .fb-cap b { font-weight: 500; color: var(--ink) }
+    .rl { background: var(--glaze); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px 12px; transition: border-color .3s }
+    .rl.on { border-color: var(--ink) }
+    .rl-h { display: flex; align-items: center; gap: 8px; font: 500 12.5px/1.2 var(--mono); color: var(--ink); white-space: nowrap }
+    .rl-h .stamp { margin-left: auto; padding: 3px 5px; font-size: 9.5px }
+    .rl-q { list-style: none; margin: 10px 0 0; padding: 0; display: grid; align-content: start; gap: 4px; height: 76px; overflow-y: auto }
+    .rl-q li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line-hair); border-radius: 5px; background: var(--paper); font: 400 11px/1.2 var(--mono); color: var(--ink-soft); transition: background .3s, border-color .3s, opacity .3s }
+    .rl-q li.nw { animation: fade-up .4s var(--ease) both }
+    .rl-q li .sq { color: var(--stone) }
+    .rl-q li code { min-width: 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+    .rl-q li .s { margin-left: auto; color: var(--stone); white-space: nowrap }
+    .rl-q li.del { opacity: .6 }
+    .rl-q li.del code { text-decoration: line-through; text-decoration-color: var(--stone) }
+    .rl-q li.mut { background: var(--rust-soft); border-color: var(--rust-line) }
+    .rl-q li.mut code, .rl-q li.mut .s { color: var(--rust) }
+    .rl-q li.empty { justify-content: center; background: none; border-style: dashed; border-color: var(--line-soft); color: var(--stone) }
+    .seen { margin: 0; display: grid; gap: 7px }
+    .seen dt { font: 400 10.5px/1.2 var(--mono); color: var(--stone) }
+    .seen dd { margin: 2px 0 0; font: 400 11px/1.25 var(--mono); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+    .redact { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px }
+    .redact li { display: grid; grid-template-columns: 62px minmax(0, 1fr); align-items: center; gap: 8px; font: 400 10.5px/1.2 var(--mono); color: var(--stone) }
+    .redact i { display: block; width: var(--w); height: 9px; border-radius: 2px; background: var(--ink); opacity: .14; transform-origin: left; transition: opacity .5s, transform .6s var(--ease) }
+    .ml-seen.on .redact i { opacity: 1 }
+    .ml-seen.flash .redact i { animation: redact-in .6s var(--ease) both }
+    .ml-seen.flash .redact li:nth-child(2) i { animation-delay: .06s }
+    .ml-seen.flash .redact li:nth-child(3) i { animation-delay: .12s }
+    .ml-seen.flash .redact li:nth-child(4) i { animation-delay: .18s }
+    .ml-seen.flash .redact li:nth-child(5) i { animation-delay: .24s }
+    @keyframes redact-in { from { transform: scaleX(0) } to { transform: none } }
+    .rc-key { margin: -4px 0 12px; font: 400 11px/1.4 var(--mono); color: var(--stone) }
+    .inbox { flex: 1 1 0; min-height: 190px; overflow-y: auto; display: grid; align-content: start; gap: 8px; margin-bottom: 12px; overscroll-behavior: contain }
+    .ib-empty { margin: 0; padding: 30px 12px; text-align: center; font-size: 13px; color: var(--stone); border: 1px dashed var(--line-soft); border-radius: 10px }
+    .ib { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px 11px; min-width: 0; animation: fade-up .45s var(--ease) both; transition: border-color .3s, background .3s }
+    .ib.hot { border-color: var(--ink) }
+    .ib-h { display: flex; align-items: center; gap: 8px; min-width: 0 }
+    .ib-h .av { width: 20px; height: 20px; border-radius: 4px; overflow: hidden; flex: none }
+    .ib-h .av svg { display: block; width: 100%; height: 100% }
+    .ib-h .gl { width: 20px; height: 20px; flex: none; display: grid; place-items: center; font: 500 12px/1 var(--mono); color: var(--rust) }
+    .ib-h b { font: 400 11px/1.2 var(--mono); color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+    .ib-n { font: 400 10.5px/1 var(--mono); color: var(--steel); white-space: nowrap }
+    .ib-st { margin-left: auto; flex: none; font: 500 9.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 3px 5px; border-radius: 3px; border: 1px solid var(--line-strong); color: var(--stone) }
+    .ib-st.ok { color: var(--moss); border-color: var(--moss-line); background: var(--moss-soft) }
+    .ib-st.bad { color: var(--rust); border-color: var(--rust-line); background: var(--rust-soft) }
+    .ib-s { margin-top: 8px; font: 500 14px/1.3 var(--sans); color: var(--ink); overflow-wrap: anywhere }
+    .ib-b { margin-top: 4px; font-size: 13.5px; line-height: 1.55; color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 4.65em; overflow: hidden }
+    .ib-b.ct { font: 400 11px/1.55 var(--mono); word-break: break-all; color: var(--stone) }
+    .ib-a { margin-top: 7px; font: 400 11px/1.2 var(--mono); color: var(--stone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+    .ib.q { background: var(--paper); border-style: dashed; border-color: var(--rust-line) }
+    .ib.q .ib-b { font: 400 11.5px/1.5 var(--mono); color: var(--rust) }
+    .dec { display: grid; gap: 6px; margin-top: auto }
+    .dc { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; background: var(--paper); border: 1px solid var(--line-soft); border-radius: 6px; transition: background .3s, border-color .3s }
+    .dc span { font-size: 12px; line-height: 1.25; color: var(--stone) }
+    .dc b { font: 500 11.5px/1.2 var(--mono); color: var(--stone); white-space: nowrap }
+    .dc.ok { background: var(--moss-soft); border-color: var(--moss-line) }
+    .dc.ok b { color: var(--moss) }
+    .dc.bad { background: var(--rust-soft); border-color: var(--rust-line) }
+    .dc.bad b { color: var(--rust) }
+    .dc.info { background: var(--steel-soft); border-color: var(--steel-line) }
+    .dc.info b { color: var(--steel) }
+    .dc.warn { background: var(--amber-soft); border-color: var(--amber-line) }
+    .dc.warn b { color: var(--amber-ink) }
+    .ml-fly { position: absolute; left: 0; top: 0; z-index: 3; display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 6px; border-radius: 6px; background: var(--ink); color: var(--canvas); font: 500 10.5px/1 var(--mono); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .18s; will-change: transform }
+    .ml-fly.on { opacity: 1 }
+    .ml-fly.card { background: var(--paper); color: var(--ink); border: 1px solid var(--ink) }
+    .ml-fly .av { width: 14px; height: 14px; border-radius: 3px; overflow: hidden }
+    .ml-fly .av svg { display: block; width: 100%; height: 100% }
+    .ml-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 14px 20px; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft) }
+    .ml-acts .btn { padding: 11px 16px; font-size: 13.5px }
+    .ml-acts .btn:disabled { opacity: .45; cursor: not-allowed }
+    .ml-say { flex: 1 1 320px; min-width: 0; min-height: 38px; display: flex; align-items: center; margin: 0 0 0 8px; font-size: 13px; line-height: 1.45; color: var(--ink-soft) }
+    .ml-say span { display: block }
+    .ml-say b { font-weight: 500; color: var(--ink) }
+    .ml-say code { font-size: 12px; color: var(--ink) }
+    .ml-detail { grid-template-columns: minmax(0, 1fr) minmax(0, 1.42fr) }
+    .ml-detail .dg-cur { min-height: 0 }
+    .ml-insp { display: flex; flex-direction: column; min-width: 0; background: var(--canvas) }
+    .ml-insp-h { display: flex; justify-content: space-between; gap: 12px; padding: 14px 16px 8px; font: 500 10.5px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--stone) }
+    .ml-insp-h span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: 0; text-transform: none; font-weight: 400 }
+    .ml-insp .code { height: 262px; overflow: auto; padding-bottom: 12px; font-size: 11.5px }
+    .ml-insp .code.hex { white-space: pre; overflow-wrap: normal }
+    .ml-insp .code .hx-l { display: block; padding: 0 16px 8px; font-size: 11px; color: var(--stone) }
+    .ml-insp .code .hx-l i { display: inline-block; width: 9px; height: 9px; margin: 0 5px 0 12px; border-radius: 2px; vertical-align: -1px }
+    .ml-insp .code .hx-l i:first-child { margin-left: 0 }
+    .ml-insp .code .hx-z { color: var(--stone) }
+    .ml-insp .code .hx-a { color: var(--ink-soft) }
+
+    /* ============================================================
+       §5 Discourse (reversed ink block)
        ============================================================ */
     .dark { background: var(--ink); color: var(--canvas) }
     .dark .kicker { color: var(--on-ink-muted) }
@@ -794,7 +950,7 @@
     .fact code { font-size: 12px; color: var(--ink-soft) }
 
     /* ============================================================
-       §5 Principles
+       §6 Principles
        ============================================================ */
     .prin { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line-strong); border-left: 1px solid var(--line-soft) }
     .pr { position: relative; padding: 26px 24px 30px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); transition: background .3s }
@@ -810,7 +966,7 @@
     .pr p { margin: 0; font-size: 14px; color: var(--stone); line-height: 1.55 }
 
     /* ============================================================
-       §6 SDKs + MCP
+       §7 SDKs + MCP
        ============================================================ */
     .sdk { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 48px; align-items: start }
     .inst { display: grid; gap: 8px; margin: 26px 0 26px }
@@ -881,12 +1037,16 @@
     .cta-card .btns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end }
     .cta-card .mark { position: absolute; right: -36px; top: -44px; width: 220px; height: 220px; opacity: .07; pointer-events: none }
     .foot { background: var(--ink); color: var(--canvas); padding: 64px 0 40px }
-    .foot-grid { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; gap: 40px }
+    .foot-grid { display: grid; grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr; gap: 36px }
     .foot p { color: var(--on-ink-muted); font-size: 14px; max-width: 320px; margin: 14px 0 0 }
     .foot h4 { margin: 0 0 14px; font: 500 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--on-ink-muted) }
     .foot ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 9px }
     .foot a { color: #dfe4dc; text-decoration: none; font-size: 14px }
     .foot a:hover { color: var(--canvas); text-decoration: underline }
+    .foot .eco { gap: 11px }
+    .foot .eco a { display: inline-block }
+    .foot .eco small { display: block; margin-top: 2px; font: 400 11.5px/1.3 var(--mono); color: var(--on-ink-muted) }
+    .foot .eco a:hover small { color: #c9d1c6 }
     .foot .brand { color: var(--canvas) }
     .foot-b { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--ink-line); font: 400 12px/1.4 var(--mono); color: var(--on-ink-muted) }
 
@@ -923,7 +1083,11 @@
       .ctrl { height: auto }
       .insp { flex: none; height: 300px }
       .tsys { grid-template-columns: 1fr }
-      .sdk, .mcp { grid-template-columns: 1fr; gap: 36px }
+      .ml-stage { grid-template-columns: minmax(0, 1fr); grid-template-areas: "snd" "rly" "rcp" "seen"; grid-template-rows: none; row-gap: 48px; padding: 20px }
+      .ml-rly { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) }
+      .ml-seen { padding-top: 18px }
+      .inbox { flex: none; height: 250px }
+      .sdk, .mcp { grid-template-columns: minmax(0, 1fr); gap: 36px }
       .cta-card { grid-template-columns: 1fr; padding: 40px 32px }
       .cta-card .btns { justify-content: flex-start }
       .foot-grid { grid-template-columns: 1fr 1fr }
@@ -953,6 +1117,16 @@
       .dg-cur { border-right: 0; border-bottom: 1px solid var(--line-soft); min-height: 0 }
       .dg-go { width: 100% }
       .res-row { grid-template-columns: 1fr }
+      .ml-head { padding: 14px 16px }
+      .ml-stage { padding: 16px 14px; row-gap: 44px }
+      .ml-rly { gap: 10px }
+      .rl { padding: 9px 9px 10px }
+      .rl-h { font-size: 11.5px }
+      .rl-h .stamp { display: none }
+      .ml-acts { padding: 14px 16px }
+      .ml-acts .btn { width: 100% }
+      .ml-say { margin: 4px 0 0; flex-basis: 100% }
+      .ml-insp .code { height: 240px }
       .acts { grid-template-columns: 1fr }
       .kg-svg { height: 440px }
       .prin { grid-template-columns: 1fr }
@@ -986,8 +1160,9 @@
       <nav class="nav" id="nav" aria-label="Sections">
         <a href="#stack" data-i18n="nav.stack">Protocols</a>
         <a href="#delegation" data-i18n="nav.delegation">Delegation</a>
-        <a href="#discourse" data-i18n="nav.discourse">Discourse</a>
+        <a href="#mail" data-i18n="nav.mail">Mail</a>
         <a href="#knowledge" data-i18n="nav.knowledge">Knowledge</a>
+        <a href="#discourse" data-i18n="nav.discourse">Discourse</a>
         <a href="#principles" data-i18n="nav.principles">Design</a>
         <a href="#sdks" data-i18n="nav.sdks">SDKs</a>
       </nav>
@@ -1008,8 +1183,9 @@
     <nav class="mnav" id="mnav" aria-label="Sections">
       <a href="#stack" data-i18n="nav.stack">Protocols</a>
       <a href="#delegation" data-i18n="nav.delegation">Delegation</a>
-      <a href="#discourse" data-i18n="nav.discourse">Discourse</a>
+      <a href="#mail" data-i18n="nav.mail">Mail</a>
       <a href="#knowledge" data-i18n="nav.knowledge">Knowledge</a>
+      <a href="#discourse" data-i18n="nav.discourse">Discourse</a>
       <a href="#principles" data-i18n="nav.principles">Design</a>
       <a href="#sdks" data-i18n="nav.sdks">SDKs</a>
     </nav>
@@ -1031,8 +1207,8 @@
             <span class="l"><span data-i18n="hero.t2">One <em>signed</em> envelope.</span></span>
           </h1>
           <p class="lede fade-in" style="animation-delay:.2s" data-i18n="hero.lede">A shared, verifiable language for
-            autonomous agents: prove which key signed, describe an agent, act for a principal, deliberate in rooms with
-            hash-chained records, build public knowledge together, and exchange encrypted private letters. Six small drafts, composable by design — no
+            autonomous agents: prove which key signed, describe an agent, act for a principal, exchange encrypted
+            private letters, build public knowledge together, and deliberate in rooms with hash-chained records. Six small drafts, composable by design — no
             central registry, no required host.</p>
           <div class="cta-row fade-in" style="animation-delay:.3s">
             <a class="btn btn-p" href="#stack"><span data-i18n="hero.cta">Read the protocols</span> <span class="arr">→</span></a>
@@ -1042,8 +1218,8 @@
             </button>
           </div>
           <dl class="stats fade-in" style="animation-delay:.4s">
-            <div><dt>6</dt><dd data-i18n="hero.s1">Specifications</dd></div>
             <div><dt>Ed25519</dt><dd data-i18n="hero.s2">Signatures</dd></div>
+            <div><dt>HPKE</dt><dd data-i18n="hero.s5">Encryption</dd></div>
             <div><dt>SHA3 · JCS</dt><dd data-i18n="hero.s3">Canonical hashing</dd></div>
             <div><dt>Rust · TS · Py</dt><dd data-i18n="hero.s4">SDKs, shared vectors</dd></div>
           </dl>
@@ -1150,49 +1326,48 @@
           <div class="stack-vis">
             <div class="stack-sticky">
               <svg class="stack-svg" id="stackSvg" viewBox="0 -30 648 452" role="img" aria-labelledby="stackTitle">
-                <title id="stackTitle">Agent Identity underpins Profile, Delegation, Discourse, Knowledge, and Mail</title>
+                <title id="stackTitle">Agent Identity underpins Profile, Delegation, Mail, Knowledge, and Discourse</title>
                 <defs>
                   <marker id="arr-off" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L8 5L1 9" fill="none" stroke="rgba(16,29,23,.25)" stroke-width="1.4" /></marker>
                   <marker id="arr-on" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L8 5L1 9" fill="none" stroke="#101d17" stroke-width="1.4" /></marker>
                 </defs>
-                <g class="edge" data-e="mail-card">
-                  <path d="M36 150 C36 -56 580 -56 580 146" />
-                  <text x="308" y="-12" text-anchor="middle" data-i18n="st.e.mail">advertises mailbox cards</text>
+                <g class="edge" data-e="resolve">
+                  <path d="M596 150 C596 -56 36 -56 36 146" />
+                  <text x="316" y="-12" text-anchor="middle" data-i18n="st.e.resolve">resolves display profiles</text>
                 </g>
                 <g class="edge" data-e="advert">
                   <path d="M52 150 C52 6 452 6 452 146" />
                   <text x="252" y="36" text-anchor="middle" data-i18n="st.e.advert">advertises knowledge services</text>
                 </g>
-                <g class="edge" data-e="resolve">
-                  <path d="M308 150 C308 64 76 64 76 146" />
-                  <text x="192" y="80" text-anchor="middle" data-i18n="st.e.resolve">resolves display profiles</text>
+                <g class="edge" data-e="mail-card">
+                  <path d="M76 150 C76 64 308 64 308 146" />
+                  <text x="192" y="80" text-anchor="middle" data-i18n="st.e.mail">advertises mailbox cards</text>
                 </g>
                 <g class="edge" data-e="hints">
                   <path d="M92 150 C92 114 180 114 180 146" />
                   <text x="136" y="112" text-anchor="middle" data-i18n="st.e.hints">delegation hints</text>
                 </g>
                 <g class="edge" data-e="discuss">
-                  <path d="M340 150 C340 114 436 114 436 146" />
-                  <text x="388" y="112" text-anchor="middle" data-i18n="st.e.discuss">discusses capsules</text>
+                  <path d="M564 150 C564 114 468 114 468 146" />
+                  <text x="516" y="112" text-anchor="middle" data-i18n="st.e.discuss">discusses capsules</text>
                 </g>
 
                 <g class="spoke" data-p="profile"><line x1="68" y1="214" x2="68" y2="318" />
                   <g class="env"><rect x="62" y="296" width="12" height="8.5" rx="1" /><path d="M62 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="62" y="296" width="12" height="8.5" rx="1" /><path d="M62 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="62" y="296" width="12" height="8.5" rx="1" /><path d="M62 296.5l6 4.5 6-4.5" /></g></g>
                 <g class="spoke" data-p="delegation"><line x1="196" y1="214" x2="196" y2="318" />
                   <g class="env"><rect x="190" y="296" width="12" height="8.5" rx="1" /><path d="M190 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="190" y="296" width="12" height="8.5" rx="1" /><path d="M190 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="190" y="296" width="12" height="8.5" rx="1" /><path d="M190 296.5l6 4.5 6-4.5" /></g></g>
-                <g class="spoke" data-p="discourse"><line x1="324" y1="214" x2="324" y2="318" />
+                <g class="spoke" data-p="mail"><line x1="324" y1="214" x2="324" y2="318" />
                   <g class="env"><rect x="318" y="296" width="12" height="8.5" rx="1" /><path d="M318 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="318" y="296" width="12" height="8.5" rx="1" /><path d="M318 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="318" y="296" width="12" height="8.5" rx="1" /><path d="M318 296.5l6 4.5 6-4.5" /></g></g>
                 <g class="spoke" data-p="knowledge"><line x1="452" y1="214" x2="452" y2="318" />
                   <g class="env"><rect x="446" y="296" width="12" height="8.5" rx="1" /><path d="M446 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="446" y="296" width="12" height="8.5" rx="1" /><path d="M446 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="446" y="296" width="12" height="8.5" rx="1" /><path d="M446 296.5l6 4.5 6-4.5" /></g></g>
-
-                <g class="spoke" data-p="mail"><line x1="580" y1="214" x2="580" y2="318" />
-                  <g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g>                  <g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g>                  <g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g></g>
+                <g class="spoke" data-p="discourse"><line x1="580" y1="214" x2="580" y2="318" />
+                  <g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g><g class="env"><rect x="574" y="296" width="12" height="8.5" rx="1" /><path d="M574 296.5l6 4.5 6-4.5" /></g></g>
 
                 <g class="pl" data-p="profile" tabindex="0" role="button" aria-label="Agent Profile"><rect x="8" y="150" width="120" height="64" rx="9" /><text x="68" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Profile</text><text class="sub mono" x="68" y="197" text-anchor="middle">agent-profile/1.0</text></g>
                 <g class="pl" data-p="delegation" tabindex="0" role="button" aria-label="Agent Delegation"><rect x="136" y="150" width="120" height="64" rx="9" /><text x="196" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Delegation</text><text class="sub mono" x="196" y="197" text-anchor="middle">agent-delegation/1.0</text></g>
-                <g class="pl" data-p="discourse" tabindex="0" role="button" aria-label="Agent Discourse"><rect x="264" y="150" width="120" height="64" rx="9" /><text x="324" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Discourse</text><text class="sub mono" x="324" y="197" text-anchor="middle">agent-discourse/1.0</text></g>
+                <g class="pl" data-p="mail" tabindex="0" role="button" aria-label="Agent Mail"><rect x="264" y="150" width="120" height="64" rx="9" /><text x="324" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Mail</text><text class="sub mono" x="324" y="197" text-anchor="middle">agent-mail/1.0</text></g>
                 <g class="pl" data-p="knowledge" tabindex="0" role="button" aria-label="Agent Knowledge"><rect x="392" y="150" width="120" height="64" rx="9" /><text x="452" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Knowledge</text><text class="sub mono" x="452" y="197" text-anchor="middle">agent-knowledge/1.0</text></g>
-                <g class="pl" data-p="mail" tabindex="0" role="button" aria-label="Agent Mail"><rect x="520" y="150" width="120" height="64" rx="9" /><text x="580" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Mail</text><text class="sub mono" x="580" y="197" text-anchor="middle">agent-mail/1.0</text></g>
+                <g class="pl" data-p="discourse" tabindex="0" role="button" aria-label="Agent Discourse"><rect x="520" y="150" width="120" height="64" rx="9" /><text x="580" y="178" text-anchor="middle" font-size="14.5" font-weight="500">Discourse</text><text class="sub mono" x="580" y="197" text-anchor="middle">agent-discourse/1.0</text></g>
 
                 <g class="fnd" data-p="identity" tabindex="0" role="button" aria-label="Agent Identity">
                   <rect class="b" x="8" y="318" width="632" height="100" rx="10" />
@@ -1251,18 +1426,18 @@
               <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
             </article>
 
-            <article class="pcard rv" data-p="discourse" id="p-discourse">
-              <div class="pc-top"><span class="pc-n">04</span><span class="pc-q" data-i18n="p4.q">What may it do in this room?</span></div>
-              <div class="pc-name"><h3>Agent Discourse</h3><code>agent-discourse/1.0</code><span class="stamp" data-i18n="draft">Draft</span></div>
-              <p class="pc-desc" data-i18n="p4.desc">Lifecycle-bounded rooms for multi-agent discussion: a small kernel, plus a type system each room declares.</p>
+            <article class="pcard rv" data-p="mail" id="p-mail">
+              <div class="pc-top"><span class="pc-n">04</span><span class="pc-q" data-i18n="p6.q">How can agents exchange private letters asynchronously?</span></div>
+              <div class="pc-name"><h3>Agent Mail</h3><code>agent-mail/1.0</code><span class="stamp" data-i18n="draft">Draft</span></div>
+              <p class="pc-desc" data-i18n="p6.desc">End-to-end encrypted correspondence with offline delivery: identity stays with the agent, while mailbox providers and routes can change.</p>
               <ul class="pc-list">
-                <li data-i18n="p4.f1">A room is a machine-readable contract: topic, guidance, roles, and every event type it allows.</li>
-                <li data-i18n="p4.f2">Moderator, speaker, and observer roles over twelve built-in event types.</li>
-                <li data-i18n="p4.f3">Accepted records are numbered and hash-chained; archives verify offline.</li>
-                <li data-i18n="p4.f4">Custom types are JSON Schema-validated, declared inline or imported from type packs.</li>
+                <li data-i18n="p6.f1">Recipient-signed Mailbox Cards bind independent encryption keys to delivery routes.</li>
+                <li data-i18n="p6.f2">HPKE encrypts the complete signed Letter; relays store opaque Packets.</li>
+                <li data-i18n="p6.f3">Replies, inline attachments, key rotation, route changes, and retries.</li>
+                <li data-i18n="p6.f4">Rust, TypeScript, and Python SDKs share vectors and exchange encrypted packets; MCP integration remains future work.</li>
               </ul>
-              <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p4.b">Room membership, roles, and event rules remain independent.</span></p>
-              <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.packs.json" data-i18n="l.packs">Type packs</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
+              <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p6.b">Relays still observe delivery metadata. Receiving a letter grants no execution authority.</span></p>
+              <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
             </article>
 
             <article class="pcard rv" data-p="knowledge" id="p-knowledge">
@@ -1279,18 +1454,18 @@
               <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
             </article>
 
-            <article class="pcard rv" data-p="mail" id="p-mail">
-              <div class="pc-top"><span class="pc-n">06</span><span class="pc-q" data-i18n="p6.q">How can agents exchange private letters asynchronously?</span></div>
-              <div class="pc-name"><h3>Agent Mail</h3><code>agent-mail/1.0</code><span class="stamp" data-i18n="draft">Draft</span></div>
-              <p class="pc-desc" data-i18n="p6.desc">End-to-end encrypted correspondence with offline delivery: identity stays with the agent, while mailbox providers and routes can change.</p>
+            <article class="pcard rv" data-p="discourse" id="p-discourse">
+              <div class="pc-top"><span class="pc-n">06</span><span class="pc-q" data-i18n="p4.q">What may it do in this room?</span></div>
+              <div class="pc-name"><h3>Agent Discourse</h3><code>agent-discourse/1.0</code><span class="stamp" data-i18n="draft">Draft</span></div>
+              <p class="pc-desc" data-i18n="p4.desc">Lifecycle-bounded rooms for multi-agent discussion: a small kernel, plus a type system each room declares.</p>
               <ul class="pc-list">
-                <li data-i18n="p6.f1">Recipient-signed Mailbox Cards bind independent encryption keys to delivery routes.</li>
-                <li data-i18n="p6.f2">HPKE encrypts the complete signed Letter; relays store opaque Packets.</li>
-                <li data-i18n="p6.f3">Replies, inline attachments, key rotation, route changes, and retries.</li>
-                <li data-i18n="p6.f4">Rust, TypeScript, and Python SDKs share vectors and exchange encrypted packets; MCP integration remains future work.</li>
+                <li data-i18n="p4.f1">A room is a machine-readable contract: topic, guidance, roles, and every event type it allows.</li>
+                <li data-i18n="p4.f2">Moderator, speaker, and observer roles over twelve built-in event types.</li>
+                <li data-i18n="p4.f3">Accepted records are numbered and hash-chained; archives verify offline.</li>
+                <li data-i18n="p4.f4">Custom types are JSON Schema-validated, declared inline or imported from type packs.</li>
               </ul>
-              <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p6.b">Relays still observe delivery metadata. Receiving a letter grants no execution authority.</span></p>
-              <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
+              <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p4.b">Room membership, roles, and event rules remain independent.</span></p>
+              <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.packs.json" data-i18n="l.packs">Type packs</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
             </article>
           </div>
         </div>
@@ -1357,11 +1532,165 @@
       </div>
     </section>
 
-    <!-- ======================= §3 DISCOURSE ======================= -->
+    <!-- ======================= §3 MAIL ======================= -->
+    <section class="sec" id="mail">
+      <div class="wrap">
+        <header class="sec-h rv">
+          <span class="kicker" data-i18n="ml.kicker">3 — Mail</span>
+          <h2 data-i18n="ml.title">Relays carry it. Only the recipient can <em>open</em> it.</h2>
+          <p data-i18n="ml.sub">The recipient signs a Mailbox Card that binds a separate X25519 key to its routes. The sender
+            signs the entire letter, pads it to a 1 KiB boundary, and seals it with HPKE — so relays store an opaque packet,
+            with no sender, subject, or signature in sight. Everything below runs in your browser and reproduces the
+            normative <code>agent-mail/1.0</code> vectors byte for byte.</p>
+        </header>
+        <div class="ml rv" id="ml">
+          <div class="ml-head">
+            <div class="ml-addr">
+              <div class="lbl" data-i18n="ml.addr">Contact address — an Agent URL</div>
+              <code id="mlAddr">did:agent:E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o/mail/AAECAwQFBgcICQoLDA0ODw?route=https://relay.example&amp;route=https://mirror.example</code>
+              <p data-i18n="ml.addr2">The path says what, the query says where. Routes are unauthenticated hints: once the card verifies, its own routes win.</p>
+            </div>
+            <span class="stamp ml-mode" id="mlMode">normative vector</span>
+          </div>
+          <div class="ml-stage" id="mlStage">
+            <svg class="ml-wires" id="mlWires" aria-hidden="true"></svg>
+            <div class="ml-snd">
+              <div class="who"><span class="av" id="mlSAv"></span><div><b data-i18n="ml.snd">Sender</b><small id="mlSId"></small></div><span class="tag" id="mlPin"></span></div>
+              <div class="sheet" id="mlSheet">
+                <div class="sh-row"><span class="k" data-i18n="ml.to">To</span><span class="v" id="mlTo"></span></div>
+                <label class="sh-row"><span class="k" data-i18n="ml.subj">Subject</span><input id="mlSubj" type="text" maxlength="120" spellcheck="false" autocomplete="off" value="A private question / 私信"></label>
+                <div class="sh-body">
+                  <textarea id="mlBody" maxlength="1200" spellcheck="false" aria-label="Letter body">Can we compare our evidence?
+我们可以核对证据吗？</textarea>
+                  <div class="sh-att"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.3 8.3a1.7 1.7 0 0 1-2.4-2.4l7.6-7.6" /></svg>evidence.bin<small>application/octet-stream · 4 B</small></div>
+                </div>
+                <pre class="sh-cipher" id="mlCipher" aria-hidden="true"></pre>
+                <div class="sh-foot"><span data-i18n="ml.lid">letter ID</span><code id="mlLid">—</code><span class="st" id="mlSent"></span></div>
+                <div class="sh-seal" id="mlSeal" aria-hidden="true">
+                  <svg viewBox="0 0 100 100">
+                    <g filter="url(#grain)">
+                      <rect x="6" y="6" width="88" height="88" rx="7" fill="#c13527" />
+                      <rect x="13" y="13" width="74" height="74" rx="3" fill="none" stroke="#fdfefb" stroke-width="2.4" />
+                      <g class="en">
+                        <text x="50" y="48" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="500" font-size="15" letter-spacing="1" fill="#fdfefb">SEALED</text>
+                        <line x1="24" y1="57" x2="76" y2="57" stroke="#fdfefb" stroke-width="1.2" />
+                        <text x="50" y="72" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="500" font-size="9.5" letter-spacing="1" fill="#fdfefb">HPKE</text>
+                      </g>
+                      <g class="zh" font-family="Noto Serif SC, Songti SC, STSong, serif" font-weight="600" font-size="31" fill="#fdfefb" text-anchor="middle">
+                        <text x="50" y="46">封</text><text x="50" y="80">缄</text>
+                      </g>
+                    </g>
+                  </svg>
+                </div>
+              </div>
+              <div class="fbar" id="mlFbar"><div class="fb-track" id="mlTrack"><i class="fb-len"></i><i class="fb-json"></i></div><div class="fb-cap" id="mlFcap"></div></div>
+            </div>
+            <div class="ml-rly">
+              <div class="rl" data-r="relay"><div class="rl-h"><svg class="ic" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2.5" width="12" height="4.5" rx="1" /><rect x="2" y="9" width="12" height="4.5" rx="1" /><path d="M4.5 4.75h1M4.5 11.25h1" /></svg>relay.example<span class="stamp" data-i18n="ml.route1">route 1</span></div><ul class="rl-q"></ul></div>
+              <div class="rl" data-r="mirror"><div class="rl-h"><svg class="ic" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2.5" width="12" height="4.5" rx="1" /><rect x="2" y="9" width="12" height="4.5" rx="1" /><path d="M4.5 4.75h1M4.5 11.25h1" /></svg>mirror.example<span class="stamp" data-i18n="ml.route2">route 2</span></div><ul class="rl-q"></ul></div>
+            </div>
+            <div class="ml-seen" id="mlSeen">
+              <div>
+                <div class="lbl" data-i18n="ml.seen">What a relay sees</div>
+                <dl class="seen">
+                  <div><dt>mailbox_id</dt><dd data-s="mbx">—</dd></div>
+                  <div><dt>card_hash</dt><dd data-s="card">—</dd></div>
+                  <div><dt>expires_at</dt><dd data-s="exp">—</dd></div>
+                  <div><dt data-i18n="ml.sz">padded size</dt><dd data-s="size">—</dd></div>
+                  <div><dt data-i18n="ml.net">IP · timing</dt><dd data-s="net">—</dd></div>
+                </dl>
+              </div>
+              <div>
+                <div class="lbl" data-i18n="ml.sealed">Sealed inside</div>
+                <ul class="redact">
+                  <li><span data-i18n="ml.r.from">sender</span><i style="--w:88%"></i></li>
+                  <li><span data-i18n="ml.r.subj">subject</span><i style="--w:64%"></i></li>
+                  <li><span data-i18n="ml.r.thread">thread</span><i style="--w:76%"></i></li>
+                  <li><span data-i18n="ml.r.parts">parts</span><i style="--w:52%"></i></li>
+                  <li><span data-i18n="ml.r.sig">signature</span><i style="--w:96%"></i></li>
+                </ul>
+              </div>
+            </div>
+            <div class="ml-rcp">
+              <div class="who"><span class="av" id="mlRAv"></span><div><b data-i18n="ml.rcp">Recipient</b><small id="mlRId"></small></div></div>
+              <div class="rc-key" id="mlKey"></div>
+              <div class="inbox" id="mlInbox"></div>
+              <div class="dec" id="mlDec">
+                <div class="dc" data-d="valid"><span data-i18n="ml.d.valid">Cryptographically valid</span><b>—</b></div>
+                <div class="dc" data-d="acc"><span data-i18n="ml.d.acc">Accepted as correspondence</span><b>—</b></div>
+                <div class="dc" data-d="auth"><span data-i18n="ml.d.auth">Authorized for action</span><b>—</b></div>
+              </div>
+            </div>
+            <div class="ml-fly" id="mlFly" aria-hidden="true"></div>
+          </div>
+          <div class="ml-acts" id="mlActs">
+            <button class="btn btn-p" type="button" data-a="send"><span data-i18n="ml.b.send">Seal &amp; send</span> <span class="arr">→</span></button>
+            <button class="mini" type="button" data-a="mirror"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 9M20 4v5h-5M20 12a8 8 0 0 1-13.7 5.6L4 15M4 20v-5h5" /></svg><span data-i18n="ml.b.mirror">Resend via mirror</span></button>
+            <button class="mini warn" type="button" data-a="flip"><span data-i18n="ml.b.flip">Relay flips a byte</span></button>
+            <button class="mini warn" type="button" data-a="extend"><span data-i18n="ml.b.extend">Relay extends expiry</span></button>
+            <button class="mini" type="button" data-a="reset"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v4h4" /></svg><span data-i18n="ml.b.reset">Vector</span></button>
+            <p class="ml-say" id="mlSay" aria-live="polite"></p>
+          </div>
+          <ol class="steps" id="mlSteps">
+            <li class="step" tabindex="0"><span class="num">1</span><h4 data-i18n="ml.1t">Pin the card</h4><p data-i18n="ml.1d">Fetch <code>/v1/mailboxes/{id}/card</code> from a route, verify it under the owner's Agent ID, and pin its nonce.</p></li>
+            <li class="step" tabindex="0"><span class="num">2</span><h4 data-i18n="ml.2t">Sign the letter</h4><p data-i18n="ml.2d">The whole letter is one Identity envelope, and its hash is the letter ID.</p></li>
+            <li class="step" tabindex="0"><span class="num">3</span><h4 data-i18n="ml.3t">Frame and pad</h4><p data-i18n="ml.3d"><code>I2OSP(n, 4) || JCS(letter)</code>, zero-padded to the next 1 KiB, so size leaks only in coarse steps.</p></li>
+            <li class="step" tabindex="0"><span class="num">4</span><h4 data-i18n="ml.4t">Seal with HPKE</h4><p data-i18n="ml.4d">X25519 · HKDF-SHA256 · ChaCha20-Poly1305 — one fixed suite, no negotiation. The routing header is the AAD.</p></li>
+            <li class="step" tabindex="0"><span class="num">5</span><h4 data-i18n="ml.5t">Relay accepts</h4><p data-i18n="ml.5d">Checks shape, route membership, the current card hash, and expiry. It holds no key and cannot decrypt.</p></li>
+            <li class="step" tabindex="0"><span class="num">6</span><h4 data-i18n="ml.6t">Owner opens</h4><p data-i18n="ml.6d">Lists packets with an owner request JWT, then opens with the secret retained for that card.</p></li>
+            <li class="step" tabindex="0"><span class="num">7</span><h4 data-i18n="ml.7t">Verify and accept</h4><p data-i18n="ml.7d">Signature, recipient, and matching expiry; then deduplicate by letter ID and persist before deleting the packet.</p></li>
+          </ol>
+          <div class="dg-detail ml-detail">
+            <div class="dg-cur" id="mlCur" aria-live="polite"></div>
+            <div class="ml-insp"><div class="ml-insp-h"><span id="mlInspT"></span><span id="mlInspS"></span></div><pre class="code" id="mlInsp"></pre></div>
+          </div>
+        </div>
+        <p class="dg-foot"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16v.5" /></svg><span data-i18n="ml.foot">Seeds <code>0x07</code> and <code>0x08</code>, mailbox secret <code>0x09</code>, and ephemeral secrets <code>0x0b</code> and <code>0x0c</code> are the vectors' public test material; letters you write use fresh randomness. The relays are simulated in this tab — nothing leaves your browser.</span></p>
+        <div class="kg-facts">
+          <div class="fact rv"><b data-i18n="ml.f1t">Identity stays; mailboxes move</b><p data-i18n="ml.f1d">A card lists up to eight routes and can be replaced at any time. Senders pin the card with the greatest nonce, so a stale card never comes back.</p></div>
+          <div class="fact rv"><b data-i18n="ml.f2t">An acknowledgement is a reply</b><p data-i18n="ml.f2d">There is no receipt type. A reply attests only what its signer wrote — never that a letter was read, approved, or acted on.</p></div>
+          <div class="fact rv"><b data-i18n="ml.f3t">Honest limits</b><p data-i18n="ml.f3d">Relays still see timing, padded size, and the mailbox. Base-mode HPKE has no forward secrecy against a retained key, so owners rotate keys and erase retired secrets.</p></div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ======================= §4 KNOWLEDGE ======================= -->
+    <section class="sec band" id="knowledge">
+      <div class="wrap">
+        <header class="sec-h rv">
+          <span class="kicker" data-i18n="kg.kicker">4 — Knowledge</span>
+          <h2 data-i18n="kg.title">Knowledge that remembers <em>where it came from.</em></h2>
+          <p data-i18n="kg.sub">Capsules are small signed contributions — a question, a hypothesis, a procedure, a negative
+            result. Each one's ID is its envelope hash, and every relation points at an exact version. Drag the graph,
+            select a capsule, or query it the way a service would.</p>
+        </header>
+        <div class="kg rv">
+          <div class="kg-stage">
+            <div class="kg-q">
+              <label><span class="get">GET&nbsp;?q=</span><input id="kgQ" type="text" spellcheck="false" autocomplete="off" placeholder="cache language" aria-label="Literal query terms"></label>
+              <span class="cnt" id="kgCnt"></span>
+            </div>
+            <div class="kg-seq" id="kgSeq"></div>
+            <div class="kg-tools"><button class="mini" type="button" id="kgReplay"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v4h4" /></svg><span data-i18n="kg.replay">Replay history</span></button></div>
+            <svg class="kg-svg" id="kgSvg" role="img" aria-label="Knowledge graph of capsules and assessments"></svg>
+            <div class="kg-legend" id="kgLegend"></div>
+          </div>
+          <aside class="kg-insp" id="kgInsp" aria-live="polite"><p class="ki-empty" data-i18n="kg.empty">Select a capsule to inspect its signed provenance.</p></aside>
+        </div>
+        <div class="kg-facts">
+          <div class="fact rv"><b data-i18n="kg.f1t">Attribution, not truth</b><p data-i18n="kg.f1d">A signature establishes the key and the exact content — never that a claim is correct. There is no <code>proven</code> status, only attributed assessments.</p></div>
+          <div class="fact rv"><b data-i18n="kg.f2t">Corrections are new capsules</b><p data-i18n="kg.f2d">An author corrects work by publishing a successor with <code>supersedes</code>. Nothing is edited in place, and no successor wins automatically.</p></div>
+          <div class="fact rv"><b data-i18n="kg.f3t">Retrieval is scoped</b><p data-i18n="kg.f3d">Queries name their service and checkpoint. Poll with <code>after_seq</code>; ranked search reports relevance and coverage, not correctness.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= §5 DISCOURSE ======================= -->
     <section class="sec dark" id="discourse">
       <div class="wrap">
         <header class="sec-h rv">
-          <span class="kicker" data-i18n="rm.kicker">3 — Discourse</span>
+          <span class="kicker" data-i18n="rm.kicker">5 — Discourse</span>
           <h2 data-i18n="rm.title">A room is a contract. Its record is a <em>chain.</em></h2>
           <p data-i18n="rm.sub">Every accepted event gets a <code>seq</code> and a hash that commits to the one before it.
             Messages never conflict; control writes race for the room head; one forged byte breaks everything after it.
@@ -1429,42 +1758,11 @@
       </div>
     </section>
 
-    <!-- ======================= §4 KNOWLEDGE ======================= -->
-    <section class="sec" id="knowledge">
-      <div class="wrap">
-        <header class="sec-h rv">
-          <span class="kicker" data-i18n="kg.kicker">4 — Knowledge</span>
-          <h2 data-i18n="kg.title">Knowledge that remembers <em>where it came from.</em></h2>
-          <p data-i18n="kg.sub">Capsules are small signed contributions — a question, a hypothesis, a procedure, a negative
-            result. Each one's ID is its envelope hash, and every relation points at an exact version. Drag the graph,
-            select a capsule, or query it the way a service would.</p>
-        </header>
-        <div class="kg rv">
-          <div class="kg-stage">
-            <div class="kg-q">
-              <label><span class="get">GET&nbsp;?q=</span><input id="kgQ" type="text" spellcheck="false" autocomplete="off" placeholder="cache language" aria-label="Literal query terms"></label>
-              <span class="cnt" id="kgCnt"></span>
-            </div>
-            <div class="kg-seq" id="kgSeq"></div>
-            <div class="kg-tools"><button class="mini" type="button" id="kgReplay"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v4h4" /></svg><span data-i18n="kg.replay">Replay history</span></button></div>
-            <svg class="kg-svg" id="kgSvg" role="img" aria-label="Knowledge graph of capsules and assessments"></svg>
-            <div class="kg-legend" id="kgLegend"></div>
-          </div>
-          <aside class="kg-insp" id="kgInsp" aria-live="polite"><p class="ki-empty" data-i18n="kg.empty">Select a capsule to inspect its signed provenance.</p></aside>
-        </div>
-        <div class="kg-facts">
-          <div class="fact rv"><b data-i18n="kg.f1t">Attribution, not truth</b><p data-i18n="kg.f1d">A signature establishes the key and the exact content — never that a claim is correct. There is no <code>proven</code> status, only attributed assessments.</p></div>
-          <div class="fact rv"><b data-i18n="kg.f2t">Corrections are new capsules</b><p data-i18n="kg.f2d">An author corrects work by publishing a successor with <code>supersedes</code>. Nothing is edited in place, and no successor wins automatically.</p></div>
-          <div class="fact rv"><b data-i18n="kg.f3t">Retrieval is scoped</b><p data-i18n="kg.f3d">Queries name their service and checkpoint. Poll with <code>after_seq</code>; ranked search reports relevance and coverage, not correctness.</p></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ======================= §5 PRINCIPLES ======================= -->
+    <!-- ======================= §6 PRINCIPLES ======================= -->
     <section class="sec band" id="principles">
       <div class="wrap">
         <header class="sec-h rv">
-          <span class="kicker" data-i18n="pr.kicker">5 — Design</span>
+          <span class="kicker" data-i18n="pr.kicker">6 — Design</span>
           <h2 data-i18n="pr.title">Small cores. <em>Honest</em> boundaries.</h2>
           <p data-i18n="pr.sub">The considerations that run through all six specifications.</p>
         </header>
@@ -1481,14 +1779,14 @@
       </div>
     </section>
 
-    <!-- ======================= §6 SDKS ======================= -->
+    <!-- ======================= §7 SDKS ======================= -->
     <section class="sec" id="sdks">
       <div class="wrap">
         <div class="sdk">
           <div class="rv">
-            <span class="kicker" data-i18n="sdk.kicker">6 — SDKs</span>
+            <span class="kicker" data-i18n="sdk.kicker">7 — SDKs</span>
             <h2 style="margin:16px 0 18px" data-i18n="sdk.title">Three languages. <em>One</em> set of vectors.</h2>
-            <p style="font-size:17px;color:var(--ink-soft);margin:0" data-i18n="sdk.sub">Framework-agnostic building blocks for Identity, Profile, Delegation, Discourse, Knowledge, and Mail. Rust, TypeScript, and Python run shared normative vectors and exchange freshly encrypted Mail packets. Applications supply durable mailbox storage; Mail MCP integration remains future work.</p>
+            <p style="font-size:17px;color:var(--ink-soft);margin:0" data-i18n="sdk.sub">Framework-agnostic building blocks for Identity, Profile, Delegation, Mail, Knowledge, and Discourse. Rust, TypeScript, and Python run shared normative vectors and exchange freshly encrypted Mail packets. Applications supply durable mailbox storage; Mail MCP integration remains future work.</p>
             <div class="inst">
               <button type="button" data-copy="cargo add agent-protocols"><span class="lg">Rust</span><code>cargo add agent-protocols</code><span class="cp" data-i18n="copy">copy</span></button>
               <button type="button" data-copy="npm install agent-protocols"><span class="lg">TypeScript</span><code>npm install agent-protocols</code><span class="cp" data-i18n="copy">copy</span></button>
@@ -1498,11 +1796,11 @@
               <thead><tr><th data-i18n="sdk.m">Module</th><th>Rust</th><th>TS</th><th>Py</th></tr></thead>
               <tbody>
                 <tr><td>Identity · Profile · Delegation</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-                <tr><td data-i18n="sdk.m2">Discourse kernel &amp; archives</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+                <tr><td data-i18n="sdk.m6">Mail encryption &amp; delivery</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
                 <tr><td data-i18n="sdk.m3">Knowledge store &amp; retrieval</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+                <tr><td data-i18n="sdk.m2">Discourse kernel &amp; archives</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
                 <tr><td data-i18n="sdk.m4">HTTP clients</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
                 <tr><td data-i18n="sdk.m5">Local MCP connector</td><td class="y">✓</td><td class="y">✓</td><td class="no">—</td></tr>
-                <tr><td data-i18n="sdk.m6">Mail encryption &amp; delivery</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
               </tbody>
             </table>
           </div>
@@ -1579,9 +1877,9 @@
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-identity/1.0.md">Agent Identity</a></li>
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-profile/1.0.md">Agent Profile</a></li>
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-delegation/1.0.md">Agent Delegation</a></li>
-            <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.md">Agent Discourse</a></li>
-            <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.md">Agent Knowledge</a></li>
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.md">Agent Mail</a></li>
+            <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.md">Agent Knowledge</a></li>
+            <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-discourse/1.0.md">Agent Discourse</a></li>
           </ul>
         </div>
         <div>
@@ -1594,7 +1892,7 @@
           </ul>
         </div>
         <div>
-          <h4 data-i18n="foot.project">Project</h4>
+          <h4 data-i18n="foot.project">Open source</h4>
           <ul>
             <li><a href="https://github.com/ldclabs/agent-protocols">GitHub</a></li>
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/CONTRIBUTING.md" data-i18n="foot.contrib">Contributing</a></li>
@@ -1602,8 +1900,17 @@
             <li><a href="https://github.com/ldclabs/agent-protocols/blob/main/LICENSE" data-i18n="foot.license">MIT License</a></li>
           </ul>
         </div>
+        <div>
+          <h4 data-i18n="foot.related">Ecosystem</h4>
+          <ul class="eco">
+            <li><a href="https://panda.fans/" target="_blank" rel="noopener">ICPanda DAO<small>panda.fans</small></a></li>
+            <li><a href="https://dmsg.net/" target="_blank" rel="noopener">dMsg<small>dmsg.net</small></a></li>
+            <li><a href="https://al.ink/" target="_blank" rel="noopener">alink<small>al.ink</small></a></li>
+            <li><a href="https://anda.bot/" target="_blank" rel="noopener">Anda Bot<small>anda.bot</small></a></li>
+          </ul>
+        </div>
       </div>
-      <div class="foot-b"><span data-i18n="foot.copy">© 2026 LDC Labs · Released under the MIT License</span><span>did:agent · JCS · SHA3-256 · Ed25519</span></div>
+      <div class="foot-b"><span data-i18n="foot.copy">© 2026 LDC Labs · Released under the MIT License</span><span>did:agent · JCS · SHA3-256 · Ed25519 · HPKE</span></div>
     </div>
   </footer>
   <script>
@@ -1702,6 +2009,41 @@
       "rm.v.running": "verifying…",
       "rm.v.ok": "✓ {n} records · {s} signatures · last_hash {h}…",
       "rm.v.bad": "✗ seq {k}: {why}",
+      "ml.fcap": "<b>{n}&nbsp;B</b> letter + 4&nbsp;B length + {p}&nbsp;B padding<br>= <b>{f}&nbsp;B</b> frame → {c}&nbsp;B ciphertext",
+      "ml.pin": "pinned #{n}", "ml.key": "card #{n} · X25519 {k} · secret kept until receive_until",
+      "ml.m.vec": "normative vector", "ml.m.yours": "your letter", "ml.m.sim": "simulated signatures",
+      "ml.lid.none": "signed on send", "ml.sent": "sent · kept for retries",
+      "ml.q.stored": "stored", "ml.q.deleted": "tombstone", "ml.q.mut": "rewritten", "ml.q.empty": "no packets",
+      "ml.empty": "No letters yet.", "ml.ib.ok": "verified", "ml.ib.open": "opening", "ml.ib.q": "quarantined",
+      "ml.ib.qd": "{why} · handled locally: no bounce, no remote error", "ml.ib.n": "{n} packets",
+      "ml.v.yes": "✓ yes", "ml.v.no": "✗ AEAD", "ml.v.new": "✓ new letter", "ml.v.dup": "duplicate", "ml.v.quar": "quarantined", "ml.v.never": "never implied",
+      "ml.net.v": "observable",
+      "ml.i.card": "Mailbox Card", "ml.i.letter": "Letter", "ml.i.frame": "Plaintext frame", "ml.i.packet": "Packet",
+      "ml.i.result": "Delivery result", "ml.i.record": "Packet record", "ml.i.inbox": "Local acceptance", "ml.i.wait": "Not reached yet.",
+      "ml.hex.pad": "zero padding",
+      "ml.o1": "card {h} verified under the owner's Agent ID · pinned nonce {n} · {r} routes",
+      "ml.o1again": "refreshed: same hash {h} as the pinned card — only a greater nonce or the same hash is accepted",
+      "ml.o2": "letter ID {h} · nonce {n} · to = card owner · expires_at ≤ receive_until",
+      "ml.o2same": "the same signed letter, kept for retries — letter ID {h} is unchanged",
+      "ml.o3": "{n} B letter → {f} B frame with {p} B of zero padding",
+      "ml.o4": "enc 32 B · ciphertext {c} B · packet_id {id} · fresh ephemeral key",
+      "ml.o4vec": "enc 32 B · ciphertext {c} B · packet_id {id} — byte-identical to vector “{v}”",
+      "ml.o5": "202 from {r}: {id}. The anonymous delivery result carries no seq.",
+      "ml.o5mut": "202 from {r} — then the relay rewrote its stored {f} and recomputed packet_id",
+      "ml.o6": "listed as seq {s} · AEAD tag verified · {f} B frame, minimal padding",
+      "ml.o6flip": "AEAD tag mismatch: one ciphertext byte changed. Quarantined locally — no bounce, no remote error",
+      "ml.o6ext": "AEAD tag mismatch: the header is the AAD, so a later expires_at breaks it. Quarantined locally",
+      "ml.o7": "signature ✓ · to = this agent · expirations match · new letter ID persisted, then the packet is deleted",
+      "ml.o7dup": "letter ID {h} was already accepted — no new inbox item; the packet is deleted",
+      "ml.o7bad": "the signature or recipient binding does not verify",
+      "ml.s.vec": "<b>Byte-identical to the normative vector.</b> Card, letter, X25519, HKDF, ChaCha20-Poly1305, and packet <code>{id}</code> were recomputed in your browser.",
+      "ml.s.vec2": "<b>Vector “reencrypted” matches too.</b> A fresh encapsulation made packet <code>{id}</code>, but the letter ID is unchanged — still one inbox item.",
+      "ml.s.new": "<b>Your letter arrived.</b> Signed with nonce {n}, padded to {f} B, and sealed under a fresh ephemeral key. No relay saw its sender or subject.",
+      "ml.s.dup": "<b>Deduplicated.</b> Packet <code>{id}</code> carried a letter ID the recipient already holds, so nothing new reached the inbox. Retries are safe.",
+      "ml.s.flip": "<b>Tampering is detected, not repaired.</b> A relay can drop or corrupt mail, but one flipped byte fails the AEAD tag — and the sender is told nothing.",
+      "ml.s.ext": "<b>Visible is not writable.</b> The header travels in the clear so relays can route it, but it is authenticated as AAD.",
+      "ml.s.draft": "Draft changed. <b>Seal &amp; send</b> signs it as a new letter (nonce {n}); resending only retries a letter already sent.",
+      "ml.s.sim": "WebCrypto Ed25519 isn't available in this browser, so signatures are simulated. HPKE and hashes are still computed for real.",
       "kg.seq": "<b>{n}</b> accepted records · {a} authors",
       "kg.empty": "Select a capsule to inspect its signed provenance.",
       "kg.ph": "cache language",
@@ -1738,7 +2080,7 @@
       "se.delegation": "由主体 HTTPS URL 上列出的 Controller 密钥签名。",
       "se.discourse": "其余一切都由 Room 自行声明——内联定义，或从类型包导入。",
       "se.knowledge": "胶囊 ID 就是其信封哈希；每条关系都指向确切版本。",
-      "se.mail": "收件人签名 Mailbox Card；发件人在本地加密签名 Letter，中继只存储 Packet。",
+      "se.mail": "收件方签署邮箱卡片；发件方在本地加密签名信件，中继只存储密文包。",
       "dg.o1ok": "document.id 与签名中的 principal_id 完全一致",
       "dg.o1bad": "{a} 会重定向到 {b}；签名中的 principal_id 是别名，因此被拒绝",
       "dg.o2ok": "找到凭证；grant_event_id 指向已接受记录",
@@ -1787,6 +2129,41 @@
       "rm.v.running": "验证中…",
       "rm.v.ok": "✓ {n} 条记录 · {s} 个签名 · last_hash {h}…",
       "rm.v.bad": "✗ seq {k}：{why}",
+      "ml.fcap": "<b>{n}&nbsp;B</b> 信件 + 4&nbsp;B 长度 + {p}&nbsp;B 填充<br>= <b>{f}&nbsp;B</b> 帧 → 密文 {c}&nbsp;B",
+      "ml.pin": "已固定 #{n}", "ml.key": "卡片 #{n} · X25519 {k} · 私钥保留至 receive_until",
+      "ml.m.vec": "规范测试向量", "ml.m.yours": "你的信件", "ml.m.sim": "模拟签名",
+      "ml.lid.none": "发送时签名", "ml.sent": "已发送 · 保留以便重试",
+      "ml.q.stored": "已存储", "ml.q.deleted": "墓碑", "ml.q.mut": "已改写", "ml.q.empty": "暂无密文包",
+      "ml.empty": "尚无信件。", "ml.ib.ok": "已验证", "ml.ib.open": "拆封中", "ml.ib.q": "已隔离",
+      "ml.ib.qd": "{why} · 仅在本地处理：不退信，也不向远端报错", "ml.ib.n": "{n} 个密文包",
+      "ml.v.yes": "✓ 是", "ml.v.no": "✗ AEAD", "ml.v.new": "✓ 新信件", "ml.v.dup": "重复", "ml.v.quar": "已隔离", "ml.v.never": "从不隐含",
+      "ml.net.v": "可观察",
+      "ml.i.card": "邮箱卡片", "ml.i.letter": "信件", "ml.i.frame": "明文帧", "ml.i.packet": "密文包",
+      "ml.i.result": "投递结果", "ml.i.record": "密文包记录", "ml.i.inbox": "本地接受", "ml.i.wait": "尚未执行。",
+      "ml.hex.pad": "零填充",
+      "ml.o1": "卡片 {h} 已在所有者的 Agent ID 之下验证 · 固定 nonce {n} · {r} 条路由",
+      "ml.o1again": "已刷新：与固定卡片哈希 {h} 相同——只接受更大的 nonce 或相同的哈希",
+      "ml.o2": "信件 ID {h} · nonce {n} · to = 卡片所有者 · expires_at ≤ receive_until",
+      "ml.o2same": "同一封签名信件，已保留以便重试——信件 ID {h} 不变",
+      "ml.o3": "{n} B 信件 → {f} B 帧，含 {p} B 零填充",
+      "ml.o4": "enc 32 B · 密文 {c} B · packet_id {id} · 全新临时密钥",
+      "ml.o4vec": "enc 32 B · 密文 {c} B · packet_id {id}——与向量 “{v}” 逐字节一致",
+      "ml.o5": "{r} 返回 202：{id}。匿名投递结果不含 seq。",
+      "ml.o5mut": "{r} 返回 202——随后中继改写了所存的 {f}，并重算了 packet_id",
+      "ml.o6": "列表中为 seq {s} · AEAD 标签验证通过 · {f} B 帧，填充最小",
+      "ml.o6flip": "AEAD 标签不匹配：密文有一个字节被改动。在本地隔离——不退信，也不向远端报错",
+      "ml.o6ext": "AEAD 标签不匹配：头部就是 AAD，改大 expires_at 即令其失效。在本地隔离",
+      "ml.o7": "签名 ✓ · to = 本智能体 · 过期时间一致 · 新信件 ID 已持久保存，随后删除密文包",
+      "ml.o7dup": "信件 ID {h} 已被接受过——不新增收件箱条目；删除该密文包",
+      "ml.o7bad": "签名或收件人绑定验证失败",
+      "ml.s.vec": "<b>与规范性测试向量逐字节一致。</b>卡片、信件、X25519、HKDF、ChaCha20-Poly1305 与密文包 <code>{id}</code> 都在你的浏览器中重新计算。",
+      "ml.s.vec2": "<b>向量 “reencrypted” 同样一致。</b>重新封装得到密文包 <code>{id}</code>，但信件 ID 不变——收件箱仍只有一条。",
+      "ml.s.new": "<b>你的信已送达。</b>以 nonce {n} 签名、填充到 {f} B，并用全新的临时密钥封装。没有任何中继看到发件人或主题。",
+      "ml.s.dup": "<b>已去重。</b>密文包 <code>{id}</code> 携带的信件 ID 收件方已经持有，收件箱没有新增。重试是安全的。",
+      "ml.s.flip": "<b>篡改会被发现，而不是被修复。</b>中继可以丢弃或损坏信件，但改动一个字节就会让 AEAD 标签失效——发件方也得不到任何反馈。",
+      "ml.s.ext": "<b>可见不等于可改。</b>头部以明文传输以便中继路由，但它作为 AAD 受到认证。",
+      "ml.s.draft": "草稿已修改。<b>封装并发送</b>会将其签署为新信件（nonce {n}）；重发只会重试已发送的信件。",
+      "ml.s.sim": "当前浏览器不支持 WebCrypto Ed25519，签名为模拟结果；HPKE 与哈希仍是真实计算。",
       "kg.seq": "<b>{n}</b> 条已接受记录 · {a} 位作者",
       "kg.empty": "选择一个胶囊，查看它的签名来源。",
       "kg.ph": "缓存 语言",
@@ -1807,19 +2184,19 @@
   };
 
   const ZH = {
-    "nav.stack": "协议", "nav.delegation": "委托", "nav.discourse": "研讨", "nav.knowledge": "知识", "nav.principles": "设计", "nav.sdks": "SDK",
+    "nav.stack": "协议", "nav.delegation": "委托", "nav.mail": "邮件", "nav.knowledge": "知识", "nav.discourse": "研讨", "nav.principles": "设计", "nav.sdks": "SDK",
     "hero.eyebrow": "开放规范 · 1.0 草案 · MIT",
     "hero.t1": "六个协议，",
     "hero.t2": "同一个<em>签名</em>信封。",
-    "hero.lede": "为自治智能体提供一套共享、可验证的语言：证明由哪把密钥签名、描述智能体、代表主体行事、在以哈希链记录的 Room 中研讨，共同构建公开知识，并交换加密私信。六个精简草案，天然可组合——无需中心注册表，不依赖特定宿主。",
+    "hero.lede": "为自治智能体提供一套共享、可验证的语言：证明由哪把密钥签名、描述智能体、代表主体行事、交换加密私信、共同构建公开知识，并在以哈希链记录的 Room 中研讨。六个精简草案，天然可组合——无需中心注册表，不依赖特定宿主。",
     "hero.cta": "阅读协议规范",
-    "hero.s1": "协议规范", "hero.s2": "签名算法", "hero.s3": "规范化哈希", "hero.s4": "SDK · 共享测试向量",
+    "hero.s2": "签名算法", "hero.s5": "端到端加密", "hero.s3": "规范化哈希", "hero.s4": "SDK · 共享测试向量",
     "desk.env": "信封", "desk.jcs": "JCS 字节", "desk.verify": "验证", "desk.loading": "正在浏览器中重算测试向量…",
     "desk.key": "新密钥", "desk.tamper": "篡改", "desk.reset": "向量",
     "st.kicker": "1 — 协议栈",
     "st.title": "六个问题，六个协议，<em>一个</em>基础。",
-    "st.sub": "每个协议只回答一个问题，并明确说明它不能证明什么。所有协议复用 Agent Identity 签名信封；Mail 将签名信件加密为不透明的数据包。请先阅读 Identity：它还定义了共用的 HTTP 约定。",
-    "st.e.mail": "声明收件卡", "st.e.advert": "声明知识服务", "st.e.resolve": "解析展示档案", "st.e.hints": "委托线索", "st.e.discuss": "讨论知识胶囊",
+    "st.sub": "每个协议只回答一个问题，并明确说明它不能证明什么。所有协议复用 Agent Identity 签名信封；Mail 将签名信件加密为不透明的密文包。请先阅读 Identity：它还定义了共用的 HTTP 约定。",
+    "st.e.mail": "声明邮箱卡片", "st.e.advert": "声明知识服务", "st.e.resolve": "解析展示档案", "st.e.hints": "委托线索", "st.e.discuss": "讨论知识胶囊",
     draft: "草案", bound: "边界", "l.spec": "规范全文", "l.vectors": "测试向量", "l.packs": "类型包",
     "p1.q": "由哪把密钥签名？",
     "p1.desc": "由 Ed25519 公钥派生的自验证身份——以及其他所有协议共同复用的签名信封。",
@@ -1858,10 +2235,10 @@
     "p5.b": "相关性、签名来源与学科校验，都不等同于普适真理。",
     "p6.q": "智能体如何异步交换私密信件？",
     "p6.desc": "支持离线投递的端到端加密通信：身份始终属于智能体，邮箱提供方和投递路由可以替换。",
-    "p6.f1": "收件人签名 Mailbox Card，将独立加密密钥绑定到投递路由。",
-    "p6.f2": "HPKE 加密完整的签名 Letter；中继只存储不透明的 Packet。",
+    "p6.f1": "收件方签署的邮箱卡片（Mailbox Card）将独立的加密密钥绑定到投递路由。",
+    "p6.f2": "HPKE 加密完整的签名信件（Letter）；中继只存储不透明的密文包（Packet）。",
     "p6.f3": "支持回复、内联附件、密钥轮换、路由变更与重试。",
-    "p6.f4": "Rust、TypeScript 和 Python SDK 共用向量并互通加密数据包；MCP 集成仍属于后续工作。",
+    "p6.f4": "Rust、TypeScript 和 Python SDK 共用向量并互通密文包；MCP 集成仍属于后续工作。",
     "p6.b": "中继仍能观察投递元数据。收到信件不代表授权执行。",
     "dg.kicker": "2 — 委托",
     "dg.title": "核验智能体<em>代表谁</em>发言。",
@@ -1879,7 +2256,7 @@
     "dg.run": "运行验证", "dg.stepbtn": "单步",
     "dg.d.p": "主体文档", "dg.d.g": "授权信封", "dg.d.c": "凭证", "dg.d.u": "本次请求", "dg.d.us": "依赖方上下文",
     "dg.foot": "这里的授权会在你的浏览器中真实签名并验证。主体 ID、Scope 与时间均取自 Delegation 规范中的示例。",
-    "rm.kicker": "3 — 研讨",
+    "rm.kicker": "5 — 研讨",
     "rm.title": "Room 是一份契约，它的记录是一条<em>链</em>。",
     "rm.sub": "每个被接受的事件都会获得一个 <code>seq</code>，以及承诺前一条记录的哈希。消息之间互不冲突；控制写入争夺 Room Head；伪造一个字节，就会破坏其后的一切。这个 Room 在你的浏览器中实时运行——下方每条记录都经过真实签名与哈希。",
     "rm.active": "进行中",
@@ -1897,6 +2274,28 @@
     "ts.k3t": "协调", "ts.k3d": "发言轮换、任务认领、图谱与产出——仅限主持人。对 Head 做比较并交换：先被接受者胜出。",
     "ts.packs": "官方注册类型包",
     "ts.packs2": "Room 可以用 <code>{ \"use\": \"adp:deliberation/1.0\" }</code> 导入类型包，也可以内联定义自己的类型。",
+    "ml.kicker": "3 — 邮件",
+    "ml.title": "中继负责投递，只有收件人能<em>拆开</em>。",
+    "ml.sub": "收件方签署一张邮箱卡片，把独立的 X25519 密钥绑定到投递路由。发件方对整封信签名、填充到 1 KiB 边界，再用 HPKE 封装——中继只保存不透明的密文包，看不到发件人、主题或签名。下方一切都在你的浏览器中运行，并与规范性 <code>agent-mail/1.0</code> 测试向量逐字节一致。",
+    "ml.addr": "联系地址——Agent URL",
+    "ml.addr2": "路径说明是什么，查询参数说明在哪里。路由只是未经认证的提示：卡片验证通过后，以卡片自身的路由为准。",
+    "ml.snd": "发件方", "ml.rcp": "收件方", "ml.to": "收件人", "ml.subj": "主题", "ml.lid": "信件 ID",
+    "ml.route1": "路由 1", "ml.route2": "路由 2",
+    "ml.seen": "中继可见", "ml.sealed": "封装在内", "ml.sz": "填充后大小", "ml.net": "IP · 时间",
+    "ml.r.from": "发件人", "ml.r.subj": "主题", "ml.r.thread": "会话", "ml.r.parts": "内容部分", "ml.r.sig": "签名",
+    "ml.d.valid": "密码学上有效", "ml.d.acc": "作为通信被接受", "ml.d.auth": "获准采取行动",
+    "ml.b.send": "封装并发送", "ml.b.mirror": "经镜像重发", "ml.b.flip": "中继改动一个字节", "ml.b.extend": "中继延长过期时间", "ml.b.reset": "向量",
+    "ml.1t": "固定卡片", "ml.1d": "从一条路由获取 <code>/v1/mailboxes/{id}/card</code>，在所有者的 Agent ID 之下验证，并固定其 nonce。",
+    "ml.2t": "签署信件", "ml.2d": "整封信件是一个 Identity 信封，其哈希就是信件 ID。",
+    "ml.3t": "分帧与填充", "ml.3d": "<code>I2OSP(n, 4) || JCS(letter)</code>，用零填充到下一个 1 KiB 边界，长度只以粗粒度泄露。",
+    "ml.4t": "HPKE 封装", "ml.4d": "X25519 · HKDF-SHA256 · ChaCha20-Poly1305——固定套件，不做协商。路由头部作为 AAD。",
+    "ml.5t": "中继接受", "ml.5d": "检查结构、路由成员资格、当前卡片哈希与过期时间。中继不持有密钥，无法解密。",
+    "ml.6t": "所有者拆封", "ml.6d": "用所有者请求 JWT 列出密文包，再用为该卡片保留的私钥拆封。",
+    "ml.7t": "验证并接受", "ml.7d": "校验签名、收件人与一致的过期时间；再按信件 ID 去重，持久保存后才删除密文包。",
+    "ml.foot": "种子 <code>0x07</code> 与 <code>0x08</code>、邮箱私钥 <code>0x09</code>、临时私钥 <code>0x0b</code> 与 <code>0x0c</code> 都是测试向量中公开的测试材料；你自己写的信使用全新随机数。中继在本标签页中模拟——没有任何数据离开你的浏览器。",
+    "ml.f1t": "身份不变，邮箱可迁", "ml.f1d": "一张卡片最多列出八条路由，并可随时替换。发件方固定 nonce 最大的卡片，陈旧卡片不会再被使用。",
+    "ml.f2t": "确认就是回复", "ml.f2d": "协议不定义回执。回复只证明其签名者写下的内容——不证明信件被阅读、批准或执行。",
+    "ml.f3t": "坦诚的边界", "ml.f3d": "中继仍能看到时间、填充后的大小与邮箱。Base 模式 HPKE 对仍被保留的私钥不提供前向保密，所以所有者应轮换密钥并销毁退役私钥。",
     "kg.kicker": "4 — 知识",
     "kg.title": "记得<em>来自何处</em>的知识。",
     "kg.sub": "胶囊是小而带签名的贡献——一个问题、一个假设、一种方法、一项负面结果。每个胶囊的 ID 就是其信封哈希，每条关系都指向一个确切版本。拖动图谱、选中胶囊，或像服务端那样查询它。",
@@ -1905,7 +2304,7 @@
     "kg.f1t": "归属，而非真理", "kg.f1d": "签名只能证明密钥与确切内容——永远不能证明某个论断正确。协议没有 <code>proven</code> 状态，只有署名的评估。",
     "kg.f2t": "修正即新胶囊", "kg.f2d": "作者通过发布带 <code>supersedes</code> 的后继胶囊来修正工作。没有原地编辑，也没有自动胜出的后继。",
     "kg.f3t": "检索有明确范围", "kg.f3d": "查询会标明服务与检查点。用 <code>after_seq</code> 轮询；排序搜索报告的是相关性与覆盖度，而非正确性。",
-    "pr.kicker": "5 — 设计",
+    "pr.kicker": "6 — 设计",
     "pr.title": "精简内核，<em>诚实</em>边界。",
     "pr.sub": "贯穿全部六个规范的设计考量。",
     "pr.1t": "自验证身份", "pr.1d": "Agent ID 就是它的公钥。验证无需注册表、账户或宿主。",
@@ -1916,9 +2315,9 @@
     "pr.6t": "精简内核，开放词汇", "pr.6d": "Room 自行声明类型与类型包；知识协议通过学科应用规范扩展。",
     "pr.7t": "宿主校验，智能体理解", "pr.7d": "服务机械地校验签名、状态、权限与 Schema，语义理解留给智能体。",
     "pr.8t": "始终可验证", "pr.8d": "哈希链记录、有界的生命周期，以及可离线重放的归档——包括每一个类型定义。",
-    "sdk.kicker": "6 — SDK",
+    "sdk.kicker": "7 — SDK",
     "sdk.title": "三种语言，<em>一套</em>测试向量。",
-    "sdk.sub": "面向 Identity、Profile、Delegation、Discourse、Knowledge 与 Mail 的框架无关构建模块。Rust、TypeScript 与 Python 运行共享规范性向量，并互通新加密的 Mail 数据包。应用负责持久化邮箱存储；Mail MCP 集成仍属于后续工作。",
+    "sdk.sub": "面向 Identity、Profile、Delegation、Mail、Knowledge 与 Discourse 的框架无关构建模块。Rust、TypeScript 与 Python 运行共享规范性向量，并互通新加密的 Mail 密文包。应用负责持久化邮箱存储；Mail MCP 集成仍属于后续工作。",
     copy: "复制",
     "sdk.m": "模块", "sdk.m2": "Discourse 内核与归档", "sdk.m3": "知识存储与检索", "sdk.m4": "HTTP 客户端", "sdk.m5": "本地 MCP 连接器", "sdk.m6": "Mail 加密与投递",
     "sdk.note": "示例基于当前草案源码（v0.11.0）。完整 API 请参阅各 SDK 的 README。",
@@ -1932,7 +2331,7 @@
     "cta.sub": "六个规范目前都是草案，在 1.0 之前仍可能发生不兼容的修订。测试向量具有规范效力：与向量不一致的实现即不符合规范。欢迎反馈与互操作性报告。",
     "cta.b1": "阅读协议规范", "cta.b2": "参与贡献",
     "foot.tag": "面向自治智能体的可组合开放协议，以英文与简体中文双语发布。",
-    "foot.specs": "协议规范", "foot.sdks": "SDK 与工具", "foot.mcp": "MCP 本地连接器", "foot.project": "项目",
+    "foot.specs": "协议规范", "foot.sdks": "SDK 与工具", "foot.mcp": "MCP 本地连接器", "foot.project": "开源", "foot.related": "生态",
     "foot.contrib": "参与贡献", "foot.security": "安全", "foot.license": "MIT 许可证",
     "foot.copy": "© 2026 LDC Labs · 基于 MIT 许可证开源",
   };
@@ -2008,6 +2407,114 @@
   const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
   const hexb = (h) => Uint8Array.from(h.match(/../g), (x) => parseInt(x, 16));
   const eventHash = (ev) => sha3(enc.encode(jcs(ev)));
+
+  /* ================================================================
+     SHA-256 · HMAC · X25519 · ChaCha20-Poly1305 · HPKE Base mode —
+     exactly the one fixed agent-mail/1.0 suite (RFC 9180, 7748, 8439).
+     ================================================================ */
+  const cat = (...a) => { const o = new Uint8Array(a.reduce((s, x) => s + x.length, 0)); let i = 0; for (const x of a) { o.set(x, i); i += x.length; } return o; };
+  const K256 = Uint32Array.from("428a2f98 71374491 b5c0fbcf e9b5dba5 3956c25b 59f111f1 923f82a4 ab1c5ed5 d807aa98 12835b01 243185be 550c7dc3 72be5d74 80deb1fe 9bdc06a7 c19bf174 e49b69c1 efbe4786 0fc19dc6 240ca1cc 2de92c6f 4a7484aa 5cb0a9dc 76f988da 983e5152 a831c66d b00327c8 bf597fc7 c6e00bf3 d5a79147 06ca6351 14292967 27b70a85 2e1b2138 4d2c6dfc 53380d13 650a7354 766a0abb 81c2c92e 92722c85 a2bfe8a1 a81a664b c24b8b70 c76c51a3 d192e819 d6990624 f40e3585 106aa070 19a4c116 1e376c08 2748774c 34b0bcb5 391c0cb3 4ed8aa4a 5b9cca4f 682e6ff3 748f82ee 78a5636f 84c87814 8cc70208 90befffa a4506ceb bef9a3f7 c67178f2".split(" "), (h) => parseInt(h, 16));
+  function sha256(m) {
+    const l = m.length, n = ((l + 72) >> 6) << 6, p = new Uint8Array(n), dv = new DataView(p.buffer);
+    p.set(m); p[l] = 0x80; dv.setUint32(n - 8, Math.floor(l / 0x20000000)); dv.setUint32(n - 4, l << 3);
+    const H = Uint32Array.of(0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19), W = new Uint32Array(64);
+    const r = (x, k) => (x >>> k) | (x << (32 - k));
+    for (let o = 0; o < n; o += 64) {
+      for (let i = 0; i < 16; i++) W[i] = dv.getUint32(o + i * 4);
+      for (let i = 16; i < 64; i++) W[i] = (r(W[i - 15], 7) ^ r(W[i - 15], 18) ^ (W[i - 15] >>> 3)) + W[i - 7] + (r(W[i - 2], 17) ^ r(W[i - 2], 19) ^ (W[i - 2] >>> 10)) + W[i - 16];
+      let [a, b, c, d, e, f, g, h] = H;
+      for (let i = 0; i < 64; i++) {
+        const t1 = (h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + K256[i] + W[i]) | 0;
+        const t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H[0] += a; H[1] += b; H[2] += c; H[3] += d; H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+    }
+    const out = new Uint8Array(32), od = new DataView(out.buffer);
+    H.forEach((x, i) => od.setUint32(i * 4, x));
+    return out;
+  }
+  function hmac(key, msg) {
+    const k = new Uint8Array(64); k.set(key.length > 64 ? sha256(key) : key);
+    return sha256(cat(k.map((x) => x ^ 0x5c), sha256(cat(k.map((x) => x ^ 0x36), msg))));
+  }
+  // X25519 over BigInt: a Montgomery ladder, fast enough for a few calls per letter.
+  const P25 = 2n ** 255n - 19n;
+  const md = (a) => { a %= P25; return a < 0n ? a + P25 : a; };
+  const leNum = (b) => { let n = 0n; for (let i = b.length - 1; i >= 0; i--) n = (n << 8n) | BigInt(b[i]); return n; };
+  const leBytes = (n, len) => { const o = new Uint8Array(len); for (let i = 0; i < len; i++) { o[i] = Number(n & 255n); n >>= 8n; } return o; };
+  const BASE9 = Uint8Array.from({ length: 32 }, (_, i) => (i ? 0 : 9));
+  function x25519(k, u) {
+    const s = k.slice(); s[0] &= 248; s[31] = (s[31] & 127) | 64;
+    const kk = leNum(s), x1 = md(leNum(u) & (2n ** 255n - 1n));
+    let x2 = 1n, z2 = 0n, x3 = x1, z3 = 1n, sw = 0n;
+    for (let i = 254n; i >= 0n; i--) {
+      const b = (kk >> i) & 1n;
+      if (sw ^ b) { [x2, x3] = [x3, x2]; [z2, z3] = [z3, z2]; }
+      sw = b;
+      const A = x2 + z2, AA = md(A * A), B = x2 - z2, BB = md(B * B), E = AA - BB, DA = md((x3 - z3) * A), CB = md((x3 + z3) * B);
+      x3 = md((DA + CB) ** 2n); z3 = md(x1 * md((DA - CB) ** 2n)); x2 = md(AA * BB); z2 = md(E * (AA + 121665n * E));
+    }
+    if (sw) { [x2, x3] = [x3, x2]; [z2, z3] = [z3, z2]; }
+    let inv = 1n, b = z2, e = P25 - 2n;
+    while (e > 0n) { if (e & 1n) inv = md(inv * b); b = md(b * b); e >>= 1n; }
+    return leBytes(md(x2 * inv), 32);
+  }
+  function chacha20(key, nonce, ctr, data) {
+    const kv = new DataView(key.buffer, key.byteOffset), nv = new DataView(nonce.buffer, nonce.byteOffset);
+    const S = new Uint32Array(16), X = new Uint32Array(16), out = new Uint8Array(data.length);
+    S.set([0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]);
+    for (let i = 0; i < 8; i++) S[4 + i] = kv.getUint32(i * 4, true);
+    for (let i = 0; i < 3; i++) S[13 + i] = nv.getUint32(i * 4, true);
+    const q = (a, b, c, d) => {
+      X[a] += X[b]; X[d] ^= X[a]; X[d] = (X[d] << 16) | (X[d] >>> 16);
+      X[c] += X[d]; X[b] ^= X[c]; X[b] = (X[b] << 12) | (X[b] >>> 20);
+      X[a] += X[b]; X[d] ^= X[a]; X[d] = (X[d] << 8) | (X[d] >>> 24);
+      X[c] += X[d]; X[b] ^= X[c]; X[b] = (X[b] << 7) | (X[b] >>> 25);
+    };
+    for (let o = 0; o < data.length; o += 64, ctr++) {
+      S[12] = ctr; X.set(S);
+      for (let i = 0; i < 10; i++) { q(0, 4, 8, 12); q(1, 5, 9, 13); q(2, 6, 10, 14); q(3, 7, 11, 15); q(0, 5, 10, 15); q(1, 6, 11, 12); q(2, 7, 8, 13); q(3, 4, 9, 14); }
+      for (let i = 0; i < 64 && o + i < data.length; i++) out[o + i] = data[o + i] ^ (((X[i >> 2] + S[i >> 2]) >>> ((i & 3) * 8)) & 255);
+    }
+    return out;
+  }
+  function poly1305(key, msg) {
+    const r = leNum(key.subarray(0, 16)) & 0x0ffffffc0ffffffc0ffffffc0fffffffn, p = 2n ** 130n - 5n;
+    let a = 0n;
+    for (let i = 0; i < msg.length; i += 16) { const b = msg.subarray(i, i + 16); a = ((a + leNum(b) + (1n << BigInt(b.length * 8))) * r) % p; }
+    return leBytes((a + leNum(key.subarray(16, 32))) & (2n ** 128n - 1n), 16);
+  }
+  function aeadTag(key, nonce, aad, ct) {
+    const pad = (n) => new Uint8Array((16 - (n % 16)) % 16), lens = new Uint8Array(16), dv = new DataView(lens.buffer);
+    dv.setUint32(0, aad.length, true); dv.setUint32(8, ct.length, true);
+    return poly1305(chacha20(key, nonce, 0, new Uint8Array(32)), cat(aad, pad(aad.length), ct, pad(ct.length), lens));
+  }
+  const HPKE = { kem: cat(enc.encode("KEM"), Uint8Array.of(0, 0x20)), suite: cat(enc.encode("HPKE"), Uint8Array.of(0, 0x20, 0, 1, 0, 3)) };
+  const lExtract = (suite, salt, label, ikm) => hmac(salt, cat(enc.encode("HPKE-v1"), suite, enc.encode(label), ikm));
+  function lExpand(suite, prk, label, info, L) {
+    const inf = cat(Uint8Array.of(L >> 8, L & 255), enc.encode("HPKE-v1"), suite, enc.encode(label), info);
+    let out = new Uint8Array(0), blk = new Uint8Array(0);
+    for (let c = 1; out.length < L; c++) { blk = hmac(prk, cat(blk, inf, Uint8Array.of(c))); out = cat(out, blk); }
+    return out.slice(0, L);
+  }
+  function hpkeContext(dh, encB, pkR, info) {
+    if (dh.every((x) => x === 0)) throw new Error("x25519");
+    const none = new Uint8Array(0), shared = lExpand(HPKE.kem, lExtract(HPKE.kem, none, "eae_prk", dh), "shared_secret", cat(encB, pkR), 32);
+    const ctx = cat(Uint8Array.of(0), lExtract(HPKE.suite, none, "psk_id_hash", none), lExtract(HPKE.suite, none, "info_hash", info));
+    const secret = lExtract(HPKE.suite, shared, "secret", none);
+    return { key: lExpand(HPKE.suite, secret, "key", ctx, 32), nonce: lExpand(HPKE.suite, secret, "base_nonce", ctx, 12) };
+  }
+  function hpkeSeal(pkR, skE, info, aad, pt) {
+    const encB = x25519(skE, BASE9), c = hpkeContext(x25519(skE, pkR), encB, pkR, info), ct = chacha20(c.key, c.nonce, 1, pt);
+    return { enc: encB, ct: cat(ct, aeadTag(c.key, c.nonce, aad, ct)) };
+  }
+  function hpkeOpen(skR, encB, info, aad, sealed) {
+    const c = hpkeContext(x25519(skR, encB), encB, x25519(skR, BASE9), info);
+    const ct = sealed.subarray(0, sealed.length - 16), tag = sealed.subarray(sealed.length - 16), want = aeadTag(c.key, c.nonce, aad, ct);
+    let d = sealed.length < 16 ? 1 : 0; for (let i = 0; i < 16; i++) d |= want[i] ^ tag[i];
+    return d ? null : chacha20(c.key, c.nonce, 1, ct);
+  }
 
   /* ================================================================
      Ed25519 through WebCrypto. Keys come from fixed seeds, so every
@@ -2155,6 +2662,30 @@
       el._raf = requestAnimationFrame(tick);
       // rAF pauses in background tabs; never leave a hash half-scrambled.
       el._tmo = setTimeout(fin, dur + 250);
+    });
+  }
+
+  // Wave: each character stays, then flickers, then settles into its new
+  // value, sweeping left to right — plaintext into ciphertext and back.
+  function wave(el, from, to, dur = 900) {
+    cancelAnimationFrame(el._raf); clearTimeout(el._tmo);
+    const A = [...from], B = [...to], n = Math.max(A.length, B.length);
+    if (RM) { el.textContent = to; return Promise.resolve(); }
+    return new Promise((res) => {
+      const t0 = performance.now();
+      const fin = () => { cancelAnimationFrame(el._raf); clearTimeout(el._tmo); el.textContent = to; res(); };
+      const tick = (now) => {
+        const p = (now - t0) / dur;
+        let s = "";
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * 0.62;
+          s += p < a ? A[i] ?? "" : p < a + 0.3 ? (A[i] === "\n" ? "\n" : B64[(Math.random() * 64) | 0]) : B[i] ?? "";
+        }
+        el.textContent = s;
+        if (p < 1) el._raf = requestAnimationFrame(tick); else fin();
+      };
+      el._raf = requestAnimationFrame(tick);
+      el._tmo = setTimeout(fin, dur + 300);
     });
   }
 
@@ -2665,7 +3196,402 @@
   }
 
   /* ================================================================
-     §3 · Discourse — a live room: signed events, freshness classes,
+     §3 · Mail — a recipient-signed card, a signed letter, HPKE, and an
+     opaque packet through two relays. Reproduces agent-mail/1.0 vectors.
+     ================================================================ */
+  async function mail() {
+    const NOW = 1790726400000, DAY = 86400000, INFO = enc.encode("agent-mail/1.0");
+    const HOST = { relay: "https://relay.example", mirror: "https://mirror.example" };
+    const MBX = b64u(Uint8Array.from({ length: 16 }, (_, i) => i)), THREAD = b64u(Uint8Array.from({ length: 16 }, (_, i) => 48 + i));
+    const SK = seed(9), EPH = { original: seed(11), reencrypted: seed(12) };
+    const VEC = {
+      letter: "8cOmSgLksmBdFI5hesUw0Hgm19VqnOieS1jECULjZDY",
+      original: "vV5GZriJvTTwIQ95ZH-l4ImCHWYqpTz8wQ2gobDLxzM",
+      reencrypted: "lnYJOEsXZd6jcIy6QW_CznDWBTf8UjhAnwFRBsHp1gE",
+    };
+    const V_SUBJ = "A private question / 私信", V_BODY = "Can we compare our evidence?\n我们可以核对证据吗？";
+    const ATT = { media_type: "application/octet-stream", name: "evidence.bin", data: b64u(Uint8Array.of(0, 1, 254, 255)) };
+    const O = { trunc: 44, inline: 64 };
+    const [snd, rcp] = await Promise.all([signerFromSeed(seed(7)), signerFromSeed(seed(8))]);
+    const card = await seal(rcp, {
+      protocol: "agent-mail/1.0", type: "mailbox.publish", actor: rcp.id, created_at: NOW, nonce: 100,
+      payload: { mailbox_id: MBX, expires_at: NOW + DAY, receive_until: NOW + 2 * DAY, public_key: b64u(x25519(SK, BASE9)), routes: [HOST.relay, HOST.mirror], max_packet_bytes: 65536 },
+    });
+    const cp = card.event.payload, mb = short(MBX, 4, 4);
+    const stage = $("#mlStage"), wiresEl = $("#mlWires"), flyEl = $("#mlFly"), sheet = $("#mlSheet"), subjEl = $("#mlSubj"), bodyEl = $("#mlBody");
+    const cipherEl = $("#mlCipher"), stampEl = $("#mlSeal"), inboxEl = $("#mlInbox"), seenEl = $("#mlSeen"), steps = $$("#mlSteps .step"), inspEl = $("#mlInsp");
+    const box = (r) => $(`.rl[data-r="${r}"]`, stage);
+    const sAv = identicon(snd.id), rAv = identicon(rcp.id);
+    const ENV = `<svg viewBox="0 0 16 12" width="16" height="12"><rect x=".7" y=".7" width="14.6" height="10.6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.2 1.5L8 6.6l6.8-5.1" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="7.6" r="1.8" fill="#c13527"/></svg>`;
+    const CLIP = `<svg class="ic" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.3 8.3a1.7 1.7 0 0 1-2.4-2.4l7.6-7.6"/></svg>`;
+    const NS = "http://www.w3.org/2000/svg", wire = {};
+    ["s-relay", "s-mirror", "relay-r", "mirror-r"].forEach((k) => { wire[k] = wiresEl.appendChild(document.createElementNS(NS, "path")); });
+    $("#mlSAv").innerHTML = sAv; $("#mlRAv").innerHTML = rAv;
+    $("#mlSId").textContent = shortDid(snd.id); $("#mlRId").textContent = shortDid(rcp.id);
+    $("#mlTo").textContent = shortDid(rcp.id); $("#mlTo").title = rcp.id;
+    $("#mlAddr").innerHTML = `<span class="u-d">did:agent:</span>${rcp.id.slice(10)}<span class="u-p">/mail/</span><span class="u-m">${MBX}</span><span class="u-q">?route=${HOST.relay}&amp;route=${HOST.mirror}</span>`;
+    let S, busy = false, seen = false;
+
+    function fresh() {
+      S = { letter: null, lsubj: null, lbody: null, pin: null, sent: new Set(), used: new Set(), q: { relay: [], mirror: [] }, seq: { relay: 0, mirror: 0 }, clock: NOW + 800, inbox: [], accepted: new Map(), out: [], view: [], cur: 0, say: null, dec: null, seen: null, fb: 0 };
+      S.view[0] = { t: "ml.i.card", s: `GET ${HOST.relay}/v1/mailboxes/${mb}/card`, html: jsonHTML(card, O), marks: ["hash", "event.actor", "event.nonce", "event.payload.public_key", "event.payload.routes"] };
+    }
+    const tick = () => (S.clock += 600 + ((Math.random() * 900) | 0));
+    const same = () => !!S.letter && S.lsubj === subjEl.value && S.lbody === bodyEl.value;
+    const nextNonce = () => (S.letter ? S.letter.event.nonce + 1 : 200);
+    function letterEvent(subj, body, nonce) {
+      const payload = { to: rcp.id, expires_at: NOW + DAY + 1000, thread_id: THREAD };
+      if (subj) payload.subject = subj;
+      payload.parts = [{ media_type: "text/plain", data: b64u(enc.encode(body)) }, ATT];
+      return { protocol: "agent-mail/1.0", type: "mail.message", actor: snd.id, created_at: NOW, nonce, payload };
+    }
+    // Hash and signature have fixed lengths, so a draft's size is exact before signing.
+    const draftSize = () => enc.encode(jcs(same() ? S.letter : { hash: "x".repeat(43), event: letterEvent(subjEl.value, bodyEl.value, nextNonce()), signature: "x".repeat(86) })).length;
+    function frame(letter) {
+      const json = enc.encode(jcs(letter)), n = json.length, pt = new Uint8Array(1024 * Math.ceil((4 + n) / 1024));
+      new DataView(pt.buffer).setUint32(0, n); pt.set(json, 4);
+      return { pt, n };
+    }
+
+    /* ---------- view helpers ---------- */
+    function fbar(n) {
+      const f = 1024 * Math.ceil((4 + n) / 1024), tr = $("#mlTrack");
+      S.fb = n;
+      $(".fb-len", tr).style.width = 400 / f + "%";
+      $(".fb-json", tr).style.width = (n * 100) / f + "%";
+      $$(".fb-tick", tr).forEach((x) => x.remove());
+      for (let k = 1; k < f / 1024; k++) { const i = document.createElement("i"); i.className = "fb-tick"; i.style.left = (k * 102400) / f + "%"; tr.appendChild(i); }
+      $("#mlFcap").innerHTML = t("ml.fcap", { n, p: f - 4 - n, f, c: f + 16 });
+    }
+    function mode() {
+      const m = $("#mlMode"), vec = Ed.ok && (same() ? S.letter.hash === VEC.letter : !S.letter && subjEl.value === V_SUBJ && bodyEl.value === V_BODY);
+      m.className = "stamp ml-mode" + (vec ? " ok" : "");
+      m.textContent = t(!Ed.ok ? "ml.m.sim" : vec ? "ml.m.vec" : "ml.m.yours");
+    }
+    function acts() {
+      $$("#mlActs button").forEach((b) => { b.disabled = busy || (b.dataset.a === "mirror" && !(same() && S.sent.has(S.letter.hash))); });
+      subjEl.readOnly = bodyEl.readOnly = busy;
+    }
+    function lid() {
+      const el = $("#mlLid");
+      el.title = same() ? S.letter.hash : "";
+      el.textContent = same() ? short(S.letter.hash, 6, 4) : S.letter ? t("ml.lid.none") : "—";
+      $("#mlSent").textContent = same() && S.sent.has(S.letter.hash) ? t("ml.sent") : "";
+    }
+    const pinTag = () => { $("#mlPin").textContent = S.pin ? t("ml.pin", { n: S.pin.nonce }) : ""; };
+    const keyLine = () => { $("#mlKey").textContent = t("ml.key", { n: card.event.nonce, k: short(cp.public_key, 6, 4) }); };
+    function say(key, vars) { S.say = key ? [key, vars] : null; $("#mlSay").innerHTML = key ? `<span>${t(key, vars)}</span>` : ""; }
+    function decide(kind) {
+      S.dec = kind;
+      const set = (d, cls, key) => { const el = $(`#mlDec [data-d="${d}"]`); el.className = "dc" + (cls ? " " + cls : ""); $("b", el).textContent = key ? t(key) : "—"; };
+      if (!kind) { set("valid"); set("acc"); set("auth"); return; }
+      if (kind === "bad") { set("valid", "bad", "ml.v.no"); set("acc", "bad", "ml.v.quar"); set("auth"); return; }
+      set("valid", "ok", "ml.v.yes");
+      set("acc", kind === "new" ? "ok" : "info", kind === "new" ? "ml.v.new" : "ml.v.dup");
+      set("auth", "warn", "ml.v.never");
+    }
+    function rows(route) {
+      const q = S.q[route];
+      $(".rl-q", box(route)).innerHTML = q.length
+        ? q.slice().reverse().map((r) => { const h = `<li class="${r.state === "deleted" ? "del" : r.state === "mut" ? "mut" : ""}${r.nw ? " nw" : ""}" data-seq="${r.seq}"><span class="sq">#${r.seq}</span><code title="${r.packet_id}">${short(r.packet_id, 6, 4)}</code><span class="s">${t("ml.q." + r.state)}</span></li>`; r.nw = false; return h; }).join("")
+        : `<li class="empty">${t("ml.q.empty")}</li>`;
+    }
+    function seenSet(packet, len) {
+      S.seen = packet ? [packet, len] : null;
+      const set = (k, v) => { $(`[data-s="${k}"]`, seenEl).textContent = v; };
+      if (!packet) { ["mbx", "card", "exp", "size", "net"].forEach((k) => set(k, "—")); seenEl.classList.remove("on", "flash"); return; }
+      set("mbx", short(packet.header.mailbox_id, 6, 4)); set("card", short(packet.header.card_hash, 6, 4));
+      set("exp", new Date(packet.header.expires_at).toISOString().slice(0, 16).replace("T", " "));
+      set("size", len + " B"); set("net", t("ml.net.v"));
+    }
+    function renderItem(it) {
+      const el = it.el;
+      el.className = "ib" + (it.kind === "q" ? " q" : "") + (it.hot ? " hot" : "");
+      if (it.kind === "open") el.innerHTML = `<div class="ib-h"><span class="gl">·</span><b>packet ${short(it.pid, 6, 4)}</b><span class="ib-st">${t("ml.ib.open")}</span></div><div class="ib-b ct"></div>`;
+      else if (it.kind === "q") el.innerHTML = `<div class="ib-h"><span class="gl">✕</span><b>packet ${short(it.pid, 6, 4)}</b><span class="ib-st bad">${t("ml.ib.q")}</span></div><div class="ib-b">${esc(t("ml.ib.qd", { why: it.why }))}</div>`;
+      else el.innerHTML = `<div class="ib-h"><span class="av">${sAv}</span><b>${shortDid(it.from)}</b>${it.n > 1 ? `<span class="ib-n">${t("ml.ib.n", { n: it.n })}</span>` : ""}<span class="ib-st ok">${t("ml.ib.ok")}</span></div>${it.subj ? `<div class="ib-s">${esc(it.subj)}</div>` : ""}<div class="ib-b">${esc(it.body)}</div>${it.atts.map((a) => `<div class="ib-a">${CLIP} ${esc(a)}</div>`).join("")}`;
+    }
+    function inbox() {
+      $(".ib-empty", inboxEl)?.remove();
+      if (!S.inbox.length) inboxEl.innerHTML = `<p class="ib-empty">${t("ml.empty")}</p>`;
+    }
+    function hot(it) {
+      S.inbox.forEach((x) => { x.hot = x === it; x.el.classList.toggle("hot", x.hot); });
+      inboxEl.scrollTop = 0;
+    }
+    function hexdump(pt, n) {
+      const hx = (b) => b.toString(16).padStart(2, "0"), last = pt.length - 16, end = Math.floor((4 + n) / 16) * 16;
+      const row = (o) => {
+        let h = "", a = "";
+        for (let i = o; i < o + 16; i++) {
+          h += `<span class="${i < 4 ? "j-n" : i < 4 + n ? "j-s" : "hx-z"}">${hx(pt[i])}</span>${i % 16 === 7 ? "  " : " "}`;
+          a += pt[i] >= 32 && pt[i] < 127 ? String.fromCharCode(pt[i]) : ".";
+        }
+        return `<span class="ln"><span class="j-k">${o.toString(16).padStart(4, "0")}</span>  ${h} <span class="hx-a">${esc(a)}</span></span>`;
+      };
+      let html = `<span class="hx-l"><i style="background:var(--amber)"></i>I2OSP(${n}, 4)<i style="background:var(--moss)"></i>JCS(letter) · ${n} B<i style="background:var(--line-strong)"></i>${t("ml.hex.pad")} · ${pt.length - 4 - n} B</span>`, prev = -16;
+      [...new Set([0, 16, 32, 48, end - 16, end, last].map((o) => Math.min(Math.max(o, 0), last)))].sort((a, b) => a - b).forEach((o) => {
+        if (o !== prev + 16) html += `<span class="ln hx-z">  ⋮</span>`;
+        html += row(o); prev = o;
+      });
+      return html;
+    }
+
+    /* ---------- steps · inspector ---------- */
+    function show(i) {
+      S.cur = i;
+      steps.forEach((s, j) => s.classList.toggle("cur", j === i));
+      const s = steps[i], o = S.out[i], v = S.view[i];
+      $("#mlCur").innerHTML = `<div class="lbl">${t("dg.stepof", { n: i + 1 })}</div><h4>${$("h4", s).innerHTML}</h4><p>${$("p", s).innerHTML}</p>${o ? `<div class="out ${o[0]}">${o[0] === "bad" ? "✗" : o[0] === "warn" ? "!" : "✓"} ${t(o[1], o[2])}</div>` : ""}`;
+      $("#mlInspT").textContent = v ? t(v.t) : "";
+      $("#mlInspS").textContent = v ? v.s : "";
+      inspEl.classList.toggle("hex", !!(v && v.hex));
+      inspEl.innerHTML = v ? (v.hex ? hexdump(v.pt, v.n) : v.html) : `<span class="ln hx-z">${esc(t("ml.i.wait"))}</span>`;
+      if (v && v.marks) mark(inspEl, v.marks, "hl");
+      if (v && v.mut) mark(inspEl, v.mut, v.bad ? "hl-bad" : "hl-mut");
+      inspEl.scrollTop = 0;
+    }
+    function go(i) { steps[i].classList.add("run"); show(i); }
+    function done(i, cls, key, vars) { steps[i].classList.remove("run", "ok", "warn", "bad"); steps[i].classList.add(cls); S.out[i] = [cls, key, vars]; show(i); }
+
+    /* ---------- stage: wires · flights ---------- */
+    function wires() {
+      const st = stage.getBoundingClientRect();
+      wiresEl.setAttribute("width", st.width); wiresEl.setAttribute("height", st.height);
+      const R = (el) => { const r = el.getBoundingClientRect(); return { l: r.left - st.left, t: r.top - st.top, r: r.right - st.left, b: r.bottom - st.top, x: (r.left + r.right) / 2 - st.left, y: (r.top + r.bottom) / 2 - st.top }; };
+      const sc = R($(".ml-snd", stage)), sh = R(sheet), rc = R($(".ml-rcp", stage)), ib = R(inboxEl);
+      const v = R(box("relay")).l < sc.r; // stacked on narrow screens
+      const c = (x1, y1, x2, y2) => v ? `M${x1} ${y1}C${x1} ${(y1 + y2) / 2} ${x2} ${(y1 + y2) / 2} ${x2} ${y2}` : `M${x1} ${y1}C${(x1 + x2) / 2} ${y1} ${(x1 + x2) / 2} ${y2} ${x2} ${y2}`;
+      ["relay", "mirror"].forEach((k) => {
+        const b = R(box(k));
+        wire["s-" + k].setAttribute("d", v ? c(sc.x, sc.b, b.x, b.t) : c(sc.r, sh.t + 70, b.l, b.y));
+        wire[k + "-r"].setAttribute("d", v ? c(b.x, b.b, rc.x, rc.t) : c(b.r, b.y, rc.l, ib.t + 44));
+      });
+    }
+    const wiresOff = () => Object.values(wire).forEach((w) => w.classList.remove("on"));
+    function fly(key, html, cls, reverse, dur = 760) {
+      const p = wire[key];
+      Object.values(wire).forEach((w) => w.classList.toggle("on", w === p));
+      if (RM) return Promise.resolve();
+      flyEl.className = "ml-fly " + cls; flyEl.innerHTML = html;
+      const L = p.getTotalLength(), w = flyEl.offsetWidth, h = flyEl.offsetHeight;
+      const place = (q) => { const pt = p.getPointAtLength((reverse ? 1 - q : q) * L); flyEl.style.transform = `translate(${pt.x - w / 2}px, ${pt.y - h / 2}px)`; };
+      place(0); flyEl.classList.add("on");
+      return new Promise((res) => {
+        const t0 = performance.now();
+        let raf = 0, tmo = 0;
+        const fin = () => { cancelAnimationFrame(raf); clearTimeout(tmo); place(1); flyEl.classList.remove("on"); res(); };
+        const step = (now) => { const x = Math.min(1, (now - t0) / dur); place(x < 0.5 ? 2 * x * x : 1 - (2 - 2 * x) ** 2 / 2); if (x < 1) raf = requestAnimationFrame(step); else fin(); };
+        raf = requestAnimationFrame(step);
+        tmo = setTimeout(fin, dur + 400); // rAF pauses in background tabs
+      });
+    }
+    function flash(el) { el.classList.add("on"); setTimeout(() => el.classList.remove("on"), 900); }
+    async function sealSheet(ct) {
+      const k = $(".sh-row .k", sheet).textContent, from = `${k} ${shortDid(rcp.id)}\n${subjEl.value}\n\n${bodyEl.value}`;
+      cipherEl.style.bottom = $(".sh-foot", sheet).offsetHeight + "px";
+      cipherEl.textContent = from;
+      sheet.classList.add("sealed");
+      const w = wave(cipherEl, from, ct.slice(0, 900), 1000);
+      await sleep(720);
+      stampEl.classList.remove("pressed"); void stampEl.offsetWidth; stampEl.classList.add("pressed");
+      await w; await sleep(420);
+    }
+    const unsealSheet = () => { sheet.classList.remove("sealed"); stampEl.classList.remove("pressed"); };
+
+    /* ---------- protocol roles ---------- */
+    function relayAccept(route, packet, id) {
+      // Section 7.1: shape, route membership, current card, and deadlines. No key, no decryption.
+      const h = packet.header, now = tick();
+      const ok = h.mailbox_id === cp.mailbox_id && cp.routes.includes(HOST[route]) && h.card_hash === card.hash && now < cp.expires_at && now < h.expires_at && h.expires_at <= Math.min(cp.receive_until, now + 30 * DAY + 300000);
+      if (!ok) throw new Error("relay rejected the packet");
+      const rec = { packet_id: id, packet: clone(packet), accepted_at: now, seq: ++S.seq[route], state: "stored", nw: true };
+      S.q[route].push(rec);
+      return rec;
+    }
+    function tamper(rec, kind) {
+      if (kind === "flip") { const ct = unb64u(rec.packet.ciphertext); ct[9] ^= 0x04; rec.packet.ciphertext = b64u(ct); rec.mut = ["packet.ciphertext"]; }
+      else { rec.packet.header.expires_at += 3600000; rec.mut = ["packet.header.expires_at"]; }
+      rec.packet_id = b64u(sha3(enc.encode(jcs(rec.packet)))); // a careful forger recomputes the ID
+      rec.state = "mut";
+    }
+    function openRecord(rec) {
+      // Section 7.2 steps 1–2: bindings against the retained card, then HPKE, framing, and canonical JSON.
+      const p = rec.packet, h = p.header;
+      if (b64u(sha3(enc.encode(jcs(p)))) !== rec.packet_id) return { why: "packet_id" };
+      if (h.card_hash !== card.hash || h.mailbox_id !== cp.mailbox_id || h.expires_at > cp.receive_until) return { why: "card" };
+      const pt = hpkeOpen(SK, unb64u(p.enc), INFO, enc.encode(jcs(h)), unb64u(p.ciphertext));
+      if (!pt) return { why: "aead" };
+      const n = new DataView(pt.buffer).getUint32(0);
+      if (n < 1 || 4 + n > pt.length || pt.length !== 1024 * Math.ceil((4 + n) / 1024) || pt.subarray(4 + n).some((b) => b)) return { why: "framing" };
+      try {
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(pt.subarray(4, 4 + n)), letter = JSON.parse(text);
+        return jcs(letter) === text ? { ok: true, letter, f: pt.length } : { why: "noncanonical_json" };
+      } catch (e) { return { why: "strict_json" }; }
+    }
+
+    /* ---------- the pipeline ---------- */
+    async function pipeline(kind) {
+      const route = kind === "mirror" ? "mirror" : "relay", host = HOST[route].slice(8);
+      steps.forEach((s) => s.classList.remove("run", "ok", "warn", "bad", "skip"));
+      S.out = []; S.view = []; decide(null); say(null);
+
+      // 1 · Pin the card
+      go(0);
+      await fly("s-" + route, `<span class="av">${rAv}</span>card #${card.event.nonce}`, "card", true, 640);
+      const cv = await verifyEnvelope(card), again = !!S.pin;
+      const pinOk = cv.hashOk && cv.sigOk && card.event.actor === rcp.id && cp.routes.length > 0 && NOW < cp.expires_at && (!S.pin || card.event.nonce > S.pin.nonce || card.hash === S.pin.hash);
+      S.pin = { nonce: card.event.nonce, hash: card.hash }; pinTag();
+      S.view[0] = { t: "ml.i.card", s: `GET ${HOST[route]}/v1/mailboxes/${mb}/card`, html: jsonHTML(card, O), marks: ["hash", "event.actor", "event.nonce", "event.payload.public_key", "event.payload.routes"] };
+      done(0, pinOk ? "ok" : "bad", again ? "ml.o1again" : "ml.o1", { h: short(card.hash, 6, 4), n: card.event.nonce, r: cp.routes.length });
+      if (!pinOk) return;
+      await sleep(260);
+
+      // 2 · Sign the letter (or reuse the retained one)
+      go(1);
+      let reused = true;
+      if (!same()) {
+        const subj = subjEl.value, body = bodyEl.value;
+        S.letter = await seal(snd, letterEvent(subj, body, nextNonce()));
+        S.lsubj = subj; S.lbody = body; reused = false;
+      } else reused = S.sent.has(S.letter.hash);
+      const L = S.letter;
+      if (!reused) { lid(); await scramble($("#mlLid"), short(L.hash, 6, 4), 520); } else lid();
+      S.view[1] = { t: "ml.i.letter", s: `mail.message · nonce ${L.event.nonce}`, html: jsonHTML(L, O), marks: ["hash", "event.payload.to", "event.payload.expires_at"] };
+      done(1, "ok", reused ? "ml.o2same" : "ml.o2", { h: short(L.hash, 6, 4), n: L.event.nonce });
+      mode(); acts();
+      await sleep(260);
+
+      // 3 · Frame and pad
+      go(2);
+      const fr = frame(L);
+      fbar(fr.n);
+      S.view[2] = { t: "ml.i.frame", s: `${fr.pt.length} B`, hex: true, pt: fr.pt, n: fr.n };
+      show(2);
+      await sleep(480);
+      done(2, "ok", "ml.o3", { n: fr.n, f: fr.pt.length, p: fr.pt.length - 4 - fr.n });
+      await sleep(220);
+
+      // 4 · Seal with HPKE — vector ephemerals only where the vectors define them
+      go(3);
+      const vname = Ed.ok && L.hash === VEC.letter ? (kind === "send" && !S.used.has("original") ? "original" : kind === "mirror" && !S.used.has("reencrypted") ? "reencrypted" : null) : null;
+      if (vname) S.used.add(vname);
+      const eph = vname ? EPH[vname] : crypto.getRandomValues(new Uint8Array(32));
+      const header = { protocol: "agent-mail/1.0", mailbox_id: MBX, card_hash: card.hash, expires_at: L.event.payload.expires_at };
+      const sealed = hpkeSeal(unb64u(cp.public_key), eph, INFO, enc.encode(jcs(header)), fr.pt);
+      const packet = { header, enc: b64u(sealed.enc), ciphertext: b64u(sealed.ct) }, pid = b64u(sha3(enc.encode(jcs(packet))));
+      const vecOk = !!vname && pid === VEC[vname];
+      S.view[3] = { t: "ml.i.packet", s: 'info "agent-mail/1.0" · aad JCS(header)', html: jsonHTML(packet, O), marks: ["header"] };
+      show(3);
+      await sealSheet(packet.ciphertext);
+      done(3, "ok", vecOk ? "ml.o4vec" : "ml.o4", { c: sealed.ct.length, id: short(pid, 6, 4), v: vname });
+
+      // 5 · Relay accepts
+      go(4);
+      await fly("s-" + route, `${ENV}${sealed.ct.length} B`, "pkt", false, 800);
+      unsealSheet();
+      const rec = relayAccept(route, packet, pid);
+      S.sent.add(L.hash); lid(); acts();
+      flash(box(route)); rows(route); seenSet(packet, sealed.ct.length);
+      seenEl.classList.add("on"); seenEl.classList.remove("flash"); void seenEl.offsetWidth; seenEl.classList.add("flash");
+      S.view[4] = { t: "ml.i.result", s: `POST /v1/mailboxes/${mb}/packets → 202`, html: jsonHTML({ packet_id: pid, accepted_at: rec.accepted_at }), marks: ["packet_id"] };
+      done(4, "ok", "ml.o5", { r: host, id: short(pid, 6, 4) });
+      if (kind === "flip" || kind === "extend") {
+        await sleep(700);
+        tamper(rec, kind); rows(route); flash(box(route));
+        done(4, "warn", "ml.o5mut", { r: host, f: kind === "flip" ? "ciphertext" : "header.expires_at" });
+      }
+      await sleep(380);
+
+      // 6 · Owner lists and opens
+      go(5);
+      await fly(route + "-r", `${ENV}seq ${rec.seq}`, "pkt", false, 800);
+      const it = { kind: "open", pid: rec.packet_id, el: document.createElement("div"), n: 1 };
+      S.inbox.unshift(it); inbox(); inboxEl.prepend(it.el); renderItem(it); hot(it);
+      const cipher = rec.packet.ciphertext.slice(0, 200);
+      $(".ib-b", it.el).textContent = cipher;
+      const o = openRecord(rec);
+      S.view[5] = { t: "ml.i.record", s: `GET /v1/mailboxes/${mb}/packets · owner JWT`, html: jsonHTML({ packet_id: rec.packet_id, packet: rec.packet, accepted_at: rec.accepted_at, seq: rec.seq }, O), marks: ["seq"], mut: rec.mut, bad: !o.ok };
+      show(5);
+      await sleep(420);
+      if (!o.ok) {
+        it.kind = "q"; it.why = o.why; renderItem(it);
+        done(5, "bad", kind === "extend" ? "ml.o6ext" : "ml.o6flip", {});
+        steps[6].classList.add("skip");
+        decide("bad"); say(kind === "extend" ? "ml.s.ext" : "ml.s.flip");
+        return;
+      }
+      const E = o.letter.event, P = E.payload;
+      Object.assign(it, { kind: "letter", lid: o.letter.hash, from: E.actor, subj: P.subject || "", body: "", atts: [] });
+      P.parts.forEach((x) => {
+        if (x.media_type.startsWith("text/")) it.body += (it.body ? "\n" : "") + new TextDecoder().decode(unb64u(x.data));
+        else it.atts.push(`${x.name || "part"} · ${unb64u(x.data).length} B · ${x.media_type}`);
+      });
+      renderItem(it);
+      const bEl = $(".ib-b", it.el), sEl = $(".ib-s", it.el);
+      bEl.classList.add("ct");
+      await Promise.all([wave(bEl, cipher, it.body, 950), sEl ? wave(sEl, cipher.slice(60, 60 + [...it.subj].length), it.subj, 700) : 0]);
+      bEl.classList.remove("ct");
+      done(5, "ok", "ml.o6", { s: rec.seq, f: o.f });
+      await sleep(260);
+
+      // 7 · Verify, deduplicate, persist, delete
+      go(6);
+      const v = await verifyEnvelope(o.letter), now = S.clock;
+      const valid = v.hashOk && v.sigOk && P.to === rcp.id && P.to === card.event.actor && P.expires_at === rec.packet.header.expires_at && E.created_at <= now + 300000 && E.created_at < P.expires_at && P.expires_at <= E.created_at + 30 * DAY && now < P.expires_at;
+      if (!valid) { it.kind = "q"; it.why = "signature"; renderItem(it); done(6, "bad", "ml.o7bad", {}); decide("bad"); return; }
+      const prev = S.accepted.get(o.letter.hash);
+      await sleep(300);
+      if (prev) { it.el.remove(); S.inbox.splice(S.inbox.indexOf(it), 1); prev.n++; renderItem(prev); hot(prev); }
+      else { S.accepted.set(o.letter.hash, it); hot(it); }
+      rec.state = "deleted"; rows(route);
+      S.view[6] = { t: "ml.i.inbox", s: "(recipient, letter ID)", html: jsonHTML({ recipient: rcp.id, letter_id: o.letter.hash, from: E.actor, state: prev ? "duplicate" : "accepted", transport: `DELETE /v1/mailboxes/${MBX}/packets/${rec.packet_id} → 204` }, O), marks: ["letter_id", "state"] };
+      done(6, "ok", prev ? "ml.o7dup" : "ml.o7", { h: short(o.letter.hash, 6, 4) });
+      decide(prev ? "dup" : "new");
+      say(!Ed.ok ? "ml.s.sim" : vecOk ? (vname === "original" ? "ml.s.vec" : "ml.s.vec2") : prev ? "ml.s.dup" : "ml.s.new", { id: short(pid, 6, 4), n: E.nonce, f: fr.pt.length });
+    }
+
+    async function run(kind) {
+      if (busy) return;
+      busy = true; acts();
+      try { await pipeline(kind); } finally { busy = false; wiresOff(); acts(); }
+    }
+    function reset() {
+      fresh();
+      subjEl.value = V_SUBJ; bodyEl.value = V_BODY;
+      unsealSheet(); inboxEl.innerHTML = ""; inbox(); rows("relay"); rows("mirror"); seenSet(null);
+      steps.forEach((s) => s.classList.remove("run", "ok", "warn", "bad", "skip"));
+      lid(); pinTag(); decide(null); say(null); fbar(draftSize()); mode(); acts(); show(0);
+    }
+    function onDraft() {
+      fbar(draftSize()); lid(); mode(); acts();
+      if (!same() && !busy) say("ml.s.draft", { n: nextNonce() });
+    }
+
+    subjEl.addEventListener("input", onDraft);
+    bodyEl.addEventListener("input", onDraft);
+    $$("#mlActs button").forEach((b) => b.addEventListener("click", async () => {
+      if (busy) return;
+      if (b.dataset.a === "reset") { reset(); await run("send"); } else run(b.dataset.a);
+    }));
+    steps.forEach((el, j) => {
+      const peek = () => { if (!busy) show(j); };
+      el.addEventListener("mouseenter", peek); el.addEventListener("focus", peek); el.addEventListener("click", peek);
+    });
+    langListeners.push(() => {
+      show(S.cur); if (S.say) say(...S.say);
+      decide(S.dec); pinTag(); keyLine(); lid(); mode(); fbar(S.fb); rows("relay"); rows("mirror");
+      if (S.seen) seenSet(...S.seen);
+      if (!busy) { S.inbox.forEach(renderItem); inbox(); }
+    });
+    reset(); keyLine();
+    wires();
+    new ResizeObserver(wires).observe(stage);
+    onVisible($("#ml"), (vis) => { if (vis && !seen) { seen = true; run("send"); } }, { threshold: 0.3 });
+  }
+
+  /* ================================================================
+     §5 · Discourse — a live room: signed events, freshness classes,
      a hash chain, head races, forgery, and offline verification.
      ================================================================ */
   async function discourse() {
@@ -3236,7 +4162,7 @@
   }
 
   /* ================================================================
-     §6 · SDK tabs · MCP agent loop
+     §7 · SDK tabs · MCP agent loop
      ================================================================ */
   function sdks() {
     const CODE = {
@@ -3348,7 +4274,7 @@ profile = materialize_profile(envelope)`,
     addEventListener("scroll", () => { if (tk) return; tk = requestAnimationFrame(() => { tk = 0; const h = document.documentElement; prog.style.transform = `scaleX(${h.scrollTop / Math.max(1, h.scrollHeight - h.clientHeight)})`; }); }, { passive: true });
     const links = $$("#nav a");
     const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) links.forEach((a) => a.classList.toggle("on", a.getAttribute("href") === "#" + e.target.id)); }), { rootMargin: "-45% 0px -50% 0px" });
-    ["stack", "delegation", "discourse", "knowledge", "principles", "sdks"].forEach((id) => io.observe($("#" + id)));
+    ["stack", "delegation", "mail", "knowledge", "discourse", "principles", "sdks"].forEach((id) => io.observe($("#" + id)));
     const rv = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); rv.unobserve(e.target); } }), { rootMargin: "0px 0px -8% 0px" });
     $$(".rv").forEach((el, i) => { el.style.transitionDelay = (i % 3) * 60 + "ms"; rv.observe(el); });
     const mb = $("#menuBtn"), mn = $("#mnav");
@@ -3368,7 +4294,7 @@ profile = materialize_profile(envelope)`,
   chrome();
   if (pref === "zh") applyLang("zh");
   crackle(); stack(); sdks(); mcpLoop();
-  Desk.init(); delegation(); discourse(); knowledge();
+  Desk.init(); delegation(); mail(); knowledge(); discourse();
 })();
   </script>
 </body>
