@@ -64,7 +64,7 @@ const makeCard = (changes: any = {}, nonce = 400, at = now) =>
   );
 const makeMessage = (changes: any = {}) => ({
   ...structuredClone(e.message),
-  message_id: m.newMailMessageId(),
+  message_id: m.newMailId(),
   ...changes,
 });
 let nextNonce = 1000;

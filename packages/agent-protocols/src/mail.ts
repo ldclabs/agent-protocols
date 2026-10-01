@@ -340,9 +340,6 @@ export function mailboxPublishEvent(
     clone(payload),
   );
 }
-export function newMailMessageId(): string {
-  return base64UrlEncode(nacl.randomBytes(32));
-}
 export function createMailMessage(
   actor: string,
   createdAt: number,
@@ -358,7 +355,7 @@ export function createMailMessage(
   );
   const message = {
     ...clone(payload),
-    message_id: newMailMessageId(),
+    message_id: newMailId(),
     from: actor,
     created_at: createdAt,
   };

@@ -120,7 +120,7 @@ export const MAIL_SCHEMA = {
       ],
       properties: {
         message_id: {
-          $ref: "#/$defs/hash32",
+          $ref: "#/$defs/id16",
         },
         from: {
           $ref: "#/$defs/agentId",
@@ -150,7 +150,7 @@ export const MAIL_SCHEMA = {
           maxLength: 1024,
         },
         in_reply_to: {
-          $ref: "#/$defs/hash32",
+          $ref: "#/$defs/id16",
         },
         reply_card: {
           $ref: "#/$defs/mailboxCardEnvelope",

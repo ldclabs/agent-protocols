@@ -64,7 +64,7 @@ def test_independent_random_keys_parts_and_sign_helpers():
     message = create_mail_message(SENDER.agent_id(), NOW, source)
     source['to'] = 'changed'
     assert message['to'] == OWNER and message['from'] == SENDER.agent_id()
-    assert len(mail._decode(message['message_id'])) == 32
+    assert len(mail._decode(message['message_id'])) == 16
     mail.validate_mail_message(message)
 
 
@@ -129,7 +129,7 @@ def test_keyring_old_secret_retention_and_prune():
 def test_reply_links_require_participants_and_thread():
     parent = ENVS['message']
     payload = {**parent, 'to': SENDER.agent_id(), 'in_reply_to': parent['message_id']}
-    reply = {**payload, 'from': OWNER, 'message_id': mail.new_mail_message_id()}
+    reply = {**payload, 'from': OWNER, 'message_id': mail.new_mail_id()}
     validate_mail_reply(reply, parent)
     for changes in ({'thread_id': new_mail_id()}, {'to': OWNER}, {'in_reply_to': ENVS['lower_nonce_message']['message_id']}):
         with pytest.raises(AgentProtocolError):

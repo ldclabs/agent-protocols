@@ -247,11 +247,6 @@ pub fn sign_card(
     validate_card(&serde_json::to_value(&envelope)?)?;
     Ok(envelope)
 }
-pub fn new_mail_message_id() -> Result<String> {
-    let mut bytes = [0; 32];
-    getrandom::fill(&mut bytes).map_err(|e| SdkError::Random(e.to_string()))?;
-    Ok(encode_bytes(&bytes))
-}
 pub fn create_mail_message(
     actor: &AgentId,
     created_at: i64,
@@ -269,7 +264,7 @@ pub fn create_mail_message(
             "message content overrides identity fields",
         ));
     }
-    fields.insert("message_id".into(), json!(new_mail_message_id()?));
+    fields.insert("message_id".into(), json!(random_id()?));
     fields.insert("from".into(), json!(actor));
     fields.insert("created_at".into(), json!(created_at));
     validate_message(&payload)

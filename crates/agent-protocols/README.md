@@ -174,7 +174,7 @@ creation time, nonce and header. Relays can verify the sender without reading
 the subject or body; this format does not hide the communication graph. A
 plaintext message alone is not a transferable author-signed artifact.
 
-`message_id` is a random 32-byte base64url identifier retained across retries;
+`message_id` is a random `id16` (16 bytes, base64url) retained across retries;
 `from`, original `created_at`, recipient, expiration, thread and parts are also
 immutable. The outer hash is the packet ID, not the logical message ID. Retries
 reuse the same packet on every route until it expires; only a card change needs

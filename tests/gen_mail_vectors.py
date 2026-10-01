@@ -470,10 +470,10 @@ def generate():
         'parts': [{'media_type': 'text/plain', 'data': b64('Can we compare our evidence?\n我们可以核对证据吗？'.encode())},
                   {'media_type': 'application/octet-stream', 'name': 'evidence.bin', 'data': b64(bytes([0, 1, 254, 255]))}],
     }
-    letter = {**message_content, 'message_id': b64(bytes([31]) * 32), 'from': sender.agent_id(), 'created_at': NOW}
+    letter = {**message_content, 'message_id': b64(bytes([31]) * 16), 'from': sender.agent_id(), 'created_at': NOW}
     messages = {'message': letter,
-                'lower_nonce_message': {**letter, 'message_id': b64(bytes([32]) * 32), 'created_at': NOW - DAY, 'subject': 'Earlier message, delivered later'},
-                'reply_message': {'message_id': b64(bytes([33]) * 32), 'from': owner, 'created_at': NOW,
+                'lower_nonce_message': {**letter, 'message_id': b64(bytes([32]) * 16), 'created_at': NOW - DAY, 'subject': 'Earlier message, delivered later'},
+                'reply_message': {'message_id': b64(bytes([33]) * 16), 'from': owner, 'created_at': NOW,
                     'to': sender.agent_id(), 'expires_at': NOW + DAY, 'thread_id': letter['thread_id'],
                     'in_reply_to': letter['message_id'], 'parts': [{'media_type': 'text/plain', 'data': b64(b'Received, thank you.')}]}}
     messages['conflicting_message'] = {**letter, 'subject': 'Different content with the same logical ID'}
@@ -506,7 +506,8 @@ def generate():
     for name in ['card', 'rotated_card', 'closed_card', 'original_packet']:
         sc(name, 'envelope', envelopes[name], True)
     sc('message', 'messagePayload', letter, True)
-    sc('message ID is not an id16', 'messagePayload', change(letter, ['message_id'], b64(bytes(16))), False)
+    sc('message ID is not an id16', 'messagePayload', change(letter, ['message_id'], b64(bytes(32))), False)
+    sc('parent reference is not an id16', 'messagePayload', change(letter, ['in_reply_to'], b64(bytes(32))), False)
     sc('missing sender', 'messagePayload', {k:v for k,v in letter.items() if k!='from'}, False)
     sc('packet payload', 'packetPayload', original['event']['payload'], True)
     sc('unknown packet member', 'packetEnvelope', {**original, 'sender': sender.agent_id()}, False)

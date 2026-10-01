@@ -98,7 +98,7 @@ def validate_mail_id(value: Any, *, size: int = 32, code: str = 'invalid_request
 
 
 def new_mail_id() -> str:
-    """Generate an independent random 16-byte mailbox or thread identifier."""
+    """Generate an independent random 16-byte mailbox, thread or message identifier."""
     return _b64(secrets.token_bytes(16))
 
 
@@ -161,15 +161,10 @@ def mailbox_publish_event(actor: str, created_at: int, nonce: int, payload: dict
     return create_event(MAIL_PROTOCOL, MAILBOX_PUBLISH, actor, created_at, nonce, copy.deepcopy(payload))
 
 
-def new_mail_message_id() -> str:
-    """A fresh 256-bit logical message ID, independent of delivery envelopes."""
-    return _b64(secrets.token_bytes(32))
-
-
 def create_mail_message(actor: str, created_at: int, payload: dict[str, Any]) -> dict[str, Any]:
     _require(isinstance(payload, dict) and not {'message_id', 'from', 'created_at'}.intersection(payload),
              'invalid_event', 'message content must not override generated identity fields')
-    message = {**copy.deepcopy(payload), 'message_id': new_mail_message_id(), 'from': actor, 'created_at': created_at}
+    message = {**copy.deepcopy(payload), 'message_id': new_mail_id(), 'from': actor, 'created_at': created_at}
     validate_mail_message(message)
     return message
 
@@ -466,7 +461,7 @@ __all__ = [
     'MAIL_PROTOCOL', 'MAILBOX_PUBLISH', 'MAIL_SUBMIT', 'MAIL_MAX_TTL_MS',
     'MAIL_FUTURE_SKEW_MS', 'MAIL_MAX_PACKET_BYTES', 'MAIL_SCHEMA',
     'MailEncryptionKey', 'new_mail_id', 'parse_mail_address', 'format_mail_address',
-    'mailbox_publish_event', 'create_mail_message', 'new_mail_message_id', 'validate_mail_message', 'mail_packet_aad',
+    'mailbox_publish_event', 'create_mail_message', 'validate_mail_message', 'mail_packet_aad',
     'sign_mail_event', 'mail_part', 'decode_mail_part',
     'validate_mail_schema', 'validate_mail_id', 'validate_mail_envelope', 'parse_mail_envelope',
     'validate_mailbox_card', 'validate_mail_reply',
