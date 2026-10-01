@@ -52,7 +52,7 @@
 - Rust verifies envelopes by re-serializing typed payloads, so any struct reachable from a signed event must round-trip exactly. Optional collections there are `Option<Vec<_>>` / `Option<BTreeMap<_, _>>` with `skip_serializing_if = "Option::is_none"`, never `is_empty`, and open objects keep unknown members via `#[serde(flatten)]`. `tests/typed_round_trip.rs` guards this.
 - TypeScript production code must run in Node, browsers, and Workers: no `node:*` imports or `Buffer` outside tests.
 - Production encryption always uses fresh randomness; deterministic keys and seeds belong only in tests and vector generators.
-- SDK versions in `packages/agent-protocols/package.json`, `crates/agent-protocols/Cargo.toml`, and `python/agent-protocols/pyproject.toml` must match. Releases are the owner's call: do not bump versions unless asked. A `v<version>` tag triggers `.github/workflows/publish-sdks.yml`. When the version changes, also update the SDK note in `docs/index.html` (English and `ZH`).
+- SDK versions in `packages/agent-protocols/package.json`, `crates/agent-protocols/Cargo.toml`, and `python/agent-protocols/pyproject.toml` must match. Releases are the owner's call: do not bump versions unless asked. A `v<version>` tag triggers `.github/workflows/publish-sdks.yml`. Change the version with `make version VERSION=X.Y.Z`, which also updates the SDK note in `docs/index.html` (English and `ZH`) and keeps each file's final newline.
 - Never print or commit credentials, tokens, or private keys. Test keys come from fixed, published seeds.
 
 ## Commands and verification
@@ -69,6 +69,7 @@ Run commands from the repository root. Install TypeScript dependencies with `pnp
 | Python tests                  | `.venv/bin/python -m pytest python/agent-protocols/tests`                                  |
 | Cross-language Mail interop   | `make test-mail-interop`                                                                   |
 | Regenerate Mail vectors       | `make mail-vectors`                                                                        |
+| Set the SDK version           | `make version VERSION=X.Y.Z`                                                               |
 | Landing page preview          | `python3 -m http.server 8899 --directory docs` (the `docs-site` launch config)             |
 
 - CI (`.github/workflows/test.yml`) runs clippy, Rust tests with all features, `pnpm -r test`, `pnpm -r build`, pytest, and the Mail interop test.

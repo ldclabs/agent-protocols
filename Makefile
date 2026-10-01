@@ -1,7 +1,7 @@
 BUILD_ENV := rust
 PYTHON ?= $(if $(wildcard .venv/bin/python),$(CURDIR)/.venv/bin/python,python3)
 
-.PHONY: lint fix test test-mail-interop mail-vectors
+.PHONY: lint fix test test-mail-interop mail-vectors version
 
 lint:
 	@cargo fmt
@@ -22,3 +22,7 @@ test-mail-interop:
 # Regenerate docs/protocols/agent-mail/1.0.vectors.json after a Mail wire change.
 mail-vectors:
 	@$(PYTHON) tests/gen_mail_vectors.py
+
+# Set the SDK version in all three manifests and the landing page note: make version VERSION=X.Y.Z
+version:
+	@$(PYTHON) scripts/set_version.py $(VERSION)
