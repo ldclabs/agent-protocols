@@ -4,7 +4,7 @@ export const MAIL_SCHEMA = {
   $id: "https://agent-protocols.dev/schemas/agent-mail/1.0.schema.json",
   title: "Agent Mail Protocol 1.0",
   description:
-    "Structural definitions for owner-signed cards, sender-signed encrypted submissions, plaintext messages and HTTP records. Signatures, sender/recipient/AAD binding, canonical encoding, time, size, sender policy, live submission nonces and logical message deduplication require semantic validation.",
+    "Structural definitions for owner-signed cards, sender-signed encrypted packets, plaintext messages and HTTP records. Signatures, sender/recipient/AAD binding, canonical encoding, time, size, sender policy and logical message deduplication require semantic validation.",
   $defs: {
     agentId: {
       type: "string",
@@ -205,17 +205,14 @@ export const MAIL_SCHEMA = {
           $ref: "#/$defs/mailboxCardEnvelope",
         },
         {
-          $ref: "#/$defs/submissionEnvelope",
+          $ref: "#/$defs/packetEnvelope",
         },
       ],
     },
     packetHeader: {
       type: "object",
-      required: ["protocol", "mailbox_id", "card_hash", "expires_at"],
+      required: ["mailbox_id", "card_hash", "expires_at"],
       properties: {
-        protocol: {
-          const: "agent-mail/1.0",
-        },
         mailbox_id: {
           $ref: "#/$defs/id16",
         },
@@ -228,7 +225,7 @@ export const MAIL_SCHEMA = {
       },
       additionalProperties: false,
     },
-    packet: {
+    packetPayload: {
       type: "object",
       required: ["header", "enc", "ciphertext"],
       properties: {
@@ -247,7 +244,7 @@ export const MAIL_SCHEMA = {
           minLength: 1387,
           maxLength: 1048576,
           description:
-            "Decoded length must be >= 1040 and 16 modulo 1024. Total JCS(signed submission) length must fit the card and protocol limits; these are semantic checks.",
+            "Decoded length must be >= 1040 and 16 modulo 1024. Total JCS(packet) length must fit the card and protocol limits; these are semantic checks.",
         },
       },
       additionalProperties: false,
@@ -286,7 +283,7 @@ export const MAIL_SCHEMA = {
           $ref: "#/$defs/hash32",
         },
         packet: {
-          $ref: "#/$defs/submissionEnvelope",
+          $ref: "#/$defs/packetEnvelope",
         },
         accepted_at: {
           $ref: "#/$defs/timestampMs",
@@ -338,7 +335,7 @@ export const MAIL_SCHEMA = {
       description:
         "Mail defines no endpoint names; delivery paths are fixed at each card route. Other members are inert extensions.",
     },
-    submissionEvent: {
+    packetEvent: {
       type: "object",
       required: ["protocol", "type", "actor", "created_at", "nonce", "payload"],
       properties: {
@@ -358,17 +355,17 @@ export const MAIL_SCHEMA = {
           $ref: "#/$defs/positiveSafeInteger",
         },
         payload: {
-          $ref: "#/$defs/packet",
+          $ref: "#/$defs/packetPayload",
         },
       },
       additionalProperties: false,
     },
-    submissionEnvelope: {
+    packetEnvelope: {
       type: "object",
       required: ["event", "hash", "signature"],
       properties: {
         event: {
-          $ref: "#/$defs/submissionEvent",
+          $ref: "#/$defs/packetEvent",
         },
         hash: {
           $ref: "#/$defs/hash32",

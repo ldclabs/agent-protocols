@@ -88,17 +88,17 @@ def test_signed_vectors(name):
 @pytest.mark.parametrize('name', list(V['encryptions']))
 def test_hpke_vectors_match_entire_packet_and_plaintext(name, monkeypatch):
     vector = V['encryptions'][name]
-    card, letter = ENVS[vector['card']], ENVS[vector['letter']]
+    card, message = ENVS[vector['card']], ENVS[vector['message']]
     suite = fixed_suite(bytes.fromhex(vector['ephemeral_secret_hex']))
     monkeypatch.setattr(mail, '_suite', lambda: suite)
-    sealed = mail.encrypt_mail(letter, card, AgentSigner.from_seed(bytes.fromhex(V['keys']['sender_seed_hex'])), vector['packet']['event']['nonce'], now_ms=NOW)
+    sealed = mail.encrypt_mail(message, card, AgentSigner.from_seed(bytes.fromhex(V['keys']['sender_seed_hex'])), vector['packet']['event']['nonce'], now_ms=NOW)
     assert sealed == vector['packet']
     assert mail.mail_packet_id(sealed) == vector['packet_id']
     assert mail._jcs(sealed).decode() == vector['packet_jcs']
-    assert mail.mail_submission_aad(sealed['event']).decode() == vector['aad_jcs']
+    assert mail.mail_packet_aad(sealed['event']).decode() == vector['aad_jcs']
     assert mail._INFO.hex() == vector['info_hex']
-    assert mail.encode_mail_plaintext(letter) == mail._decode(vector['plaintext_b64'])
-    assert mail.decrypt_mail(sealed, card, key_for(card), OWNER, now_ms=NOW, packet_id=vector['packet_id']) == letter
+    assert mail.encode_mail_plaintext(message) == mail._decode(vector['plaintext_b64'])
+    assert mail.decrypt_mail(sealed, card, key_for(card), OWNER, now_ms=NOW, packet_id=vector['packet_id']) == message
 
 
 @pytest.mark.parametrize('case', V['schema_cases'], ids=lambda c: c['name'])
@@ -184,7 +184,7 @@ def test_recipient_lifecycle_with_restart_between_packets():
         inbox = MailInbox.from_snapshot(MailKeyring.from_snapshot(inbox.keyring.snapshot()), json.loads(json.dumps(inbox.snapshot())))
     historical = V['lifecycle']['historical_card']
     assert MailInbox(ring()).accept(packet(historical['packet']), now_ms=historical['now'])['kind'] == historical['expected']
-    expired = V['lifecycle']['expired_new_letter']
+    expired = V['lifecycle']['expired_new_message']
     assert code_of(lambda: MailInbox(ring()).accept(packet(expired['packet']), now_ms=expired['now'])) == 'packet_expired'
 
 

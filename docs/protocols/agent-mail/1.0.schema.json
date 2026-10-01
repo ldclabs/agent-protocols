@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-protocols.dev/schemas/agent-mail/1.0.schema.json",
   "title": "Agent Mail Protocol 1.0",
-  "description": "Structural definitions for owner-signed cards, sender-signed encrypted submissions, plaintext messages and HTTP records. Signatures, sender/recipient/AAD binding, canonical encoding, time, size, sender policy, live submission nonces and logical message deduplication require semantic validation.",
+  "description": "Structural definitions for owner-signed cards, sender-signed encrypted packets, plaintext messages and HTTP records. Signatures, sender/recipient/AAD binding, canonical encoding, time, size, sender policy and logical message deduplication require semantic validation.",
   "$defs": {
     "agentId": {
       "type": "string",
@@ -214,22 +214,18 @@
           "$ref": "#/$defs/mailboxCardEnvelope"
         },
         {
-          "$ref": "#/$defs/submissionEnvelope"
+          "$ref": "#/$defs/packetEnvelope"
         }
       ]
     },
     "packetHeader": {
       "type": "object",
       "required": [
-        "protocol",
         "mailbox_id",
         "card_hash",
         "expires_at"
       ],
       "properties": {
-        "protocol": {
-          "const": "agent-mail/1.0"
-        },
         "mailbox_id": {
           "$ref": "#/$defs/id16"
         },
@@ -242,7 +238,7 @@
       },
       "additionalProperties": false
     },
-    "packet": {
+    "packetPayload": {
       "type": "object",
       "required": [
         "header",
@@ -264,7 +260,7 @@
           ],
           "minLength": 1387,
           "maxLength": 1048576,
-          "description": "Decoded length must be >= 1040 and 16 modulo 1024. Total JCS(signed submission) length must fit the card and protocol limits; these are semantic checks."
+          "description": "Decoded length must be >= 1040 and 16 modulo 1024. Total JCS(packet) length must fit the card and protocol limits; these are semantic checks."
         }
       },
       "additionalProperties": false
@@ -314,7 +310,7 @@
           "$ref": "#/$defs/hash32"
         },
         "packet": {
-          "$ref": "#/$defs/submissionEnvelope"
+          "$ref": "#/$defs/packetEnvelope"
         },
         "accepted_at": {
           "$ref": "#/$defs/timestampMs"
@@ -370,7 +366,7 @@
       "additionalProperties": true,
       "description": "Mail defines no endpoint names; delivery paths are fixed at each card route. Other members are inert extensions."
     },
-    "submissionEvent": {
+    "packetEvent": {
       "type": "object",
       "required": [
         "protocol",
@@ -397,12 +393,12 @@
           "$ref": "#/$defs/positiveSafeInteger"
         },
         "payload": {
-          "$ref": "#/$defs/packet"
+          "$ref": "#/$defs/packetPayload"
         }
       },
       "additionalProperties": false
     },
-    "submissionEnvelope": {
+    "packetEnvelope": {
       "type": "object",
       "required": [
         "event",
@@ -411,7 +407,7 @@
       ],
       "properties": {
         "event": {
-          "$ref": "#/$defs/submissionEvent"
+          "$ref": "#/$defs/packetEvent"
         },
         "hash": {
           "$ref": "#/$defs/hash32"

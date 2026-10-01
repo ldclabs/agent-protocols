@@ -18,7 +18,7 @@ fn hex(s: &str) -> Vec<u8> {
 fn card(v: &Value, name: &str) -> MailboxCard {
     validate_card(&v["envelopes"][name]).unwrap()
 }
-fn packet(v: &Value, name: &str) -> Submission {
+fn packet(v: &Value, name: &str) -> Packet {
     validate_packet(&v["encryptions"][name]["packet"]).unwrap()
 }
 fn key(v: &Value, card: &MailboxCard) -> MailEncryptionKey {
@@ -125,7 +125,7 @@ fn shared_hpke_vectors_and_random_roundtrips() {
     for (name, e) in v["encryptions"].as_object().unwrap() {
         let c = card(&v, e["card"].as_str().unwrap());
         let p = packet(&v, name);
-        let l = validate_letter(&v["messages"][e["letter"].as_str().unwrap()]).unwrap();
+        let l = validate_message(&v["messages"][e["message"].as_str().unwrap()]).unwrap();
         assert_eq!(hex(e["info_hex"].as_str().unwrap()), PROTOCOL.as_bytes());
         assert_eq!(
             canonical_bytes(&p).unwrap(),
@@ -140,7 +140,7 @@ fn shared_hpke_vectors_and_random_roundtrips() {
             decrypt_packet(&p, &c, &key(&v, &c), &c.event.actor, now).unwrap(),
             l
         );
-        let fresh = encrypt_letter(&l, &c, &sender_signer(&v), 800, now).unwrap();
+        let fresh = encrypt_message(&l, &c, &sender_signer(&v), 800, now).unwrap();
         assert_ne!(fresh.event.payload.enc, p.event.payload.enc);
         assert_eq!(
             decrypt_packet(&fresh, &c, &key(&v, &c), &c.event.actor, now).unwrap(),
@@ -321,7 +321,7 @@ fn shared_recipient_lifecycle_and_replies() {
             history["now"].as_i64().unwrap()
         )
         .is_ok());
-    let expired = &v["lifecycle"]["expired_new_letter"];
+    let expired = &v["lifecycle"]["expired_new_message"];
     assert_eq!(
         code(MailInbox::new(keyring(&v)).accept(
             &packet(&v, "original"),
@@ -332,11 +332,11 @@ fn shared_recipient_lifecycle_and_replies() {
         Some("packet_expired")
     );
     let reply = &v["lifecycle"]["reply"];
-    let letter =
-        |name: &str| validate_letter(&v["messages"][reply[name].as_str().unwrap()]).unwrap();
-    validate_reply(&letter("valid"), &letter("parent")).unwrap();
-    assert!(validate_reply(&letter("valid"), &letter("wrong_parent")).is_err());
-    let original = letter("parent");
+    let message =
+        |name: &str| validate_message(&v["messages"][reply[name].as_str().unwrap()]).unwrap();
+    validate_reply(&message("valid"), &message("parent")).unwrap();
+    assert!(validate_reply(&message("valid"), &message("wrong_parent")).is_err());
+    let original = message("parent");
     let generated = create_mail_message(&original.sender,original.created_at,serde_json::json!({
         "to": original.to,"expires_at":original.expires_at,"thread_id":original.thread_id,"parts":original.parts
     })).unwrap();
@@ -464,8 +464,8 @@ fn live_control_nonces_quota_pagination_and_failure_atomicity() {
         code(
             relay.deliver(
                 &mailbox,
-                &encrypt_letter(
-                    &validate_letter(&v["messages"]["lower_nonce_letter"]).unwrap(),
+                &encrypt_message(
+                    &validate_message(&v["messages"]["lower_nonce_message"]).unwrap(),
                     &card(&v, "card"),
                     &sender_signer(&v),
                     202,
@@ -497,8 +497,8 @@ fn live_control_nonces_quota_pagination_and_failure_atomicity() {
     let third = relay
         .deliver(
             &mailbox,
-            &encrypt_letter(
-                &validate_letter(&v["messages"]["lower_nonce_letter"]).unwrap(),
+            &encrypt_message(
+                &validate_message(&v["messages"]["lower_nonce_message"]).unwrap(),
                 &card(&v, "card"),
                 &sender_signer(&v),
                 202,
@@ -586,25 +586,25 @@ fn relay_prune_forgets_mailbox_after_receive_until() {
 fn keyring_and_card_cache_seal_prune_and_bind_keys() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();
-    let letter = validate_letter(&v["messages"]["letter"]).unwrap();
+    let message = validate_message(&v["messages"]["message"]).unwrap();
     let mut cache = MailCardCache::new();
     let sealed = cache
         .seal(
-            &letter,
+            &message,
             &v["envelopes"]["card"],
             &sender_signer(&v),
             800,
             now,
         )
         .unwrap();
-    assert_eq!(keyring(&v).open(&sealed, now).unwrap(), letter);
+    assert_eq!(keyring(&v).open(&sealed, now).unwrap(), message);
     let owner = card(&v, "card").event.actor;
     cache
         .observe(&v["envelopes"]["rotated_card"], &owner, now)
         .unwrap();
     assert_eq!(
         code(cache.seal(
-            &letter,
+            &message,
             &v["envelopes"]["card"],
             &sender_signer(&v),
             800,
@@ -614,8 +614,8 @@ fn keyring_and_card_cache_seal_prune_and_bind_keys() {
         Some("stale_card")
     );
     assert_eq!(
-        code(encrypt_letter(
-            &letter,
+        code(encrypt_message(
+            &message,
             &card(&v, "closed_card"),
             &sender_signer(&v),
             800,
@@ -666,31 +666,26 @@ fn sender_policy_is_checked_before_decryption_and_survives_restart() {
         Some("permission_denied")
     );
     let mut relay = MailRelayStore::new(ORIGIN).unwrap();
-    relay.publish(&v["envelopes"]["card"], now).unwrap();
     let mailbox = &c.event.payload.mailbox_id;
-    let before = relay.snapshot().unwrap();
-    let wrong = token(&sender_signer(&v), ORIGIN, now);
     assert_eq!(
-        code(relay.set_sender_blocked(mailbox, sender.clone(), true, &wrong, now)).as_deref(),
-        Some("permission_denied")
+        code(relay.set_sender_blocked(mailbox, sender.clone(), true)).as_deref(),
+        Some("mailbox_unavailable")
     );
-    assert_eq!(relay.snapshot().unwrap(), before);
+    relay.publish(&v["envelopes"]["card"], now).unwrap();
     relay
-        .set_sender_blocked(mailbox, sender.clone(), true, &jwt, now)
+        .set_sender_blocked(mailbox, sender.clone(), true)
         .unwrap();
     assert_eq!(
         code(relay.deliver(mailbox, &packet(&v, "original"), now)).as_deref(),
         Some("permission_denied")
     );
     relay
-        .set_sender_blocked(mailbox, sender.clone(), false, &jwt, now)
+        .set_sender_blocked(mailbox, sender.clone(), false)
         .unwrap();
     let accepted = relay
         .deliver(mailbox, &packet(&v, "original"), now)
         .unwrap();
-    relay
-        .set_sender_blocked(mailbox, sender, true, &jwt, now)
-        .unwrap();
+    relay.set_sender_blocked(mailbox, sender, true).unwrap();
     relay
         .delete(mailbox, &accepted.packet_id, &jwt, now)
         .unwrap();
@@ -714,33 +709,47 @@ fn sender_policy_is_checked_before_decryption_and_survives_restart() {
         .is_empty());
 }
 #[test]
-fn submission_live_nonce_and_logical_message_conflicts() {
+fn packets_are_not_live_writes_and_logical_message_conflicts() {
     let v = vectors();
     let now = v["now"].as_i64().unwrap();
     let c = card(&v, "card");
     let mailbox = &c.event.payload.mailbox_id;
+    let jwt = token(&owner_signer(&v), ORIGIN, now);
     let mut relay = MailRelayStore::new(ORIGIN).unwrap();
     relay.publish(&v["envelopes"]["card"], now).unwrap();
-    relay
+    let first = relay
         .deliver(mailbox, &packet(&v, "original"), now)
         .unwrap();
     let mut relay =
         MailRelayStore::from_snapshot(&relay.snapshot().unwrap(), 100, MAX_PACKET_BYTES * 10)
             .unwrap();
+    // A lower nonce signed well outside the live-write window is still new mail.
+    let late = now + 2 * FUTURE_SKEW_MS;
+    relay
+        .deliver(mailbox, &packet(&v, "lower_nonce"), late)
+        .unwrap();
+    relay
+        .deliver(mailbox, &packet(&v, "reencrypted"), late)
+        .unwrap();
     assert_eq!(
-        code(relay.deliver(mailbox, &packet(&v, "lower_nonce"), now)).as_deref(),
-        Some("nonce_not_greater")
+        relay
+            .deliver(mailbox, &packet(&v, "original"), late)
+            .unwrap(),
+        first
     );
-    let late = now + FUTURE_SKEW_MS + 1;
     assert_eq!(
-        code(relay.deliver(mailbox, &packet(&v, "reencrypted"), late)).as_deref(),
-        Some("timestamp_out_of_window")
+        relay
+            .list(mailbox, &jwt, now, 100, None)
+            .unwrap()
+            .result
+            .len(),
+        3
     );
-    let message = validate_letter(&v["messages"]["letter"]).unwrap();
-    let retry = encrypt_letter(&message, &c, &sender_signer(&v), 900, late).unwrap();
-    relay.deliver(mailbox, &retry, late).unwrap();
+    let message = validate_message(&v["messages"]["message"]).unwrap();
     let mut inbox = MailInbox::new(keyring(&v));
-    inbox.accept(&retry, None, now + 86_400_000).unwrap();
+    inbox
+        .accept(&packet(&v, "reencrypted"), None, now + 86_400_000)
+        .unwrap();
     assert!(matches!(
         inbox
             .accept(&packet(&v, "original"), None, now + 86_400_000)
@@ -761,7 +770,7 @@ fn submission_live_nonce_and_logical_message_conflicts() {
     assert_eq!(inbox.snapshot().unwrap(), before);
     let mut other = message;
     other.sender = c.event.actor.clone();
-    let other = encrypt_letter(&other, &c, &owner_signer(&v), 1000, now).unwrap();
+    let other = encrypt_message(&other, &c, &owner_signer(&v), 1000, now).unwrap();
     assert!(matches!(
         inbox.accept(&other, None, now).unwrap(),
         InboxAcceptance::Accepted(_)

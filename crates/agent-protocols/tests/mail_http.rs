@@ -163,8 +163,8 @@ fn objects(
 ) -> (
     agent_protocols::identity::AgentSigner,
     MailboxCard,
-    Letter,
-    Submission,
+    MessagePayload,
+    Packet,
     i64,
 ) {
     let now = agent_protocols::identity::unix_ms();
@@ -185,7 +185,7 @@ fn objects(
         100,
     )
     .unwrap();
-    let letter = create_mail_message(
+    let message = create_mail_message(
         &sender.agent_id(),
         now,
         json!({
@@ -194,8 +194,8 @@ fn objects(
         }),
     )
     .unwrap();
-    let packet = encrypt_letter(&letter, &card, &sender, 800, now).unwrap();
-    (owner, card, letter, packet, now)
+    let packet = encrypt_message(&message, &card, &sender, 800, now).unwrap();
+    (owner, card, message, packet, now)
 }
 #[test]
 fn mail_https_fixed_paths_owner_auth_and_sender_signed_delivery() {

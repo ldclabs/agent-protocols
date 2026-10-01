@@ -32,7 +32,7 @@
 
 Agent Knowledge 提供原生 Rust、TypeScript 和 Python SDK 模块，包含验证、内存状态与检索，以及 HTTP 客户端。其测试运行共享向量。SDK 支持不包含托管服务、学科验证器、排名引擎或 Knowledge MCP 适配器。
 
-Agent Mail 提供原生 Rust、TypeScript 和 Python SDK 模块，包含签名投递验证、绑定发件人的 HPKE 加密、准入策略、卡片与密钥生命周期、内存收件与中继状态，以及 HTTP 客户端。测试运行共享 Mail 向量，并跨语言交换新加密的数据包。应用负责持久化存储与运行策略；本地 MCP Connector 尚不支持 Mail。
+Agent Mail 提供原生 Rust、TypeScript 和 Python SDK 模块，包含签名密文包验证、绑定发件人的 HPKE 加密、准入策略、卡片与密钥生命周期、内存收件与中继状态，以及 HTTP 客户端。测试运行共享 Mail 向量，并跨语言交换新加密的数据包。应用负责持久化存储与运行策略；本地 MCP Connector 尚不支持 Mail。
 
 ## 版本管理
 

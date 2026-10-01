@@ -206,7 +206,7 @@ def check_envelope(envelope, definition):
         except ValueError as exc:
             raise Reject('x25519') from exc
     else:
-        require(event['created_at'] < payload['header']['expires_at'] <= event['created_at'] + MAX_TTL + SKEW, 'submission_lifetime')
+        require(event['created_at'] < payload['header']['expires_at'] <= event['created_at'] + MAX_TTL + SKEW, 'packet_lifetime')
 
 
 def check_message(payload):
@@ -250,32 +250,32 @@ def unframe(plaintext):
     except UnicodeDecodeError as exc:
         raise Reject('utf8') from exc
     try:
-        letter = parse_strict_json(text)
+        message = parse_strict_json(text)
     except AgentProtocolError as exc:
         raise Reject('strict_json') from exc
-    require(jcs(letter) == data, 'noncanonical_json')
-    return letter
+    require(jcs(message) == data, 'noncanonical_json')
+    return message
 
 
-def submission_aad(event):
+def packet_aad(event):
     return jcs({**{k: event[k] for k in ('protocol', 'type', 'actor', 'created_at', 'nonce')}, 'header': event['payload']['header']})
 
 
-def make_packet(card, letter, ephemeral, *, signer=None, nonce=200, created_at=NOW, plaintext=None, header=None, info=INFO, aad=None):
+def make_packet(card, message, ephemeral, *, signer=None, nonce=200, created_at=NOW, plaintext=None, header=None, info=INFO, aad=None):
     signer = signer or AgentSigner.from_seed(bytes([7]) * 32)
     c = card['event']['payload']
     if header is None:
-        header = {'protocol': PROTOCOL, 'mailbox_id': c['mailbox_id'], 'card_hash': card['hash'], 'expires_at': letter['expires_at']}
+        header = {'mailbox_id': c['mailbox_id'], 'card_hash': card['hash'], 'expires_at': message['expires_at']}
     event = {'protocol': PROTOCOL, 'type': 'mail.submit', 'actor': signer.agent_id(), 'created_at': created_at,
              'nonce': nonce, 'payload': {'header': header}}
-    enc, ct = seal(unb64(c['public_key']), ephemeral, info, submission_aad(event) if aad is None else aad,
-                   frame(jcs(letter)) if plaintext is None else plaintext)
+    enc, ct = seal(unb64(c['public_key']), ephemeral, info, packet_aad(event) if aad is None else aad,
+                   frame(jcs(message)) if plaintext is None else plaintext)
     event['payload'].update(enc=b64(enc), ciphertext=b64(ct))
     return signer.sign_event(event)
 
 
 def check_packet_shape(packet, packet_id=None):
-    check_envelope(packet, 'submissionEnvelope')
+    check_envelope(packet, 'packetEnvelope')
     p = packet['event']['payload']
     unb64(p['enc'])
     ct = unb64(p['ciphertext'])
@@ -296,13 +296,13 @@ def open_packet(packet, card, secret, owner, now, packet_id=None):
     require(len(jcs(packet)) <= c['max_packet_bytes'], 'packet_size')
     require(h['expires_at'] <= c['receive_until'], 'receive_until')
     require(b64(public_key(secret)) == c['public_key'], 'recipient_key')
-    letter = unframe(open_hpke(secret, unb64(p['enc']), INFO, submission_aad(e), unb64(p['ciphertext'])))
-    check_message(letter)
-    require(letter['from'] == e['actor'], 'sender')
-    require(letter['to'] == owner, 'recipient')
-    require(letter['expires_at'] == h['expires_at'], 'expiry_binding')
-    require(letter['created_at'] <= min(now, e['created_at']) + SKEW, 'future')
-    return letter
+    message = unframe(open_hpke(secret, unb64(p['enc']), INFO, packet_aad(e), unb64(p['ciphertext'])))
+    check_message(message)
+    require(message['from'] == e['actor'], 'sender')
+    require(message['to'] == owner, 'recipient')
+    require(message['expires_at'] == h['expires_at'], 'expiry_binding')
+    require(message['created_at'] <= min(now, e['created_at']) + SKEW, 'future')
+    return message
 
 
 def check_reply(reply, parent):
@@ -353,13 +353,13 @@ class RecipientModel:
         self.accepted = {}
 
     def accept(self, packet, card, secret, owner, now):
-        letter = open_packet(packet, card, secret, owner, now)
-        key = (letter['from'], letter['message_id'])
+        message = open_packet(packet, card, secret, owner, now)
+        key = (message['from'], message['message_id'])
         if key in self.accepted:
-            require(self.accepted[key] == digest(jcs(letter)), 'message_conflict')
+            require(self.accepted[key] == digest(jcs(message)), 'message_conflict')
             return 'duplicate'
-        require(now < letter['expires_at'], 'expired')
-        self.accepted[key] = digest(jcs(letter))
+        require(now < message['expires_at'], 'expired')
+        self.accepted[key] = digest(jcs(message))
         return 'accepted'
 
 
@@ -420,11 +420,9 @@ class RelayModel:
         require(h['card_hash'] == card['hash'] and now < c['expires_at'], 'stale_card')
         require(now < h['expires_at'], 'packet_expired')
         require(h['expires_at'] <= min(c['receive_until'], now + MAX_TTL + SKEW), 'invalid_packet')
+        # Packets are not live writes: only a future-dated packet is rejected, and no nonce maximum applies.
+        require(packet['event']['created_at'] <= now + SKEW, 'timestamp_out_of_window')
         require(len(jcs(packet)) <= c['max_packet_bytes'], 'payload_too_large')
-        e = packet['event']
-        require(abs(e['created_at'] - now) <= SKEW, 'timestamp_out_of_window')
-        require(e['nonce'] > self.nonces.get(e['actor'], 0), 'nonce_not_greater')
-        self.nonces[e['actor']] = e['nonce']
         box['seq'] += 1
         result = {'packet_id': pid, 'accepted_at': now}
         box['tombs'][pid] = result
@@ -466,16 +464,16 @@ def generate():
         'small_limit_card': signed(recipient, 'mailbox.publish', {**p, 'max_packet_bytes': 4096}, 112),
         'foreign_card': signed(sender, 'mailbox.publish', p, 300),
     }
-    letter_payload = {
+    message_content = {
         'to': owner, 'expires_at': NOW + DAY + 1000, 'thread_id': b64(bytes(range(48, 64))),
         'subject': 'A private question / 私信',
         'parts': [{'media_type': 'text/plain', 'data': b64('Can we compare our evidence?\n我们可以核对证据吗？'.encode())},
                   {'media_type': 'application/octet-stream', 'name': 'evidence.bin', 'data': b64(bytes([0, 1, 254, 255]))}],
     }
-    letter = {**letter_payload, 'message_id': b64(bytes([31]) * 32), 'from': sender.agent_id(), 'created_at': NOW}
-    messages = {'letter': letter,
-                'lower_nonce_letter': {**letter, 'message_id': b64(bytes([32]) * 32), 'created_at': NOW - DAY, 'subject': 'Earlier letter, delivered later'},
-                'reply_letter': {'message_id': b64(bytes([33]) * 32), 'from': owner, 'created_at': NOW,
+    letter = {**message_content, 'message_id': b64(bytes([31]) * 32), 'from': sender.agent_id(), 'created_at': NOW}
+    messages = {'message': letter,
+                'lower_nonce_message': {**letter, 'message_id': b64(bytes([32]) * 32), 'created_at': NOW - DAY, 'subject': 'Earlier message, delivered later'},
+                'reply_message': {'message_id': b64(bytes([33]) * 32), 'from': owner, 'created_at': NOW,
                     'to': sender.agent_id(), 'expires_at': NOW + DAY, 'thread_id': letter['thread_id'],
                     'in_reply_to': letter['message_id'], 'parts': [{'media_type': 'text/plain', 'data': b64(b'Received, thank you.')}]}}
     messages['conflicting_message'] = {**letter, 'subject': 'Different content with the same logical ID'}
@@ -486,17 +484,17 @@ def generate():
             'sender_agent_id': sender.agent_id(), 'recipient_agent_id': owner}
 
     encryptions = {}
-    for name, card_name, letter_name, eph in [('original', 'card', 'letter', 11), ('reencrypted', 'card', 'letter', 12),
-                                              ('rotated', 'rotated_card', 'letter', 13), ('lower_nonce', 'card', 'lower_nonce_letter', 14),
-                                              ('reopened', 'reopened_card', 'letter', 15), ('long_lived', 'long_lived_card', 'letter', 16), ('conflicting', 'card', 'conflicting_message', 17)]:
-        c, l, ephemeral = envelopes[card_name], messages[letter_name], bytes([eph]) * 32
+    for name, card_name, message_name, eph in [('original', 'card', 'message', 11), ('reencrypted', 'card', 'message', 12),
+                                               ('rotated', 'rotated_card', 'message', 13), ('lower_nonce', 'card', 'lower_nonce_message', 14),
+                                               ('reopened', 'reopened_card', 'message', 15), ('long_lived', 'long_lived_card', 'message', 16), ('conflicting', 'card', 'conflicting_message', 17)]:
+        c, l, ephemeral = envelopes[card_name], messages[message_name], bytes([eph]) * 32
         nonce = 199 if name == 'lower_nonce' else 200 + len(encryptions)
         packet = make_packet(c, l, ephemeral, nonce=nonce)
-        envelopes[name + '_submission'] = packet
+        envelopes[name + '_packet'] = packet
         secret = rotated_sk if card_name == 'rotated_card' else sk
         assert open_packet(packet, c, secret, owner, NOW, packet['hash']) == l
-        encryptions[name] = {'card': card_name, 'letter': letter_name, 'ephemeral_secret_hex': ephemeral.hex(),
-                             'plaintext_b64': b64(frame(jcs(l))), 'info_hex': INFO.hex(), 'aad_jcs': submission_aad(packet['event']).decode(),
+        encryptions[name] = {'card': card_name, 'message': message_name, 'ephemeral_secret_hex': ephemeral.hex(),
+                             'plaintext_b64': b64(frame(jcs(l))), 'info_hex': INFO.hex(), 'aad_jcs': packet_aad(packet['event']).decode(),
                              'packet': packet, 'packet_jcs': jcs(packet).decode(), 'packet_id': packet['hash']}
     original = encryptions['original']['packet']
     original_id = encryptions['original']['packet_id']
@@ -505,20 +503,21 @@ def generate():
     def sc(name, definition, value, valid):
         assert (outcome(lambda: schema_check(value, definition)) == 'valid') == valid, name
         schema_cases.append({'name': name, 'definition': definition, 'value': value, 'valid': valid})
-    for name in ['card', 'rotated_card', 'closed_card', 'original_submission']:
+    for name in ['card', 'rotated_card', 'closed_card', 'original_packet']:
         sc(name, 'envelope', envelopes[name], True)
     sc('message', 'messagePayload', letter, True)
     sc('message ID is not an id16', 'messagePayload', change(letter, ['message_id'], b64(bytes(16))), False)
     sc('missing sender', 'messagePayload', {k:v for k,v in letter.items() if k!='from'}, False)
-    sc('packet', 'packet', original['event']['payload'], True)
-    sc('unknown packet member', 'submissionEnvelope', {**original, 'sender': sender.agent_id()}, False)
-    sc('removed header key_id', 'submissionEnvelope', change(original, ['event', 'payload', 'header', 'key_id'], p['mailbox_id']), False)
+    sc('packet payload', 'packetPayload', original['event']['payload'], True)
+    sc('unknown packet member', 'packetEnvelope', {**original, 'sender': sender.agent_id()}, False)
+    sc('removed header key_id', 'packetEnvelope', change(original, ['event', 'payload', 'header', 'key_id'], p['mailbox_id']), False)
+    sc('removed header protocol', 'packetEnvelope', change(original, ['event', 'payload', 'header', 'protocol'], PROTOCOL), False)
     sc('removed card enabled field', 'mailboxCardEnvelope', change(card, ['event', 'payload', 'enabled'], True), False)
     sc('nine routes', 'mailboxCardEnvelope', change(card, ['event', 'payload', 'routes'], [f'https://r{i}.example' for i in range(9)]), False)
     sc('duplicate routes', 'mailboxCardEnvelope', change(card, ['event', 'payload', 'routes'], [RELAY] * 2), False)
-    sc('unknown letter payload field', 'messagePayload', change(letter, ['bcc'], [sender.agent_id()]), False)
-    sc('unsigned plaintext cannot be submitted', 'submissionEnvelope', letter, False)
-    sc('old message envelope type rejected', 'submissionEnvelope', change(original, ['event', 'type'], 'mail.message'), False)
+    sc('unknown message field', 'messagePayload', change(letter, ['bcc'], [sender.agent_id()]), False)
+    sc('unsigned plaintext cannot be submitted', 'packetEnvelope', letter, False)
+    sc('old message envelope type rejected', 'packetEnvelope', change(original, ['event', 'type'], 'mail.message'), False)
     sc('null subject', 'messagePayload', change(letter, ['subject'], None), False)
     sc('no parts', 'messagePayload', change(letter, ['parts'], []), False)
     sc('noncanonical base64 trailing bits', 'messagePayload', change(letter, ['parts'], [{'media_type': 'text/plain', 'data': 'Zh'}]), False)
@@ -526,9 +525,9 @@ def generate():
     sc('empty opaque part', 'part', {'media_type': 'application/octet-stream', 'data': ''}, True)
     sc('base64 newline suffix', 'part', {'media_type': 'text/plain', 'data': 'Zg\n'}, False)
     sc('media type newline suffix', 'part', {'media_type': 'text/plain\n', 'data': ''}, False)
-    sc('id newline suffix', 'submissionEnvelope', change(original, ['event', 'payload', 'header', 'mailbox_id'], p['mailbox_id'] + '\n'), False)
+    sc('id newline suffix', 'packetEnvelope', change(original, ['event', 'payload', 'header', 'mailbox_id'], p['mailbox_id'] + '\n'), False)
     sc('valid punctuation in origin', 'httpsOrigin', 'https://host!name.example', True)
-    sc('unsafe integer', 'submissionEnvelope', change(original, ['event', 'payload', 'header', 'expires_at'], 9007199254740992), False)
+    sc('unsafe integer', 'packetEnvelope', change(original, ['event', 'payload', 'header', 'expires_at'], 9007199254740992), False)
     sc('delivery result', 'deliveryResult', {'packet_id': original_id, 'accepted_at': NOW}, True)
     sc('delivery result never reveals seq', 'deliveryResult', {'packet_id': original_id, 'accepted_at': NOW, 'seq': 1}, False)
     record = {'packet_id': original_id, 'packet': original, 'accepted_at': NOW, 'seq': 1}
@@ -574,11 +573,11 @@ def generate():
     bad('wrong local identity', original, 'card_owner', owner=sender.agent_id())
     bad('wrong packet id', original, 'packet_id', packet_id=b64(bytes([80]) * 32))
     next_eph = 20
-    def craft(name, expected, *, use_letter=letter, plaintext=None, header=None, info=INFO, aad=None):
+    def craft(name, expected, *, use_message=letter, plaintext=None, header=None, info=INFO, aad=None):
         nonlocal next_eph
         ephemeral = bytes([next_eph]) * 32
         next_eph += 1
-        bad(name, make_packet(card, use_letter, ephemeral, plaintext=plaintext, header=header, info=info, aad=aad), expected)
+        bad(name, make_packet(card, use_message, ephemeral, plaintext=plaintext, header=header, info=info, aad=aad), expected)
     craft('wrong HPKE info', 'aead', info=b'wrong protocol context')
     craft('wrong HPKE AAD', 'aead', aad=b'{}')
     padded = bytearray(frame(jcs(letter)))
@@ -591,13 +590,13 @@ def generate():
     craft('duplicate JSON keys', 'strict_json', plaintext=frame(b'{"event":{},"event":{}}'))
     craft('noncanonical JSON whitespace', 'noncanonical_json', plaintext=frame(json.dumps(letter, ensure_ascii=False).encode()))
     craft('unpaired surrogate', 'strict_json', plaintext=frame(b'{"x":"\\ud800"}'))
-    craft('signed wrong recipient', 'recipient', use_letter={**letter, 'to': sender.agent_id()})
+    craft('signed wrong recipient', 'recipient', use_message={**letter, 'to': sender.agent_id()})
     craft('authenticated unequal expiration', 'expiry_binding', header={**original['event']['payload']['header'], 'expires_at': NOW + DAY + 999})
-    craft('signed invalid text part', 'text_utf8', use_letter={**letter, 'parts': [{'media_type': 'text/plain', 'data': b64(b'\xff')}]})
-    craft('signed wrong reply card owner', 'reply_card_owner', use_letter={**letter, 'reply_card': card})
-    craft('future signed letter', 'future', use_letter={**letter, 'created_at': NOW + SKEW + 1})
-    craft('invalid letter lifetime', 'lifetime', use_letter={**letter, 'created_at': NOW + DAY + 1000})
-    craft('authenticated wrong sender', 'sender', use_letter={**letter, 'from': owner})
+    craft('signed invalid text part', 'text_utf8', use_message={**letter, 'parts': [{'media_type': 'text/plain', 'data': b64(b'\xff')}]})
+    craft('signed wrong reply card owner', 'reply_card_owner', use_message={**letter, 'reply_card': card})
+    craft('future signed message', 'future', use_message={**letter, 'created_at': NOW + SKEW + 1})
+    craft('invalid message lifetime', 'lifetime', use_message={**letter, 'created_at': NOW + DAY + 1000})
+    craft('authenticated wrong sender', 'sender', use_message={**letter, 'from': owner})
 
     sender_cards = []
     def card_case(name, payload, expected, now=NOW):
@@ -672,7 +671,7 @@ def generate():
                        {'packet': 'lower_nonce', 'now': NOW + 3, 'expected': 'accepted', 'items': 2},
                        {'packet': 'original', 'now': NOW + DAY + 1000, 'expected': 'duplicate', 'items': 2}]
     historical = {'packet': 'original', 'now': NOW + DAY + 500, 'expected': 'accepted',
-                  'note': 'Card expired 500 ms earlier, but retained key and queued letter are still valid.'}
+                  'note': 'Card expired 500 ms earlier, but retained key and queued message are still valid.'}
     expired = {'packet': 'original', 'now': NOW + DAY + 1000, 'expected': 'expired'}
     def receive(model, step):
         entry = encryptions[step['packet']]
@@ -691,14 +690,18 @@ def generate():
         {'op': 'publish', 'card': 'card', 'now': NOW + 1, 'expected': 'idempotent', 'accepted_at': NOW},
         {'op': 'publish', 'card': 'foreign_card', 'now': NOW, 'expected': 'mailbox_conflict'},
         {'op': 'deliver', 'packet': 'original', 'now': NOW, 'expected': 'accepted', 'accepted_at': NOW, 'stored': 1},
-        {'op': 'delete', 'packet': 'original', 'stored': 0},
+        {'op': 'deliver', 'packet': 'reencrypted', 'now': NOW - SKEW - 1, 'expected': 'timestamp_out_of_window', 'stored': 1},
+        # Packets are not live writes: a lower nonce, signed outside the live-write window, is still accepted.
+        {'op': 'deliver', 'packet': 'lower_nonce', 'now': NOW + 2 * SKEW, 'expected': 'accepted', 'accepted_at': NOW + 2 * SKEW, 'stored': 2},
+        {'op': 'delete', 'packet': 'original', 'stored': 1},
+        {'op': 'delete', 'packet': 'lower_nonce', 'stored': 0},
         {'op': 'publish', 'card': 'moved_card', 'now': NOW, 'expected': 'accepted', 'accepted_at': NOW},
         {'op': 'deliver', 'packet': 'original', 'now': NOW + 1, 'expected': 'idempotent', 'accepted_at': NOW, 'stored': 0},
         {'op': 'deliver', 'packet': 'reencrypted', 'now': NOW + 2, 'expected': 'mailbox_unavailable', 'stored': 0},
         {'op': 'publish', 'card': 'rotated_card', 'now': NOW, 'expected': 'nonce_not_greater'},
         {'op': 'publish', 'card': 'reopened_card', 'now': NOW, 'expected': 'accepted', 'accepted_at': NOW},
         {'op': 'deliver', 'packet': 'reencrypted', 'now': NOW + 3, 'expected': 'stale_card', 'stored': 0},
-        {'op': 'deliver', 'packet': 'reopened', 'now': NOW + 4, 'expected': 'accepted', 'accepted_at': NOW + 4, 'stored': 1, 'seqs': [2]},
+        {'op': 'deliver', 'packet': 'reopened', 'now': NOW + 4, 'expected': 'accepted', 'accepted_at': NOW + 4, 'stored': 1, 'seqs': [3]},
         {'op': 'publish', 'card': 'long_lived_card', 'now': NOW, 'expected': 'accepted', 'accepted_at': NOW},
         # The card is current and unexpired, but the packet's own deadline has passed.
         {'op': 'deliver', 'packet': 'long_lived', 'now': NOW + DAY + 1000, 'expected': 'packet_expired'},
@@ -732,9 +735,9 @@ def generate():
     assert receive(conflict_model, {'packet':'original','now':NOW}) == 'accepted'
     assert receive(conflict_model, {'packet':'conflicting','now':NOW}) == 'message_conflict'
 
-    reply = {'valid': 'reply_letter', 'parent': 'letter', 'wrong_parent': 'lower_nonce_letter', 'expected_wrong_parent': 'reply_binding'}
-    assert outcome(lambda: check_reply(messages['reply_letter'], letter)) == 'valid'
-    assert outcome(lambda: check_reply(messages['reply_letter'], messages['lower_nonce_letter'])) == 'reply_binding'
+    reply = {'valid': 'reply_message', 'parent': 'message', 'wrong_parent': 'lower_nonce_message', 'expected_wrong_parent': 'reply_binding'}
+    assert outcome(lambda: check_reply(messages['reply_message'], letter)) == 'valid'
+    assert outcome(lambda: check_reply(messages['reply_message'], messages['lower_nonce_message'])) == 'reply_binding'
     # Different packets and cards must preserve a single immutable logical message ID.
     assert len({encryptions[n]['packet_id'] for n in ['original', 'reencrypted', 'rotated']}) == 3
 
@@ -758,7 +761,7 @@ def generate():
         'owner_jwt_cases': token_cases,
         'lifecycle': {
             'card_cache': card_cache, 'persistent_card_pin': persistent_pin,
-            'recipient': recipient_steps, 'historical_card': historical, 'expired_new_letter': expired,
+            'recipient': recipient_steps, 'historical_card': historical, 'expired_new_message': expired,
             'relay': relay_steps, 'relay_registration': registration, 'reply': reply,
             'message_conflict': {'first':'original','second':'conflicting','expected':'invalid_event'},
         },

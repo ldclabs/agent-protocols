@@ -223,7 +223,7 @@ impl MailClient {
     }
     /// Sender-signed delivery or exact retransmission of a completed packet.
     /// No JWT/cookie argument exists.
-    pub async fn deliver(&self, packet: &Submission) -> Result<DeliveryResult> {
+    pub async fn deliver(&self, packet: &Packet) -> Result<DeliveryResult> {
         let packet = validate_packet(&serde_json::to_value(packet)?)?;
         let value = self
             .send(

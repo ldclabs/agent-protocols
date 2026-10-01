@@ -62,14 +62,17 @@ const makeCard = (changes: any = {}, nonce = 400, at = now) =>
       ...changes,
     }),
   );
-const makeLetter = (changes: any = {}) => ({
-  ...structuredClone(e.letter),
+const makeMessage = (changes: any = {}) => ({
+  ...structuredClone(e.message),
   message_id: m.newMailMessageId(),
   ...changes,
 });
 let nextNonce = 1000;
-const seal = (letter: m.MailLetter, card: m.MailboxCard, now: number) =>
-  m.sealMailPacket(letter, card, sender, nextNonce++, now);
+const seal = (
+  message: m.MailMessagePayload,
+  card: m.MailboxCard,
+  now: number,
+) => m.sealMailPacket(message, card, sender, nextNonce++, now);
 function jwt(who = signer, aud = service, at = now) {
   return who.signRequestJwt({
     iss: who.agentId(),
@@ -195,8 +198,8 @@ test("Mail RFC9180 official known answer uses maintained HPKE suite", async () =
 for (const [name, c] of Object.entries(v.encryptions) as [string, any][])
   test(`Mail encryption vector: ${name}`, async () => {
     const card = e[c.card],
-      letter = e[c.letter];
-    const frame = m.frameMailBytes(m.mailCanonicalBytes(letter));
+      message = e[c.message];
+    const frame = m.frameMailBytes(m.mailCanonicalBytes(message));
     assert.equal(base64UrlEncode(frame), c.plaintext_b64);
     assert.equal(
       Buffer.from(new TextEncoder().encode(m.MAIL_PROTOCOL)).toString("hex"),
@@ -233,7 +236,7 @@ for (const [name, c] of Object.entries(v.encryptions) as [string, any][])
         now,
         c.packet_id,
       ),
-      letter,
+      message,
     );
   });
 for (const c of v.recipient_rejections)
@@ -290,7 +293,7 @@ test("Mail recipient lifecycle vectors survive restarts", async () => {
     (await new m.MailInbox(keyring()).accept(packet(h.packet), h.now)).kind,
     h.expected,
   );
-  const x = v.lifecycle.expired_new_letter;
+  const x = v.lifecycle.expired_new_message;
   await assert.rejects(
     () => new m.MailInbox(keyring()).accept(packet(x.packet), x.now),
     { code: "packet_expired" },
@@ -336,8 +339,8 @@ test("Mail relay lifecycle vectors run through real control writes", () => {
 
 test("Mail random production encryption roundtrips and concurrent acceptance is once", async () => {
   const [a, b] = await Promise.all([
-    seal(e.letter, e.card, now),
-    seal(e.letter, e.card, now),
+    seal(e.message, e.card, now),
+    seal(e.message, e.card, now),
   ]);
   assert.notEqual(a.event.payload.enc, b.event.payload.enc);
   const inbox = new m.MailInbox(keyring());
@@ -349,27 +352,27 @@ test("Mail random production encryption roundtrips and concurrent acceptance is 
     "accepted",
     "duplicate",
   ]);
-  assert.deepEqual(results[0].letter, e.letter);
-  inbox.prune(e.letter.expires_at);
-  assert.equal(inbox.has(sender.agentId(), e.letter.message_id), false);
+  assert.deepEqual(results[0].message, e.message);
+  inbox.prune(e.message.expires_at);
+  assert.equal(inbox.has(sender.agentId(), e.message.message_id), false);
 });
 test("Mail sealing checks recipient, lifetime, size and card usability first", async () => {
   await assert.rejects(
-    () => seal(makeLetter({ to: sender.agentId() }), e.card, now),
+    () => seal(makeMessage({ to: sender.agentId() }), e.card, now),
     { code: "invalid_actor" },
   );
   await assert.rejects(
-    () => seal(makeLetter({ expires_at: now + 1 }), e.card, now + 1),
+    () => seal(makeMessage({ expires_at: now + 1 }), e.card, now + 1),
     { code: "packet_expired" },
   );
   await assert.rejects(
-    () => seal(makeLetter({ expires_at: now + 3 * 86400000 }), e.card, now),
+    () => seal(makeMessage({ expires_at: now + 3 * 86400000 }), e.card, now),
     { code: "invalid_packet" },
   );
   await assert.rejects(
     () =>
       seal(
-        makeLetter({
+        makeMessage({
           parts: [
             {
               media_type: "application/octet-stream",
@@ -382,15 +385,15 @@ test("Mail sealing checks recipient, lifetime, size and card usability first", a
       ),
     { code: "payload_too_large" },
   );
-  await assert.rejects(() => seal(e.letter, e.closed_card, now), {
+  await assert.rejects(() => seal(e.message, e.closed_card, now), {
     code: "mailbox_unavailable",
   });
   const cache = new m.MailCardCache();
-  const sealed = await cache.seal(e.letter, e.card, sender, nextNonce++, now);
-  assert.deepEqual(await keyring().open(sealed, now), e.letter);
+  const sealed = await cache.seal(e.message, e.card, sender, nextNonce++, now);
+  assert.deepEqual(await keyring().open(sealed, now), e.message);
   cache.observe(e.rotated_card, owner, now);
   await assert.rejects(
-    () => cache.seal(e.letter, e.card, sender, nextNonce++, now),
+    () => cache.seal(e.message, e.card, sender, nextNonce++, now),
     {
       code: "stale_card",
     },
@@ -408,7 +411,7 @@ test("Mail keys are independent, keyring retains old cards and prunes by receive
     key.exportSecret();
   });
   const k = keyring();
-  assert.deepEqual(await k.open(packet("original"), now), e.letter);
+  assert.deepEqual(await k.open(packet("original"), now), e.message);
   const restored = m.MailKeyring.restore(k.exportSnapshot());
   restored.prune(e.card.event.payload.receive_until);
   await assert.rejects(() => restored.open(packet("original"), now), {
@@ -432,10 +435,10 @@ test("Mail local JSON and text parts remain strict", () => {
     to: sender.agentId(),
     expires_at: now + 1000,
     thread_id: m.newMailId(),
-    in_reply_to: e.letter.message_id,
+    in_reply_to: e.message.message_id,
     parts: [m.mailTextPart("reply")],
   });
-  assert.throws(() => m.validateMailReply(reply, e.letter));
+  assert.throws(() => m.validateMailReply(reply, e.message));
 });
 test("Mail relay publication is atomic, nonce-aware and idempotent", () => {
   const ns = new MemoryNonceStore(),
@@ -498,7 +501,7 @@ test("Mail relay quotas, tombstones, owner authorization and pruning", () => {
     codeOf(() => s.deliver(m.newMailId(), packet("original"))),
     "invalid_packet",
   );
-  const expires = e.letter.expires_at;
+  const expires = e.message.expires_at;
   s.prune(expires);
   assert.equal(
     codeOf(() => s.deliver(mailbox, packet("original"), expires)),
@@ -571,7 +574,7 @@ test("Mail owner JWT verification is strict about claims JSON", () => {
     );
 });
 
-test("Mail pre-decryption sender policy, owner management and tombstones survive restart", async () => {
+test("Mail pre-decryption sender policy, relay policy and tombstones survive restart", async () => {
   let inbox = new m.MailInbox(new m.MailKeyring(owner));
   inbox.setSenderBlocked(sender.agentId());
   await assert.rejects(() => inbox.accept(packet("original"), now), {
@@ -587,20 +590,18 @@ test("Mail pre-decryption sender policy, owner management and tombstones survive
     code: "permission_denied",
   });
   let relay = new m.MailRelayStore(service, { clock: () => now });
-  relay.publish(e.card);
-  const before = relay.snapshot();
-  assert.throws(
-    () => relay.setSenderBlocked(mailbox, sender.agentId(), true, jwt(sender)),
-    { code: "permission_denied" },
+  assert.equal(
+    codeOf(() => relay.setSenderBlocked(mailbox, sender.agentId(), true)),
+    "mailbox_unavailable",
   );
-  assert.deepEqual(relay.snapshot(), before);
-  relay.setSenderBlocked(mailbox, sender.agentId(), true, jwt());
+  relay.publish(e.card);
+  relay.setSenderBlocked(mailbox, sender.agentId(), true);
   assert.throws(() => relay.deliver(mailbox, packet("original")), {
     code: "permission_denied",
   });
-  relay.setSenderBlocked(mailbox, sender.agentId(), false, jwt());
+  relay.setSenderBlocked(mailbox, sender.agentId(), false);
   const accepted = relay.deliver(mailbox, packet("original"));
-  relay.setSenderBlocked(mailbox, sender.agentId(), true, jwt());
+  relay.setSenderBlocked(mailbox, sender.agentId(), true);
   relay.delete(mailbox, accepted.packet_id, jwt());
   relay = new m.MailRelayStore(service, {
     clock: () => now,
@@ -612,25 +613,31 @@ test("Mail pre-decryption sender policy, owner management and tombstones survive
   });
   assert.equal(relay.list(mailbox, jwt()).result.length, 0);
 });
-test("Mail live nonce admission persists while recipient accepts historical out-of-order mail", async () => {
-  let relay = new m.MailRelayStore(service, { clock: () => now });
+test("Mail packets are not live writes at relays or recipients", async () => {
+  const ns = new MemoryNonceStore();
+  let relay = new m.MailRelayStore(service, {
+    nonceStore: ns,
+    clock: () => now,
+  });
   relay.publish(e.card);
-  relay.deliver(mailbox, packet("original"));
+  const first = relay.deliver(mailbox, packet("original"));
   relay = new m.MailRelayStore(service, {
+    nonceStore: ns,
     clock: () => now,
     snapshot: relay.snapshot(),
   });
-  assert.throws(() => relay.deliver(mailbox, packet("lower_nonce")), {
-    code: "nonce_not_greater",
-  });
-  const late = now + m.MAIL_FUTURE_SKEW_MS + 1;
-  assert.throws(() => relay.deliver(mailbox, packet("reencrypted"), late), {
-    code: "timestamp_out_of_window",
-  });
-  const retry = await m.sealMailPacket(e.letter, e.card, sender, 900, late);
-  relay.deliver(mailbox, retry, late);
+  // A lower nonce signed well outside the live-write window is still new mail.
+  const late = now + 2 * m.MAIL_FUTURE_SKEW_MS;
+  relay.deliver(mailbox, packet("lower_nonce"), late);
+  relay.deliver(mailbox, packet("reencrypted"), late);
+  assert.deepEqual(relay.deliver(mailbox, packet("original"), late), first);
+  assert.equal(ns.maxNonce(sender.agentId(), now), undefined);
+  assert.equal(relay.list(mailbox, jwt()).result.length, 3);
   const inbox = new m.MailInbox(keyring());
-  assert.equal((await inbox.accept(retry, now + 86400000)).kind, "accepted");
+  assert.equal(
+    (await inbox.accept(packet("reencrypted"), now + 86400000)).kind,
+    "accepted",
+  );
   assert.equal(
     (await inbox.accept(packet("original"), now + 86400000)).kind,
     "duplicate",
@@ -650,7 +657,7 @@ test("Mail logical ID conflicts fail and distinct senders have distinct ID names
   });
   assert.deepEqual(inbox.snapshot(), before);
   const other = await m.sealMailPacket(
-    { ...e.letter, from: owner },
+    { ...e.message, from: owner },
     e.card,
     signer,
     1000,

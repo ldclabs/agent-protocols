@@ -9,7 +9,7 @@ TypeScript SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Ag
 - `delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, query shapes, authority, acceptance, historical, and use checks, `verifyDelegationCredential` over the latest grant record, and `auditDelegationHistory` for auditors.
 - `discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
 - `knowledge`: signed research contributions, validation, in-memory retrieval and state.
-- `mail`: signed mailbox cards and private letters, HPKE packets, card pins, key retention, inbox deduplication, and relay state.
+- `mail`: signed mailbox cards, sender-signed HPKE packets, card pins, key retention, inbox deduplication, and relay state.
 - `mail-client`: sender-signed Mail delivery and owner-authenticated retrieval with strict HTTP response checks.
 - `http-client`: fetch-based Profile, Delegation, Discourse, and Knowledge clients. Lists use `{ result, next_cursor }`; non-2xx responses throw `HttpResponseError` with the protocol `code`, `data`, and `Max-Seen-Nonce`.
 - `local-connector`: the Local Agent Protocols MCP connector: 23 standard tools, resource URIs, structured views, and the connector engine.
@@ -131,29 +131,30 @@ additional HTTP, isolation, pruning, and pagination regressions.
 
 ## Agent Mail
 
-Messages have no inner signature. The signed `mail.submit` envelope covers the
-complete encrypted packet. HPKE AAD binds its protocol, type, actor, submission
-creation time, nonce and packet header. Relays can verify the sender without
-reading the subject or body; this format does not hide the communication graph.
-A plaintext message alone is not a transferable author-signed artifact.
+Messages have no inner signature. A packet is the sender-signed `mail.submit`
+envelope around the HPKE ciphertext. HPKE AAD binds its protocol, type, actor,
+creation time, nonce and header. Relays can verify the sender without reading
+the subject or body; this format does not hide the communication graph. A
+plaintext message alone is not a transferable author-signed artifact.
 
 `message_id` is a random 32-byte base64url identifier retained across retries;
 `from`, original `created_at`, recipient, expiration, thread and parts are also
-immutable. The outer hash is the packet ID, not the logical message ID. A retry
-may use a new card, HPKE randomness, submission time and nonce while keeping the
-original message exactly. Replies refer to the parent's `message_id` and must
+immutable. The outer hash is the packet ID, not the logical message ID. Retries
+reuse the same packet on every route until it expires; only a card change needs
+a fresh packet (new HPKE randomness, time and nonce) around the same message. Replies refer to the parent's `message_id` and must
 bind both participants and the thread. Content is inert and never executes tools.
 
-Relay admission uses Identity's live timestamp window and origin-wide nonce
-store. Recipient processing verifies queued submissions historically, so offline
-and out-of-order messages remain usable. Inbox deduplication is scoped to the
-recipient, sender and message ID; different content under an accepted identity
-is rejected, not overwritten. Sender policy is checked before decryption.
+Packets are asynchronous signed objects, not live writes: relays and recipients
+reject only future-dated packets and apply no nonce maximum, so offline and
+out-of-order messages remain usable. Relays deduplicate packet IDs with
+tombstones; only card publishes use the live-write nonce store. Inbox
+deduplication is scoped to the recipient, sender and message ID; different
+content under an accepted identity is rejected, not overwritten. Sender policy
+is checked before decryption.
 
 The state helpers are **in memory**, not hosted or durable services. Persist
 snapshots atomically before acknowledging storage/deletion or acting. Relay
-snapshots preserve accepted Mail nonce maxima and sender policies; an injected
-nonce store shared with other protocols must also be persisted by the host.
+snapshots include sender policies but not the short-lived nonce cache.
 Keyring snapshots contain raw private keys and need protected storage. Pruning
 keys cannot erase copies in backups. Production HPKE always uses fresh randomness.
 
@@ -182,25 +183,25 @@ const message = createMailMessage(sender.agentId(), now, {
   parts: [mailTextPart("A private question")],
 });
 const pins = new MailCardCache();
-const submission = await pins.seal(message, card, sender, nonces.nextNonce(now), now);
+const packet = await pins.seal(message, card, sender, nonces.nextNonce(now), now);
 const keys = new MailKeyring(owner.agentId());
 keys.add(card, key);
 const inbox = new MailInbox(keys);
-const result = await inbox.accept(submission, now);
+const { kind, message: received } = await inbox.accept(packet, now);
 // Persist pins.snapshot(), keys.exportSnapshot() and inbox.snapshot() before ack.
 ```
 
-`agent-protocols/mail` exports `MailMessagePayload`/`MailLetter` for plaintext,
-`MailPacket` for the encrypted payload and `MailSubmission = Envelope<MailPacket>`
-for transport. `sealMailPacket(message, card, signer, nonce, now)` returns a signed
-submission; `openMailPacket` verifies and decrypts it. `validateMailLetter`
-checks plaintext, `validateMailPacket` checks the signed wire object, and
-`mailPacketId` returns its event hash. `validateMailReply` checks parent bindings.
-`MailInbox.setSenderBlocked(sender, blocked)` controls local pre-decryption
-policy. `MailRelayStore.setSenderBlocked(mailboxId, sender, blocked, ownerJwt,
-now)` requires owner authentication. This policy is deployment-local, with no
-new HTTP endpoint; exact retries return historical status without new admission.
-Relay `publish` and `deliver` share the injected `nonceStore`.
+`agent-protocols/mail` exports `MailMessagePayload` for plaintext and
+`MailPacket = Envelope<MailPacketPayload>` for the signed wire object.
+`sealMailPacket(message, card, signer, nonce, now)` returns a packet;
+`openMailPacket` verifies and decrypts it. `validateMailMessage` checks
+plaintext, `validateMailPacket` checks the packet, and `mailPacketId` returns its
+event hash. `validateMailReply` checks parent bindings. `MailInbox.accept`
+returns `{ kind, message }`. `MailInbox.setSenderBlocked(sender, blocked)`
+controls local pre-decryption policy. `MailRelayStore.setSenderBlocked(mailboxId,
+sender, blocked)` is relay-side policy: Mail defines no management endpoint, so
+the host authenticates the mailbox owner first. Exact retries return historical
+status without new admission. The injected `nonceStore` applies to card publishes.
 
 `MailClient` is exported from the root and `agent-protocols/mail-client`.
 It uses fixed HTTPS paths for `publish`, `card`, `deliver`, `list`, `pages` and

@@ -13,7 +13,7 @@ def main():
     request = json.load(sys.stdin)
     card = vectors['envelopes']['card']
     if request['op'] == 'seal':
-        result = encrypt_mail(vectors['messages']['letter'], card, AgentSigner.from_seed(bytes.fromhex(vectors['keys']['sender_seed_hex'])), request.get('nonce', 700), now_ms=vectors['now'])
+        result = encrypt_mail(vectors['messages']['message'], card, AgentSigner.from_seed(bytes.fromhex(vectors['keys']['sender_seed_hex'])), request.get('nonce', 700), now_ms=vectors['now'])
     elif request['op'] == 'open':
         key = MailEncryptionKey.from_private_bytes(bytes.fromhex(vectors['keys']['recipient_secret_hex']))
         result = decrypt_mail(request['packet'], card, key, vectors['keys']['recipient_agent_id'], now_ms=vectors['now'])

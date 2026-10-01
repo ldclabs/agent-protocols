@@ -68,18 +68,18 @@ impl MailCardCache {
             .retain(|_, pin| now < pin.event.created_at + MAX_TTL_MS + FUTURE_SKEW_MS);
         Ok(())
     }
-    /// Pin, encrypt the immutable message, and sign a fresh submission.
+    /// Pin, encrypt the immutable message, and sign a fresh packet.
     pub fn seal(
         &mut self,
-        letter: &Letter,
+        message: &MessagePayload,
         card: &Value,
         signer: &AgentSigner,
         nonce: u64,
         now: i64,
-    ) -> Result<Submission> {
-        validate_letter(&serde_json::to_value(letter)?)?;
-        let card = self.observe(card, &letter.to, now)?;
-        encrypt_letter(letter, &card, signer, nonce, now)
+    ) -> Result<Packet> {
+        validate_message(&serde_json::to_value(message)?)?;
+        let card = self.observe(card, &message.to, now)?;
+        encrypt_message(message, &card, signer, nonce, now)
     }
     pub fn snapshot(&self) -> Result<Value> {
         Ok(json!({"version":1,"pins":self.pins.values().collect::<Vec<_>>()}))
@@ -128,14 +128,23 @@ impl MailKeyring {
         Ok(())
     }
     /// Verify and decrypt a packet with the retained card it names; cards were verified at `add`.
-    pub fn open(&self, packet: &Submission, now: i64) -> Result<Letter> {
+    pub fn open(&self, packet: &Packet, now: i64) -> Result<MessagePayload> {
         clock(now)?;
         let (packet, bytes) = checked_packet(&serde_json::to_value(packet)?)?;
+        self.open_checked(&packet, &bytes, now)
+    }
+    /// Open a packet already validated by `checked_packet`.
+    pub(crate) fn open_checked(
+        &self,
+        packet: &Packet,
+        bytes: &[u8],
+        now: i64,
+    ) -> Result<MessagePayload> {
         let (card, key) = self
             .entries
             .get(&packet.event.payload.header.card_hash)
             .ok_or_else(|| fail("invalid_packet", "unknown retained card"))?;
-        open_verified(&packet, &bytes, card, key, &self.owner, now)
+        open_verified(packet, bytes, card, key, &self.owner, now)
     }
     /// Only keys past the signed `receive_until` are removed. This cannot erase
     /// copies held in snapshots or backups, which the application must manage.
@@ -172,7 +181,7 @@ impl MailKeyring {
     }
 }
 
-/// Cross-route letter deduplication. The application stores accepted letters;
+/// Cross-route message deduplication. The application stores accepted messages;
 /// persist the inbox snapshot with them before deleting relay copies or acting.
 /// `accept` never executes content or sends replies.
 pub struct MailInbox {
@@ -205,26 +214,24 @@ impl MailInbox {
         self.accepted
             .contains_key(&format!("{sender}/{message_id}"))
     }
+    /// Verify the packet once, apply sender policy before decryption, then deduplicate the message.
     pub fn accept(
         &mut self,
-        packet: &Submission,
+        packet: &Packet,
         claimed_packet_id: Option<&str>,
         now: i64,
     ) -> Result<InboxAcceptance> {
         clock(now)?;
-        let packet = validate_packet(&serde_json::to_value(packet)?)?;
-        if packet.event.created_at > now.saturating_add(FUTURE_SKEW_MS) {
-            return Err(SdkError::TimestampOutOfWindow);
-        }
+        let (packet, bytes) = checked_packet(&serde_json::to_value(packet)?)?;
         if claimed_packet_id.is_some_and(|id| id != packet.hash) {
             return Err(fail("invalid_packet", "packet ID mismatch"));
         }
         if self.blocked_senders.contains(&packet.event.actor) {
             return Err(SdkError::PermissionDenied);
         }
-        let letter = self.keyring.open(&packet, now)?;
-        let key = format!("{}/{}", letter.sender, letter.message_id);
-        let digest = hash_bytes(&canonical_bytes(&letter)?);
+        let message = self.keyring.open_checked(&packet, &bytes, now)?;
+        let key = format!("{}/{}", message.sender, message.message_id);
+        let digest = hash_bytes(&canonical_bytes(&message)?);
         if let Some((_, old)) = self.accepted.get(&key) {
             if old != &digest {
                 return Err(fail(
@@ -232,16 +239,16 @@ impl MailInbox {
                     "message ID reused for different content",
                 ));
             }
-            return Ok(InboxAcceptance::Duplicate(Box::new(letter)));
+            return Ok(InboxAcceptance::Duplicate(Box::new(message)));
         }
-        if now >= letter.expires_at {
+        if now >= message.expires_at {
             return Err(fail(
                 "packet_expired",
                 "expired message cannot be newly accepted",
             ));
         }
-        self.accepted.insert(key, (letter.expires_at, digest));
-        Ok(InboxAcceptance::Accepted(Box::new(letter)))
+        self.accepted.insert(key, (message.expires_at, digest));
+        Ok(InboxAcceptance::Accepted(Box::new(message)))
     }
     pub fn prune(&mut self, now: i64) -> Result<()> {
         clock(now)?;
@@ -289,13 +296,12 @@ impl RelayMailbox {
 /// Framework-neutral in-memory relay model, NOT a hosted or durable service.
 /// All outputs are owned copies. Save/restore snapshots atomically in a real
 /// service; enforce admission limits and serialized access outside this model.
-/// Snapshots retain accepted Mail nonce maxima; hosts also persist an externally shared nonce store.
+/// The short-lived Identity nonce cache is not part of the snapshot.
 pub struct MailRelayStore {
     origin: String,
     max_packets: usize,
     max_bytes: usize,
     nonces: MemoryNonceStore,
-    seen_nonces: BTreeMap<AgentId, (u64, i64)>,
     mailboxes: BTreeMap<String, RelayMailbox>,
 }
 impl MailRelayStore {
@@ -318,7 +324,6 @@ impl MailRelayStore {
             max_packets,
             max_bytes,
             nonces: MemoryNonceStore::new(),
-            seen_nonces: BTreeMap::new(),
             mailboxes: BTreeMap::new(),
         })
     }
@@ -366,13 +371,7 @@ impl MailRelayStore {
             return Err(SdkError::PermissionDenied);
         }
         identity::verify_timestamp(card.event.created_at, now, FUTURE_SKEW_MS)?;
-        accept_nonce(
-            &mut self.seen_nonces,
-            nonces,
-            &card.event.actor,
-            card.event.nonce,
-            now,
-        )?;
+        nonces.check_and_update(&card.event.actor, card.event.nonce, now, 2 * FUTURE_SKEW_MS)?;
         let record = AcceptedRecord {
             envelope: card.clone(),
             accepted_at: now,
@@ -402,23 +401,12 @@ impl MailRelayStore {
             .map(|m| m.current.clone())
             .ok_or_else(|| fail("mailbox_unavailable", "unknown mailbox"))
     }
+    /// Packets are asynchronous signed objects: no live-write window or nonce maximum applies.
     pub fn deliver(
         &mut self,
         mailbox_id: &str,
-        packet: &Submission,
+        packet: &Packet,
         now: i64,
-    ) -> Result<DeliveryResult> {
-        let mut nonces = std::mem::take(&mut self.nonces);
-        let result = self.deliver_with_nonce_store(mailbox_id, packet, now, &mut nonces);
-        self.nonces = nonces;
-        result
-    }
-    pub fn deliver_with_nonce_store<S: NonceStore + ?Sized>(
-        &mut self,
-        mailbox_id: &str,
-        packet: &Submission,
-        now: i64,
-        nonces: &mut S,
     ) -> Result<DeliveryResult> {
         clock(now)?;
         path_id(mailbox_id, 16)?;
@@ -455,6 +443,9 @@ impl MailRelayStore {
         {
             return Err(fail("invalid_packet", "packet expiry bound"));
         }
+        if packet.event.created_at > now.saturating_add(FUTURE_SKEW_MS) {
+            return Err(SdkError::TimestampOutOfWindow);
+        }
         if size > p.max_packet_bytes {
             return Err(fail("payload_too_large", "card packet limit"));
         }
@@ -468,14 +459,6 @@ impl MailRelayStore {
         if mailbox.blocked_senders.contains(&packet.event.actor) {
             return Err(SdkError::PermissionDenied);
         }
-        identity::verify_timestamp(packet.event.created_at, now, FUTURE_SKEW_MS)?;
-        accept_nonce(
-            &mut self.seen_nonces,
-            nonces,
-            &packet.event.actor,
-            packet.event.nonce,
-            now,
-        )?;
         mailbox.last_seq += 1;
         mailbox.bytes += size;
         mailbox
@@ -498,17 +481,19 @@ impl MailRelayStore {
             accepted_at: now,
         })
     }
-    /// Policy management is deployment-specific; only the authenticated owner may change it.
+    /// Owner sender policy for new packets. Mail defines no management endpoint:
+    /// the host authenticates the mailbox owner before calling this.
     pub fn set_sender_blocked(
         &mut self,
         mailbox: &str,
         sender: AgentId,
         blocked: bool,
-        jwt: &str,
-        now: i64,
     ) -> Result<()> {
-        self.owner_box(mailbox, jwt, now)?;
-        let box_ = self.mailboxes.get_mut(mailbox).unwrap();
+        path_id(mailbox, 16)?;
+        let box_ = self
+            .mailboxes
+            .get_mut(mailbox)
+            .ok_or_else(|| fail("mailbox_unavailable", "unknown mailbox"))?;
         if blocked {
             box_.blocked_senders.insert(sender);
         } else {
@@ -577,7 +562,6 @@ impl MailRelayStore {
     /// current card's `receive_until` passed; a later card is a new registration.
     pub fn prune(&mut self, now: i64) -> Result<()> {
         clock(now)?;
-        self.seen_nonces.retain(|_, (_, expires)| now < *expires);
         for m in self.mailboxes.values_mut() {
             m.drop_expired(now);
             m.tombstones.retain(|_, (_, expires)| now < *expires);
@@ -602,9 +586,7 @@ impl MailRelayStore {
                 })
             })
             .collect();
-        Ok(
-            json!({"version":1,"origin":self.origin,"mailboxes":mailboxes,"seen_nonces":self.seen_nonces}),
-        )
+        Ok(json!({"version":1,"origin":self.origin,"mailboxes":mailboxes}))
     }
     /// Restore trusted local state saved by `snapshot`; limits are not part of it.
     pub fn from_snapshot(value: &Value, max_packets: usize, max_bytes: usize) -> Result<Self> {
@@ -627,7 +609,6 @@ impl MailRelayStore {
             .as_str()
             .ok_or_else(|| fail("invalid_request", "snapshot origin"))?;
         let mut out = Self::with_limits(origin, max_packets, max_bytes)?;
-        out.seen_nonces = serde_json::from_value(value["seen_nonces"].clone())?;
         let saved: Vec<Saved> = serde_json::from_value(normalized(&value["mailboxes"]))?;
         for m in saved {
             let mut mailbox = RelayMailbox {
@@ -657,22 +638,5 @@ impl MailRelayStore {
 }
 fn path_id(value: &str, size: usize) -> Result<()> {
     fixed_bytes(value, size).map_err(|_| fail("invalid_request", "invalid path ID"))?;
-    Ok(())
-}
-
-fn accept_nonce<S: NonceStore + ?Sized>(
-    seen: &mut BTreeMap<AgentId, (u64, i64)>,
-    store: &mut S,
-    actor: &AgentId,
-    nonce: u64,
-    now: i64,
-) -> Result<()> {
-    if let Some((max, expires)) = seen.get(actor) {
-        if now < *expires && nonce <= *max {
-            return Err(SdkError::NonceNotGreater { max_nonce: *max });
-        }
-    }
-    store.check_and_update(actor, nonce, now, 2 * FUTURE_SKEW_MS)?;
-    seen.insert(actor.clone(), (nonce, now + 2 * FUTURE_SKEW_MS));
     Ok(())
 }

@@ -20,7 +20,7 @@ if (req.op === "seal")
   console.log(
     JSON.stringify(
       await sealMailPacket(
-        v.messages.letter,
+        v.messages.message,
         v.envelopes.card,
         AgentSigner.fromSeed(Buffer.from(v.keys.sender_seed_hex, "hex")),
         req.nonce ?? 700,

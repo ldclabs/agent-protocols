@@ -35,7 +35,7 @@ Agent Protocols 是一个面向自治智能体互操作的开放规范仓库。�
 - Agent Delegation 声明智能体可以代表谁行动。授权与撤销就是普通的 Agent Identity 签名事件，其 `actor` 必须是 principal 的 HTTPS URL 所发布的 controller key；Agent Profile 可以携带 delegation 发现提示。
 - Agent Discourse 对所有写操作使用 Agent Identity，并且可以从本地 Profile 存储或任意兼容的第三方 Agent Profile 服务解析 Profile。
 - Agent Knowledge 使用 Agent Identity 签名可跨服务传播的公开研究贡献，支持持续评估、复用与演进。Profile 可以发布知识服务发现提示，Discourse 可以讨论知识胶囊或提供公开证据；知识图谱不依赖这两个协议。学科应用规范补充结构化解释与验证要求，不改变核心身份或权限。
-- Agent Mail 使用 Agent Identity 签名收件配置及经过 HPKE 加密的投递。Profile 可提供 Mailbox Card 的发现提示；独立中继存储密文，收件人在本地解密并验证。接收信件不代表获得行动授权。
+- Agent Mail 使用 Agent Identity 签名收件配置及经过 HPKE 加密的密文包。Profile 可提供 Mailbox Card 的发现提示；独立中继存储密文，收件人在本地解密并验证。接收信件不代表获得行动授权。
 
 ```text
 Agent Identity
@@ -96,7 +96,7 @@ docs/
 
 Knowledge 支持包括事件构建与验证、依赖与生命周期检查、证据完整性、内存参考存储、文本与结构化查询、批量读取、绑定检查点的分页与 `after_seq` 轮询、服务发现，以及带响应验证的 HTTP 客户端。排序搜索工具验证调用方提供的候选项和单页响应契约，不提供嵌入模型或排名引擎。持久化存储、托管服务、学科验证器和 Knowledge 专用 MCP 工具仍属于应用或后续集成工作。各 SDK 的 README 提供公共 API 与示例。
 
-Mail 支持包括签名卡片与投递验证、绑定发件人的 HPKE 加解密、卡片回滚防护、旧解密密钥保留、逻辑消息去重、解密前发件人拒收、内存中继状态和 HTTP 客户端。应用需要持久保存安全状态与密钥，并在确认投递前提交收件状态；内存工具不是持久化邮箱服务。Mail 测试使用共享规范性向量和三语言加解密矩阵。安装三种 SDK 的开发依赖后，可运行 `make test-mail-interop` 验证各语言新生成密文的互操作性。
+Mail 支持包括签名卡片与密文包验证、绑定发件人的 HPKE 加解密、卡片回滚防护、旧解密密钥保留、逻辑消息去重、解密前发件人拒收、内存中继状态和 HTTP 客户端。应用需要持久保存安全状态与密钥，并在确认投递前提交收件状态；内存工具不是持久化邮箱服务。Mail 测试使用共享规范性向量和三语言加解密矩阵。安装三种 SDK 的开发依赖后，可运行 `make test-mail-interop` 验证各语言新生成密文的互操作性。
 
 未来可能会增加 OpenAPI 描述、其他语言的 SDK 指南和更完整的一致性测试套件。
 

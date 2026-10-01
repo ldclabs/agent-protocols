@@ -18,7 +18,7 @@ import {
   type MailCardRecord,
   type MailDeliveryResult,
   type MailDiscovery,
-  type MailSubmission,
+  type MailPacket,
   type MailPacketList,
 } from "./mail.js";
 export interface MailClientOptions {
@@ -84,7 +84,7 @@ export class MailClient {
     return r;
   }
   /** Sender-signed delivery or exact retransmission of a completed packet. */
-  async deliver(packet: MailSubmission): Promise<MailDeliveryResult> {
+  async deliver(packet: MailPacket): Promise<MailDeliveryResult> {
     validateMailPacket(packet);
     const r = await this.request(
       `${this.base}/${packet.event.payload.header.mailbox_id}/packets`,

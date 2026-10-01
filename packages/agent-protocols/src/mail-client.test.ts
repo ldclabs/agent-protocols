@@ -123,7 +123,7 @@ test("Mail HTTP rejects malformed signed cards and unexpected response bindings"
   for (const x of [
     { ...accepted, accepted_at: -1 },
     { ...accepted, extra: true },
-    { ...accepted, envelope: v.envelopes.letter },
+    { ...accepted, envelope: v.envelopes.original_packet },
     { ...accepted, envelope: v.envelopes.foreign_card },
   ])
     await assert.rejects(() =>
@@ -198,9 +198,9 @@ test("Mail HTTP rejects bad owners/limits/URLs before network and honors local n
   );
   for (const limit of [0, -1, 1001, 1.5])
     await assert.rejects(() => api.list(mailbox, owner, jwt(), { limit }));
-  await assert.rejects(() =>
-    api.deliver({ ...packet, ciphertext: packet.ciphertext + "A" }),
-  );
+  const tampered = structuredClone(packet);
+  tampered.event.payload.ciphertext += "A";
+  await assert.rejects(() => api.deliver(tampered));
   assert.equal(calls, 0);
   await assert.rejects(
     () =>
@@ -223,7 +223,7 @@ test("Mail HTTP rejects bad owners/limits/URLs before network and honors local n
 });
 test("Mail HTTP validates ordered lists, packet hashes and mailbox identity", async () => {
   const corrupted = structuredClone(record);
-  corrupted.packet.ciphertext = "bad";
+  corrupted.packet.event.payload.ciphertext = "bad";
   for (const value of [
     { result: [record, record] },
     { result: [{ ...record, packet_id: "A".repeat(43) }] },

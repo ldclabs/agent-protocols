@@ -148,7 +148,7 @@ def test_card_read_pins_moved_and_closed_cards_and_rejects_rollback():
         client.card(MAILBOX, OWNER, now_ms=NOW)
     assert err.value.code == 'stale_card'
     for bad in ({'envelope': ENVS['foreign_card'], 'accepted_at': NOW},
-                {'envelope': ENVS['letter'], 'accepted_at': NOW}):
+                {'envelope': ENVS['original_packet'], 'accepted_at': NOW}):
         session, _ = transport(bad)
         with pytest.raises(AgentProtocolError):
             MailClient(ORIGIN, session).card(MAILBOX, OWNER, now_ms=NOW)
@@ -164,7 +164,7 @@ def test_strict_json_and_response_shape(raw):
 def test_delivery_result_binding_and_size_limit():
     _, _, delivery = populated()
     packet = V['encryptions']['original']['packet']
-    for bad in ({**delivery, 'packet_id': ENVS['letter']['message_id']}, {**delivery, 'seq': 1},
+    for bad in ({**delivery, 'packet_id': ENVS['message']['message_id']}, {**delivery, 'seq': 1},
                 {**delivery, 'accepted_at': packet['event']['payload']['header']['expires_at']}):
         session, _ = transport((bad, 202, {}))
         with pytest.raises(AgentProtocolError):

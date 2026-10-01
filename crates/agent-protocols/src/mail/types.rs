@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub type MailboxCard = Envelope<MailboxCardPayload>;
-pub type Letter = MessagePayload;
-pub type Submission = Envelope<Packet>;
+/// The signed `mail.submit` envelope: the wire object relays store and recipients open.
+pub type Packet = Envelope<PacketPayload>;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MailboxCardPayload {
@@ -61,14 +61,13 @@ impl MailPart {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PacketHeader {
-    pub protocol: String,
     pub mailbox_id: String,
     pub card_hash: String,
     pub expires_at: i64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct Packet {
+pub struct PacketPayload {
     pub header: PacketHeader,
     pub enc: String,
     pub ciphertext: String,
@@ -84,7 +83,7 @@ pub struct DeliveryResult {
 #[serde(deny_unknown_fields)]
 pub struct PacketRecord {
     pub packet_id: String,
-    pub packet: Submission,
+    pub packet: Packet,
     pub accepted_at: i64,
     pub seq: u64,
 }
@@ -98,6 +97,6 @@ pub struct MailAddress {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum InboxAcceptance {
-    Accepted(Box<Letter>),
-    Duplicate(Box<Letter>),
+    Accepted(Box<MessagePayload>),
+    Duplicate(Box<MessagePayload>),
 }

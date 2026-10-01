@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "../../../docs/protocols/agent-mail/1.0.vectors.json"
     ))?;
     let card = validate_card(&vectors["envelopes"]["card"])?;
-    let letter = validate_letter(&vectors["messages"]["letter"])?;
+    let message = validate_message(&vectors["messages"]["message"])?;
     let seed = vectors["keys"]["sender_seed_hex"].as_str().unwrap();
     let seed: Vec<u8> = (0..seed.len())
         .step_by(2)
@@ -22,8 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match input["op"].as_str() {
         Some("seal") => println!(
             "{}",
-            serde_json::to_string(&encrypt_letter(
-                &letter,
+            serde_json::to_string(&encrypt_message(
+                &message,
                 &card,
                 &signer,
                 input["nonce"].as_u64().unwrap_or(700),

@@ -20,8 +20,8 @@ DAY = 86_400_000
 from itertools import count
 NONCES = count(1000)
 
-def encrypt_mail(letter, card, **options):
-    return sdk_encrypt_mail(letter, card, SENDER, next(NONCES), **options)
+def encrypt_mail(message, card, **options):
+    return sdk_encrypt_mail(message, card, SENDER, next(NONCES), **options)
 
 
 
@@ -59,8 +59,8 @@ def test_independent_random_keys_parts_and_sign_helpers():
     with pytest.raises(AgentProtocolError):
         mail_part('text/plain; charset=UTF-8', b'abc')
     with pytest.raises(AgentProtocolError):
-        sdk_encrypt_mail(ENVS['letter'], ENVS['card'], RECIPIENT, 400, now_ms=NOW)
-    source = {k: copy.deepcopy(v) for k,v in ENVS['letter'].items() if k not in ('message_id','from','created_at')}
+        sdk_encrypt_mail(ENVS['message'], ENVS['card'], RECIPIENT, 400, now_ms=NOW)
+    source = {k: copy.deepcopy(v) for k,v in ENVS['message'].items() if k not in ('message_id','from','created_at')}
     message = create_mail_message(SENDER.agent_id(), NOW, source)
     source['to'] = 'changed'
     assert message['to'] == OWNER and message['from'] == SENDER.agent_id()
@@ -69,33 +69,33 @@ def test_independent_random_keys_parts_and_sign_helpers():
 
 
 def test_crypto_randomness_and_malformed_card():
-    one = encrypt_mail(ENVS['letter'], ENVS['card'], now_ms=NOW)
-    two = encrypt_mail(ENVS['letter'], ENVS['card'], now_ms=NOW)
+    one = encrypt_mail(ENVS['message'], ENVS['card'], now_ms=NOW)
+    two = encrypt_mail(ENVS['message'], ENVS['card'], now_ms=NOW)
     assert one != two and one['event']['payload']['enc'] != two['event']['payload']['enc']
-    assert decrypt_mail(one, ENVS['card'], key_for(ENVS['card']), OWNER, now_ms=NOW) == ENVS['letter']
+    assert decrypt_mail(one, ENVS['card'], key_for(ENVS['card']), OWNER, now_ms=NOW) == ENVS['message']
     for malformed in ({}, {'event': {}}, {'event': {'payload': None}}, None):
         with pytest.raises(AgentProtocolError):
-            encrypt_mail(ENVS['letter'], malformed, now_ms=NOW)
+            encrypt_mail(ENVS['message'], malformed, now_ms=NOW)
 
 
 def test_encryption_checks_happen_before_hpke(monkeypatch):
     monkeypatch.setattr(mail, '_suite', lambda: pytest.fail('must not encrypt invalid input'))
-    assert code_of(lambda: encrypt_mail(ENVS['letter'], ENVS['closed_card'], now_ms=NOW)) == 'mailbox_unavailable'
-    other = signed_change(ENVS['letter'], SENDER, to=SENDER.agent_id())
+    assert code_of(lambda: encrypt_mail(ENVS['message'], ENVS['closed_card'], now_ms=NOW)) == 'mailbox_unavailable'
+    other = signed_change(ENVS['message'], SENDER, to=SENDER.agent_id())
     assert code_of(lambda: encrypt_mail(other, ENVS['card'], now_ms=NOW)) == 'invalid_actor'
-    large = signed_change(ENVS['letter'], SENDER, parts=[mail_part('application/octet-stream', bytes(5000))])
+    large = signed_change(ENVS['message'], SENDER, parts=[mail_part('application/octet-stream', bytes(5000))])
     assert code_of(lambda: encrypt_mail(large, ENVS['small_limit_card'], now_ms=NOW)) == 'payload_too_large'
-    long = signed_change(ENVS['letter'], SENDER, expires_at=NOW+3*DAY)
+    long = signed_change(ENVS['message'], SENDER, expires_at=NOW+3*DAY)
     assert code_of(lambda: encrypt_mail(long, ENVS['card'], now_ms=NOW)) == 'invalid_packet'
-    assert code_of(lambda: encrypt_mail(ENVS['letter'], ENVS['card'], now_ms=NOW+DAY+1000)) == 'stale_card'
+    assert code_of(lambda: encrypt_mail(ENVS['message'], ENVS['card'], now_ms=NOW+DAY+1000)) == 'stale_card'
 
 
 def test_card_cache_seal_pins_and_prunes():
     cache = MailCardCache()
-    sealed = cache.seal(ENVS['letter'], ENVS['card'], SENDER, next(NONCES), now_ms=NOW)
-    assert ring().open(sealed, now_ms=NOW) == ENVS['letter']
+    sealed = cache.seal(ENVS['message'], ENVS['card'], SENDER, next(NONCES), now_ms=NOW)
+    assert ring().open(sealed, now_ms=NOW) == ENVS['message']
     cache.observe(ENVS['rotated_card'], OWNER, now_ms=NOW)
-    assert code_of(lambda: cache.seal(ENVS['letter'], ENVS['card'], SENDER, next(NONCES), now_ms=NOW)) == 'stale_card'
+    assert code_of(lambda: cache.seal(ENVS['message'], ENVS['card'], SENDER, next(NONCES), now_ms=NOW)) == 'stale_card'
     exposed = cache.observe(ENVS['rotated_card'], OWNER, now_ms=NOW)
     exposed['event']['payload']['routes'] = []
     assert cache.observe(ENVS['rotated_card'], OWNER, now_ms=NOW)['event']['payload']['routes']
@@ -111,15 +111,15 @@ def test_inbox_atomic_dedup_and_poisoned_packet_does_not_block_next():
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda n: inbox.accept(packets[n % 3], now_ms=NOW), range(24)))
     assert sum(r['kind'] == 'accepted' for r in results) == 1
-    assert inbox.has(SENDER.agent_id(), ENVS['letter']['message_id'])
-    inbox.prune(now_ms=ENVS['letter']['expires_at'])
-    assert not inbox.has(SENDER.agent_id(), ENVS['letter']['message_id'])
+    assert inbox.has(SENDER.agent_id(), ENVS['message']['message_id'])
+    inbox.prune(now_ms=ENVS['message']['expires_at'])
+    assert not inbox.has(SENDER.agent_id(), ENVS['message']['message_id'])
 
 
 def test_keyring_old_secret_retention_and_prune():
     keys = ring()
     assert keys.prune(now_ms=NOW+DAY) == 0
-    assert keys.open(packet('original'), now_ms=NOW+DAY+500) == ENVS['letter']
+    assert keys.open(packet('original'), now_ms=NOW+DAY+500) == ENVS['message']
     restored = MailKeyring.from_snapshot(keys.snapshot())
     assert restored.prune(now_ms=NOW+2*DAY) == 3
     assert code_of(lambda: restored.open(packet('original'), now_ms=NOW)) == 'invalid_packet'
@@ -127,11 +127,11 @@ def test_keyring_old_secret_retention_and_prune():
 
 
 def test_reply_links_require_participants_and_thread():
-    parent = ENVS['letter']
+    parent = ENVS['message']
     payload = {**parent, 'to': SENDER.agent_id(), 'in_reply_to': parent['message_id']}
     reply = {**payload, 'from': OWNER, 'message_id': mail.new_mail_message_id()}
     validate_mail_reply(reply, parent)
-    for changes in ({'thread_id': new_mail_id()}, {'to': OWNER}, {'in_reply_to': ENVS['lower_nonce_letter']['message_id']}):
+    for changes in ({'thread_id': new_mail_id()}, {'to': OWNER}, {'in_reply_to': ENVS['lower_nonce_message']['message_id']}):
         with pytest.raises(AgentProtocolError):
             validate_mail_reply(signed_change(reply, **changes), parent)
 
@@ -227,9 +227,9 @@ def test_future_skew_max_ttl_relay_upper_boundary():
     card = signed_change(ENVS['card'], nonce=900, created_at=NOW+mail.MAIL_FUTURE_SKEW_MS,
                          expires_at=NOW+mail.MAIL_FUTURE_SKEW_MS+mail.MAIL_MAX_TTL_MS,
                          receive_until=NOW+mail.MAIL_FUTURE_SKEW_MS+mail.MAIL_MAX_TTL_MS)
-    letter = signed_change(ENVS['letter'], SENDER, nonce=901, created_at=NOW+mail.MAIL_FUTURE_SKEW_MS,
+    message = signed_change(ENVS['message'], SENDER, nonce=901, created_at=NOW+mail.MAIL_FUTURE_SKEW_MS,
                            expires_at=NOW+mail.MAIL_FUTURE_SKEW_MS+mail.MAIL_MAX_TTL_MS)
-    sealed = encrypt_mail(letter, card, now_ms=NOW)
+    sealed = encrypt_mail(message, card, now_ms=NOW)
     relay = MailRelayStore(ORIGIN)
     relay.publish(card, now_ms=NOW)
     assert relay.deliver(MAILBOX, sealed, now_ms=NOW)['accepted_at'] == NOW
@@ -255,7 +255,7 @@ def test_owner_jwt_rejects_signed_duplicate_json_members():
     assert code_of(lambda: verify_mail_owner_jwt(jwt, OWNER, ORIGIN, now_ms=NOW)) == 'invalid_token'
 
 
-def test_outer_sender_policy_before_decryption_and_authenticated_management(monkeypatch):
+def test_outer_sender_policy_before_decryption_and_relay_policy(monkeypatch):
     inbox = MailInbox(MailKeyring(OWNER))  # No key available: blocking must happen first.
     inbox.set_sender_blocked(SENDER.agent_id())
     assert code_of(lambda: inbox.accept(packet('original'), now_ms=NOW)) == 'permission_denied'
@@ -265,16 +265,13 @@ def test_outer_sender_policy_before_decryption_and_authenticated_management(monk
     assert code_of(lambda: restored.accept(packet('original'), now_ms=NOW)) == 'permission_denied'
 
     relay = MailRelayStore(ORIGIN)
+    assert code_of(lambda: relay.set_sender_blocked(MAILBOX, SENDER.agent_id(), True)) == 'mailbox_unavailable'
     relay.publish(ENVS['card'], now_ms=NOW)
-    before = relay.snapshot()
-    assert code_of(lambda: relay.set_sender_blocked(MAILBOX, SENDER.agent_id(), True, token(SENDER), now_ms=NOW)) == 'permission_denied'
-    assert relay.snapshot() == before
-    relay.set_sender_blocked(MAILBOX, SENDER.agent_id(), True, TOKEN, now_ms=NOW)
+    relay.set_sender_blocked(MAILBOX, SENDER.agent_id(), True)
     assert code_of(lambda: relay.deliver(MAILBOX, packet('original'), now_ms=NOW)) == 'permission_denied'
-    assert relay.nonce_store.max_nonce(SENDER.agent_id(), NOW) is None
-    relay.set_sender_blocked(MAILBOX, SENDER.agent_id(), False, TOKEN, now_ms=NOW)
+    relay.set_sender_blocked(MAILBOX, SENDER.agent_id(), False)
     accepted = relay.deliver(MAILBOX, packet('original'), now_ms=NOW)
-    relay.set_sender_blocked(MAILBOX, SENDER.agent_id(), True, TOKEN, now_ms=NOW)
+    relay.set_sender_blocked(MAILBOX, SENDER.agent_id(), True)
     relay.delete(MAILBOX, accepted['packet_id'], TOKEN, now_ms=NOW)
     relay = MailRelayStore.from_snapshot(relay.snapshot())
     assert relay.deliver(MAILBOX, packet('original'), now_ms=NOW+1) == accepted
@@ -282,18 +279,21 @@ def test_outer_sender_policy_before_decryption_and_authenticated_management(monk
     assert relay.list(MAILBOX, TOKEN, now_ms=NOW)['result'] == []
 
 
-def test_submission_nonce_and_live_time_survive_restart_without_affecting_offline_inbox():
-    relay = MailRelayStore(ORIGIN)
+def test_packets_are_not_live_writes_at_relays_or_recipients():
+    nonces = MemoryNonceStore()
+    relay = MailRelayStore(ORIGIN, nonce_store=nonces)
     relay.publish(ENVS['card'], now_ms=NOW)
-    relay.deliver(MAILBOX, packet('original'), now_ms=NOW)
-    relay = MailRelayStore.from_snapshot(relay.snapshot())
-    assert code_of(lambda: relay.deliver(MAILBOX, packet('lower_nonce'), now_ms=NOW)) == 'nonce_not_greater'
-    late = NOW+mail.MAIL_FUTURE_SKEW_MS+1
-    assert code_of(lambda: relay.deliver(MAILBOX, packet('reencrypted'), now_ms=late)) == 'timestamp_out_of_window'
-    retry = sdk_encrypt_mail(ENVS['letter'],ENVS['card'],SENDER,900,now_ms=late)
-    assert relay.deliver(MAILBOX,retry,now_ms=late)['packet_id'] == retry['hash']
+    first = relay.deliver(MAILBOX, packet('original'), now_ms=NOW)
+    relay = MailRelayStore.from_snapshot(relay.snapshot(), nonce_store=nonces)
+    # A lower nonce signed well outside the live-write window is still new mail.
+    late = NOW + 2 * mail.MAIL_FUTURE_SKEW_MS
+    relay.deliver(MAILBOX, packet('lower_nonce'), now_ms=late)
+    relay.deliver(MAILBOX, packet('reencrypted'), now_ms=late)
+    assert relay.deliver(MAILBOX, packet('original'), now_ms=late) == first
+    assert nonces.max_nonce(SENDER.agent_id(), NOW) is None
+    assert len(relay.list(MAILBOX, TOKEN, now_ms=NOW)['result']) == 3
     inbox = MailInbox(ring())
-    assert inbox.accept(retry,now_ms=NOW+DAY)['kind'] == 'accepted'
+    assert inbox.accept(packet('reencrypted'),now_ms=NOW+DAY)['kind'] == 'accepted'
     assert inbox.accept(packet('original'),now_ms=NOW+DAY)['kind'] == 'duplicate'
     assert inbox.accept(packet('lower_nonce'),now_ms=NOW+DAY)['kind'] == 'accepted'
 
@@ -304,7 +304,7 @@ def test_logical_id_conflict_is_not_an_overwrite_and_id_is_scoped_to_sender():
     before=inbox.snapshot()
     assert code_of(lambda: inbox.accept(packet(case['second']),now_ms=NOW)) == case['expected']
     assert inbox.snapshot()==before
-    same_id_other_sender={**ENVS['letter'],'from':OWNER}
+    same_id_other_sender={**ENVS['message'],'from':OWNER}
     other=sdk_encrypt_mail(same_id_other_sender,ENVS['card'],RECIPIENT,1000,now_ms=NOW)
     assert inbox.accept(other,now_ms=NOW)['kind']=='accepted'
     assert len(inbox.snapshot()['accepted'])==2

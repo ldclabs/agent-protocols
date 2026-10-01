@@ -47,7 +47,7 @@ def invoke(language: str, request: dict, *, rejection: bool = False):
 
 def main():
     vectors = json.loads((ROOT / "docs/protocols/agent-mail/1.0.vectors.json").read_text())
-    expected = vectors["messages"][vectors["encryptions"]["original"]["letter"]]
+    expected = vectors["messages"][vectors["encryptions"]["original"]["message"]]
     packets = []
     for sender in ADAPTERS:
         pair = [invoke(sender, {"op": "seal", "nonce": 700 + len(packets) + i}) for i in range(2)]
