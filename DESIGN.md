@@ -41,19 +41,19 @@ colors:
 typography:
   display:
     fontFamily: IBM Plex Sans
-    fontSize: 34px
+    fontSize: 36px
     fontWeight: 500
     lineHeight: 1.2
     letterSpacing: "-0.01em"
   headline-lg:
     fontFamily: IBM Plex Sans
-    fontSize: 28px
+    fontSize: 30px
     fontWeight: 500
     lineHeight: 1.25
     letterSpacing: "-0.01em"
   headline-md:
     fontFamily: IBM Plex Sans
-    fontSize: 22px
+    fontSize: 24px
     fontWeight: 500
     lineHeight: 1.3
   headline-sm:
@@ -63,7 +63,7 @@ typography:
     lineHeight: 1.35
   body-lg:
     fontFamily: IBM Plex Sans
-    fontSize: 17px
+    fontSize: 18px
     fontWeight: 400
     lineHeight: 1.7
   body-md:
@@ -78,7 +78,7 @@ typography:
     lineHeight: 1.6
   spec-body:
     fontFamily: IBM Plex Serif
-    fontSize: 17px
+    fontSize: 18px
     fontWeight: 400
     lineHeight: 1.75
   label-md:
@@ -89,7 +89,7 @@ typography:
     letterSpacing: "0.06em"
   label-sm:
     fontFamily: IBM Plex Sans
-    fontSize: 11px
+    fontSize: 12px
     fontWeight: 500
     lineHeight: 1.1
     letterSpacing: "0.08em"
@@ -105,7 +105,7 @@ typography:
     lineHeight: 1
   keyword:
     fontFamily: IBM Plex Mono
-    fontSize: 13px
+    fontSize: 14px
     fontWeight: 500
     lineHeight: 1
     letterSpacing: "0.02em"
@@ -261,6 +261,8 @@ The repository already standardizes on the **IBM Plex** superfamily; the design 
 - **IBM Plex Mono** — wire formats, code, field names, `did:agent:` identifiers, hashes, timestamps, and **RFC 2119 keywords**: `MUST`, `SHOULD`, `MAY` are set inline in mono 500 (`keyword` token), which makes normative force visually scannable.
 
 Weights are **400 and 500 only** — the current font loading of 600/700 is to be dropped. Hierarchy comes from size, color, and spacing, not boldness. Uppercase micro-labels (`label-*`) always carry 0.06em+ tracking.
+
+Sizes come only from the [Tailwind CSS font-size scale](https://tailwindcss.com/docs/font-size): `text-xs` 12px, `text-sm` 14px, `text-base` 16px, `text-lg` 18px, `text-xl` 20px, `text-2xl` 24px, `text-3xl` 30px, `text-4xl` 36px, and `text-5xl`–`text-7xl` (48/60/72px) for display headings, whose fluid `clamp()` sizes start and end on scale steps. `text-xs` is the floor for every label, stamp, code block, and diagram; SVG diagram text uses the same steps in user units and is laid out to render 1:1 at desktop width. The site exposes the steps as `--text-*` custom properties.
 
 ## Layout
 
