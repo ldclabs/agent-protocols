@@ -46,7 +46,7 @@ const response = (body: unknown, status = 200) =>
   });
 const client = (fn: any, extra: any = {}) =>
   new MailClient(service, { fetch: fn, clock: () => now, ...extra });
-test("Mail HTTP uses fixed paths, delivers anonymously and owner-authenticates reads/deletes", async () => {
+test("Mail HTTP uses fixed paths, delivers sender-signed packets without ambient credentials and owner-authenticates reads/deletes", async () => {
   const calls: { url: string; init: RequestInit }[] = [];
   const base = service + "/v1/mailboxes";
   const fetch = async (url: any, init: RequestInit) => {
@@ -132,7 +132,7 @@ test("Mail HTTP rejects malformed signed cards and unexpected response bindings"
   for (const bad of [
     { ...delivery, packet_id: "A".repeat(43) },
     { ...delivery, seq: 1 },
-    { ...delivery, accepted_at: packet.header.expires_at },
+    { ...delivery, accepted_at: packet.event.payload.header.expires_at },
   ])
     await assert.rejects(() =>
       client(async () => response(bad, 202)).deliver(packet),

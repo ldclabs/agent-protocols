@@ -14,11 +14,11 @@ import threading
 from typing import Any
 
 from .errors import AgentProtocolError
-from .identity import MAX_SAFE_NONCE, Envelope, MemoryNonceStore, NonceStore, validate_agent_id, validate_origin
+from .identity import MAX_SAFE_NONCE, AgentSigner, Envelope, MemoryNonceStore, NonceStore, validate_agent_id, validate_origin
 from .mail import (
     MAIL_FUTURE_SKEW_MS, MAIL_MAX_PACKET_BYTES, MAIL_MAX_TTL_MS,
     MailEncryptionKey, _b64, _decode, _hash, _jcs, _now, _open_verified, _packet_bytes, _parse_bounded, _require,
-    encrypt_mail, validate_mail_envelope, validate_mail_id, validate_mail_schema, validate_mailbox_card,
+    encrypt_mail, validate_mail_message, validate_mail_envelope, validate_mail_id, validate_mail_schema, validate_mailbox_card,
     verify_mail_owner_jwt,
 )
 
@@ -57,10 +57,11 @@ class MailCardCache:
                 if now >= pin['event']['created_at'] + MAIL_MAX_TTL_MS + MAIL_FUTURE_SKEW_MS:
                     del self._pins[key]
 
-    def seal(self, letter: Envelope, card: Envelope, *, now_ms: int | None = None) -> dict[str, Any]:
-        """Pin the card, then encrypt the original signed letter under it."""
+    def seal(self, letter: dict[str, Any], card: Envelope, signer: AgentSigner, nonce: int, *, now_ms: int | None = None) -> dict[str, Any]:
+        """Pin the card, encrypt the immutable message and sign a fresh submission."""
+        validate_mail_message(letter)
         now = _now(now_ms)
-        return encrypt_mail(letter, self.observe(card, letter['event']['payload']['to'], now_ms=now), now_ms=now)
+        return encrypt_mail(letter, self.observe(card, letter['to'], now_ms=now), signer, nonce, now_ms=now)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -97,7 +98,7 @@ class MailKeyring:
         packet, now = copy.deepcopy(packet), _now(now_ms)
         raw = _packet_bytes(packet, packet_id)
         with self._lock:
-            entry = self._entries.get(packet['header']['card_hash'])
+            entry = self._entries.get(packet['event']['payload']['header']['card_hash'])
         _require(entry is not None, 'invalid_packet', 'unknown retained mailbox card')
         return _open_verified(packet, raw, entry[0], entry[1], self.owner, now)
 
@@ -126,47 +127,62 @@ class MailKeyring:
 
 
 class MailInbox:
-    """Atomic cross-route deduplication by letter ID. The application stores accepted letters;
-    persist this state with them before deleting relay copies or acting. No automatic replies."""
+    """Pre-decryption sender blocking and atomic logical-message deduplication."""
     def __init__(self, keyring: MailKeyring):
         self.keyring = keyring
         self._lock = threading.RLock()
-        self._accepted: dict[str, int] = {}
+        self._accepted: dict[str, tuple[int, str]] = {}
+        self._blocked: set[str] = set()
+
+    def set_sender_blocked(self, sender: str, blocked: bool = True) -> None:
+        validate_agent_id(sender)
+        _require(type(blocked) is bool, 'invalid_request', 'blocked must be boolean')
+        with self._lock:
+            if blocked:
+                self._blocked.add(sender)
+            else:
+                self._blocked.discard(sender)
 
     def accept(self, packet: dict[str, Any], *, now_ms: int | None = None,
                packet_id: str | None = None) -> dict[str, Any]:
-        now = _now(now_ms)
-        letter = self.keyring.open(packet, now_ms=now, packet_id=packet_id)
+        packet, now = copy.deepcopy(packet), _now(now_ms)
+        _packet_bytes(packet, packet_id)
+        _require(packet['event']['created_at'] <= now + MAIL_FUTURE_SKEW_MS, 'timestamp_out_of_window', 'submission is future-dated')
         with self._lock:
-            if letter['hash'] in self._accepted:
+            _require(packet['event']['actor'] not in self._blocked, 'permission_denied', 'sender not admitted')
+            letter = self.keyring.open(packet, now_ms=now, packet_id=packet_id)
+            key = letter['from'] + '/' + letter['message_id']
+            digest = _hash(_jcs(letter))
+            previous = self._accepted.get(key)
+            if previous is not None:
+                _require(previous[1] == digest, 'invalid_event', 'message ID reused for different content')
                 return {'kind': 'duplicate', 'letter': letter}
-            expires = letter['event']['payload']['expires_at']
-            _require(now < expires, 'packet_expired', 'expired letter cannot be newly accepted')
-            self._accepted[letter['hash']] = expires
+            _require(now < letter['expires_at'], 'packet_expired', 'expired message cannot be newly accepted')
+            self._accepted[key] = (letter['expires_at'], digest)
             return {'kind': 'accepted', 'letter': letter}
 
-    def has(self, letter_id: str) -> bool:
+    def has(self, sender: str, message_id: str) -> bool:
         with self._lock:
-            return letter_id in self._accepted
+            return sender + '/' + message_id in self._accepted
 
     def prune(self, *, now_ms: int | None = None) -> None:
-        """Forget letters whose signed expiration passed; they can no longer be newly accepted."""
         now = _now(now_ms)
         with self._lock:
-            for letter_id, expires in list(self._accepted.items()):
-                if now >= expires:
-                    del self._accepted[letter_id]
+            self._accepted = {k: v for k, v in self._accepted.items() if now < v[0]}
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
-            return {'version': 1, 'owner': self.keyring.owner, 'accepted': [[k, v] for k, v in self._accepted.items()]}
+            return {'version': 1, 'owner': self.keyring.owner, 'accepted': [[k, *v] for k, v in self._accepted.items()],
+                    'blocked_senders': sorted(self._blocked)}
 
     @classmethod
     def from_snapshot(cls, keyring: MailKeyring, state: dict[str, Any]) -> 'MailInbox':
         _snapshot_version(state)
         _require(state['owner'] == keyring.owner, 'invalid_request', 'inbox owner mismatch')
         obj = cls(keyring)
-        obj._accepted = {letter_id: expires for letter_id, expires in state['accepted']}
+        obj._accepted = {key: (expires, digest) for key, expires, digest in state['accepted']}
+        for sender in state['blocked_senders']:
+            obj.set_sender_blocked(sender)
         return obj
 
 
@@ -177,10 +193,11 @@ class _Mailbox:
         self.bytes = 0
         self.packets: dict[str, tuple[dict[str, Any], int]] = {}
         self.tombstones: dict[str, dict[str, int]] = {}
+        self.blocked_senders: set[str] = set()
 
     def drop_expired(self, now: int) -> None:
         for pid, (record, size) in list(self.packets.items()):
-            if now >= record['packet']['header']['expires_at']:
+            if now >= record['packet']['event']['payload']['header']['expires_at']:
                 del self.packets[pid]
                 self.bytes -= size
 
@@ -192,7 +209,7 @@ class MailRelayStore:
     """Synchronized in-memory relay model; application hosting must add durability.
 
     All checks precede mutation under one lock. The injected Identity nonce store is
-    the service-wide live-write cache; it is short-lived and not part of the snapshot.
+    the service-wide live-write cache; accepted Mail nonce maxima are also retained in snapshots.
     Packet limits apply per mailbox.
     """
     def __init__(self, origin: str, *, nonce_store: NonceStore | None = None,
@@ -207,6 +224,7 @@ class MailRelayStore:
         self.nonce_store = nonce_store if nonce_store is not None else MemoryNonceStore()
         self._lock = threading.RLock()
         self._boxes: dict[str, _Mailbox] = {}
+        self._seen_nonces: dict[str, tuple[int, int]] = {}
 
     def discovery(self) -> dict[str, Any]:
         return {'protocol': 'agent-mail/1.0', 'service': self.origin}
@@ -230,7 +248,7 @@ class MailRelayStore:
                 _require(self.origin in p['routes'], 'permission_denied', 'first card must list this relay')
             _require(abs(e['created_at'] - now) <= MAIL_FUTURE_SKEW_MS, 'timestamp_out_of_window', 'control write outside live window')
             # The final fallible step, so a rejected card consumes no nonce.
-            self.nonce_store.check_and_update(e['actor'], e['nonce'], now, 2 * MAIL_FUTURE_SKEW_MS)
+            self._accept_nonce(e['actor'], int(e['nonce']), now)
             record = {'envelope': card, 'accepted_at': now}
             if box is None:
                 self._boxes[p['mailbox_id']] = _Mailbox(record)
@@ -250,9 +268,9 @@ class MailRelayStore:
         validate_mail_id(mailbox_id, size=16)
         packet = _parse_bounded(packet, self.max_body_bytes, 'invalid_packet') if isinstance(packet, (str, bytes)) else copy.deepcopy(packet)
         raw = _packet_bytes(packet)
-        h = packet['header']
+        h = packet['event']['payload']['header']
         _require(h['mailbox_id'] == mailbox_id, 'invalid_packet', 'path/header mailbox mismatch')
-        pid, size = _hash(raw), len(raw)
+        pid, size = packet['hash'], len(raw)
         with self._lock:
             box = self._boxes.get(mailbox_id)
             _require(box is not None, 'mailbox_unavailable', 'unknown mailbox')
@@ -270,11 +288,34 @@ class MailRelayStore:
             box.drop_expired(now)
             _require(len(box.packets) < self.max_packets and box.bytes + size <= self.max_bytes and box.last_seq < MAX_SAFE_NONCE,
                      'rate_limited', 'mailbox storage quota exhausted')
+            e = packet['event']
+            _require(e['actor'] not in box.blocked_senders, 'permission_denied', 'sender not admitted')
+            _require(abs(e['created_at'] - now) <= MAIL_FUTURE_SKEW_MS, 'timestamp_out_of_window', 'submission outside live window')
+            self._accept_nonce(e['actor'], int(e['nonce']), now)
             box.last_seq += 1
             box.packets[pid] = ({'packet_id': pid, 'packet': packet, 'accepted_at': now, 'seq': box.last_seq}, size)
             box.bytes += size
             box.tombstones[pid] = {'accepted_at': now, 'expires_at': h['expires_at']}
             return {'packet_id': pid, 'accepted_at': now}
+
+    def _accept_nonce(self, actor: str, nonce: int, now: int) -> None:
+        seen = self._seen_nonces.get(actor)
+        if seen is not None and now < seen[1] and nonce <= seen[0]:
+            raise AgentProtocolError('nonce_not_greater', 'nonce does not advance', {'max_nonce': seen[0]})
+        self.nonce_store.check_and_update(actor, nonce, now, 2 * MAIL_FUTURE_SKEW_MS)
+        self._seen_nonces[actor] = (nonce, now + 2 * MAIL_FUTURE_SKEW_MS)
+
+    def set_sender_blocked(self, mailbox_id: str, sender: str, blocked: bool, token: str, *,
+                           now_ms: int | None = None) -> None:
+        now = _now(now_ms)
+        with self._lock:
+            box = self._owner_box(mailbox_id, token, now)
+            validate_agent_id(sender)
+            _require(type(blocked) is bool, 'invalid_request', 'blocked must be boolean')
+            if blocked:
+                box.blocked_senders.add(sender)
+            else:
+                box.blocked_senders.discard(sender)
 
     def _owner_box(self, mailbox_id: str, token: str, now: int) -> _Mailbox:
         validate_mail_id(mailbox_id, size=16)
@@ -295,7 +336,7 @@ class MailRelayStore:
                                         and int(cursor) <= MAX_SAFE_NONCE), 'invalid_request', 'invalid cursor')
             after = 0 if cursor is None else int(cursor)
             rows = [record for record, _ in box.packets.values()
-                    if record['seq'] > after and now < record['packet']['header']['expires_at']]
+                    if record['seq'] > after and now < record['packet']['event']['payload']['header']['expires_at']]
             page = {'result': copy.deepcopy(rows[:limit])}
             if len(rows) > limit:
                 page['next_cursor'] = str(rows[limit - 1]['seq'])
@@ -323,8 +364,8 @@ class MailRelayStore:
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
-            return {'version': 1, 'origin': self.origin, 'mailboxes': [
-                {'current': copy.deepcopy(box.current), 'last_seq': box.last_seq,
+            return {'version': 1, 'origin': self.origin, 'seen_nonces': [[a, *v] for a, v in self._seen_nonces.items()], 'mailboxes': [
+                {'current': copy.deepcopy(box.current), 'last_seq': box.last_seq, 'blocked_senders': sorted(box.blocked_senders),
                  'packets': [copy.deepcopy(record) for record, _ in box.packets.values()],
                  'tombstones': [{'packet_id': pid, **t} for pid, t in box.tombstones.items()]}
                 for box in self._boxes.values()]}
@@ -333,8 +374,10 @@ class MailRelayStore:
     def from_snapshot(cls, state: dict[str, Any], **options: Any) -> 'MailRelayStore':
         _snapshot_version(state)
         obj = cls(state['origin'], **options)
+        obj._seen_nonces = {a: (n, t) for a, n, t in state['seen_nonces']}
         for saved in state['mailboxes']:
             box = _Mailbox(copy.deepcopy(saved['current']), saved['last_seq'])
+            box.blocked_senders = set(saved['blocked_senders'])
             for record in saved['packets']:
                 size = len(_jcs(record['packet']))
                 box.packets[record['packet_id']] = (copy.deepcopy(record), size)

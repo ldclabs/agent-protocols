@@ -1,18 +1,10 @@
-// Generated from docs/protocols/agent-mail/1.0.schema.json; keep byte-for-byte equivalent as JSON.
+// Generated from docs/protocols/agent-mail/1.0.schema.json.
 export const MAIL_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://agent-protocols.dev/schemas/agent-mail/1.0.schema.json",
   title: "Agent Mail Protocol 1.0",
   description:
-    "Structural definitions; signed objects and packets are closed, while Identity list/discovery extensions are retained. Strict I-JSON, Unicode scalar validity, canonical JCS, parsed URL origins, Ed25519 signatures, HPKE and all-zero X25519 checks, byte lengths, cross-field equality, lifetime bounds, reply binding, authorization, and stateful lifecycle requirements need semantic validation; passing this schema is not protocol conformance. Select a named definition for HTTP response objects.",
-  oneOf: [
-    {
-      $ref: "#/$defs/envelope",
-    },
-    {
-      $ref: "#/$defs/packet",
-    },
-  ],
+    "Structural definitions for owner-signed cards, sender-signed encrypted submissions, plaintext messages and HTTP records. Signatures, sender/recipient/AAD binding, canonical encoding, time, size, sender policy, live submission nonces and logical message deduplication require semantic validation.",
   $defs: {
     agentId: {
       type: "string",
@@ -117,8 +109,25 @@ export const MAIL_SCHEMA = {
     },
     messagePayload: {
       type: "object",
-      required: ["to", "expires_at", "thread_id", "parts"],
+      required: [
+        "message_id",
+        "from",
+        "created_at",
+        "to",
+        "expires_at",
+        "thread_id",
+        "parts",
+      ],
       properties: {
+        message_id: {
+          $ref: "#/$defs/hash32",
+        },
+        from: {
+          $ref: "#/$defs/agentId",
+        },
+        created_at: {
+          $ref: "#/$defs/timestampMs",
+        },
         to: {
           $ref: "#/$defs/agentId",
         },
@@ -190,54 +199,13 @@ export const MAIL_SCHEMA = {
       },
       additionalProperties: false,
     },
-    messageEvent: {
-      type: "object",
-      required: ["protocol", "type", "actor", "created_at", "nonce", "payload"],
-      properties: {
-        protocol: {
-          const: "agent-mail/1.0",
-        },
-        type: {
-          const: "mail.message",
-        },
-        actor: {
-          $ref: "#/$defs/agentId",
-        },
-        created_at: {
-          $ref: "#/$defs/timestampMs",
-        },
-        nonce: {
-          $ref: "#/$defs/positiveSafeInteger",
-        },
-        payload: {
-          $ref: "#/$defs/messagePayload",
-        },
-      },
-      additionalProperties: false,
-    },
-    messageEnvelope: {
-      type: "object",
-      required: ["event", "hash", "signature"],
-      properties: {
-        event: {
-          $ref: "#/$defs/messageEvent",
-        },
-        hash: {
-          $ref: "#/$defs/hash32",
-        },
-        signature: {
-          $ref: "#/$defs/signature",
-        },
-      },
-      additionalProperties: false,
-    },
     envelope: {
       oneOf: [
         {
           $ref: "#/$defs/mailboxCardEnvelope",
         },
         {
-          $ref: "#/$defs/messageEnvelope",
+          $ref: "#/$defs/submissionEnvelope",
         },
       ],
     },
@@ -279,7 +247,7 @@ export const MAIL_SCHEMA = {
           minLength: 1387,
           maxLength: 1048576,
           description:
-            "Decoded length must be >= 1040 and 16 modulo 1024. Total JCS(packet) length must fit the card and protocol limits; these are semantic checks.",
+            "Decoded length must be >= 1040 and 16 modulo 1024. Total JCS(signed submission) length must fit the card and protocol limits; these are semantic checks.",
         },
       },
       additionalProperties: false,
@@ -318,7 +286,7 @@ export const MAIL_SCHEMA = {
           $ref: "#/$defs/hash32",
         },
         packet: {
-          $ref: "#/$defs/packet",
+          $ref: "#/$defs/submissionEnvelope",
         },
         accepted_at: {
           $ref: "#/$defs/timestampMs",
@@ -370,5 +338,47 @@ export const MAIL_SCHEMA = {
       description:
         "Mail defines no endpoint names; delivery paths are fixed at each card route. Other members are inert extensions.",
     },
+    submissionEvent: {
+      type: "object",
+      required: ["protocol", "type", "actor", "created_at", "nonce", "payload"],
+      properties: {
+        protocol: {
+          const: "agent-mail/1.0",
+        },
+        type: {
+          const: "mail.submit",
+        },
+        actor: {
+          $ref: "#/$defs/agentId",
+        },
+        created_at: {
+          $ref: "#/$defs/timestampMs",
+        },
+        nonce: {
+          $ref: "#/$defs/positiveSafeInteger",
+        },
+        payload: {
+          $ref: "#/$defs/packet",
+        },
+      },
+      additionalProperties: false,
+    },
+    submissionEnvelope: {
+      type: "object",
+      required: ["event", "hash", "signature"],
+      properties: {
+        event: {
+          $ref: "#/$defs/submissionEvent",
+        },
+        hash: {
+          $ref: "#/$defs/hash32",
+        },
+        signature: {
+          $ref: "#/$defs/signature",
+        },
+      },
+      additionalProperties: false,
+    },
   },
+  $ref: "#/$defs/envelope",
 } as const;

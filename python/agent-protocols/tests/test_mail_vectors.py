@@ -14,7 +14,7 @@ from agent_protocols.mail_state import MailCardCache, MailInbox, MailKeyring, Ma
 
 ROOT = Path(__file__).resolve().parents[3]
 V = json.loads((ROOT / 'docs/protocols/agent-mail/1.0.vectors.json').read_text())
-ENVS = V['envelopes']
+ENVS = {**V['envelopes'], **V['messages']}
 NOW = V['now']
 OWNER = V['keys']['recipient_agent_id']
 ORIGIN = 'https://relay.example'
@@ -91,11 +91,11 @@ def test_hpke_vectors_match_entire_packet_and_plaintext(name, monkeypatch):
     card, letter = ENVS[vector['card']], ENVS[vector['letter']]
     suite = fixed_suite(bytes.fromhex(vector['ephemeral_secret_hex']))
     monkeypatch.setattr(mail, '_suite', lambda: suite)
-    sealed = mail.encrypt_mail(letter, card, now_ms=NOW)
+    sealed = mail.encrypt_mail(letter, card, AgentSigner.from_seed(bytes.fromhex(V['keys']['sender_seed_hex'])), vector['packet']['event']['nonce'], now_ms=NOW)
     assert sealed == vector['packet']
     assert mail.mail_packet_id(sealed) == vector['packet_id']
     assert mail._jcs(sealed).decode() == vector['packet_jcs']
-    assert mail._jcs(sealed['header']).decode() == vector['aad_jcs']
+    assert mail.mail_submission_aad(sealed['event']).decode() == vector['aad_jcs']
     assert mail._INFO.hex() == vector['info_hex']
     assert mail.encode_mail_plaintext(letter) == mail._decode(vector['plaintext_b64'])
     assert mail.decrypt_mail(sealed, card, key_for(card), OWNER, now_ms=NOW, packet_id=vector['packet_id']) == letter
@@ -114,8 +114,7 @@ def test_structural_vectors(case):
 def test_all_recipient_rejections(case):
     card = ENVS[case.get('card', 'card')]
     key = mail.MailEncryptionKey.from_private_bytes(bytes.fromhex(case['secret_hex'])) if 'secret_hex' in case else key_for(card)
-    with pytest.raises(AgentProtocolError):
-        mail.decrypt_mail(case['packet'], card, key, case.get('owner', OWNER), now_ms=NOW, packet_id=case.get('packet_id'))
+    assert code_of(lambda: mail.decrypt_mail(case['packet'], card, key, case.get('owner', OWNER), now_ms=NOW, packet_id=case.get('packet_id'))) == case['code']
 
 
 @pytest.mark.parametrize('case', V['sender_card_cases'], ids=lambda c: c['name'])

@@ -4,6 +4,7 @@ import json
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from agent_protocols.identity import AgentSigner
 from agent_protocols.mail import MailEncryptionKey, decrypt_mail, encrypt_mail
 
 
@@ -12,7 +13,7 @@ def main():
     request = json.load(sys.stdin)
     card = vectors['envelopes']['card']
     if request['op'] == 'seal':
-        result = encrypt_mail(vectors['envelopes']['letter'], card, now_ms=vectors['now'])
+        result = encrypt_mail(vectors['messages']['letter'], card, AgentSigner.from_seed(bytes.fromhex(vectors['keys']['sender_seed_hex'])), request.get('nonce', 700), now_ms=vectors['now'])
     elif request['op'] == 'open':
         key = MailEncryptionKey.from_private_bytes(bytes.fromhex(vectors['keys']['recipient_secret_hex']))
         result = decrypt_mail(request['packet'], card, key, vectors['keys']['recipient_agent_id'], now_ms=vectors['now'])

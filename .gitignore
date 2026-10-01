@@ -14,3 +14,4 @@ __pycache__/
 *.tsbuildinfo
 Cargo.lock
 pnpm-lock.yaml
+.pnpm-store

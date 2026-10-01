@@ -1,4 +1,5 @@
 /** Cross-language harness: the production API always chooses fresh HPKE randomness. */
+import { AgentSigner } from "../src/identity.js";
 import { readFileSync } from "node:fs";
 import {
   MailEncryptionKey,
@@ -18,7 +19,13 @@ const req = JSON.parse(readFileSync(0, "utf8"));
 if (req.op === "seal")
   console.log(
     JSON.stringify(
-      await sealMailPacket(v.envelopes.letter, v.envelopes.card, v.now),
+      await sealMailPacket(
+        v.messages.letter,
+        v.envelopes.card,
+        AgentSigner.fromSeed(Buffer.from(v.keys.sender_seed_hex, "hex")),
+        req.nonce ?? 700,
+        v.now,
+      ),
     ),
   );
 else if (req.op === "open")

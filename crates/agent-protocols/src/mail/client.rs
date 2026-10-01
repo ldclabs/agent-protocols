@@ -221,16 +221,16 @@ impl MailClient {
         }
         Ok(serde_json::from_value(normalized(&value))?)
     }
-    /// Anonymous delivery or exact retransmission of a completed packet.
+    /// Sender-signed delivery or exact retransmission of a completed packet.
     /// No JWT/cookie argument exists.
-    pub async fn deliver(&self, packet: &Packet) -> Result<DeliveryResult> {
+    pub async fn deliver(&self, packet: &Submission) -> Result<DeliveryResult> {
         let packet = validate_packet(&serde_json::to_value(packet)?)?;
         let value = self
             .send(
                 self.inner
                     .post(format!(
                         "{}/{}/packets",
-                        self.base, packet.header.mailbox_id
+                        self.base, packet.event.payload.header.mailbox_id
                     ))
                     .json(&packet),
                 202,
@@ -238,7 +238,8 @@ impl MailClient {
             .await?;
         validate_mail_schema(&value, "deliveryResult")?;
         let result: DeliveryResult = serde_json::from_value(normalized(&value))?;
-        if result.packet_id != packet_id(&packet)? || result.accepted_at >= packet.header.expires_at
+        if result.packet_id != packet_id(&packet)?
+            || result.accepted_at >= packet.event.payload.header.expires_at
         {
             return Err(fail("invalid_response", "delivery result mismatch"));
         }
@@ -277,10 +278,10 @@ impl MailClient {
         let mut previous = 0;
         for record in &response.result {
             validate_packet(&serde_json::to_value(&record.packet)?)?;
-            if record.packet.header.mailbox_id != mailbox
+            if record.packet.event.payload.header.mailbox_id != mailbox
                 || packet_id(&record.packet)? != record.packet_id
                 || record.seq <= previous
-                || record.accepted_at >= record.packet.header.expires_at
+                || record.accepted_at >= record.packet.event.payload.header.expires_at
             {
                 return Err(fail(
                     "invalid_response",

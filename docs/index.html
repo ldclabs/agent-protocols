@@ -1329,7 +1329,7 @@
         <header class="sec-h rv">
           <span class="kicker" data-i18n="st.kicker">1 — The stack</span>
           <h2 data-i18n="st.title">Six questions. Six protocols. <em>One</em> foundation.</h2>
-          <p data-i18n="st.sub">Each protocol answers one question — and states plainly what it does not prove. All protocols reuse Agent Identity signed envelopes; Mail encrypts its letters inside opaque packets. Read Identity first: it also defines the shared HTTP conventions.</p>
+          <p data-i18n="st.sub">Each protocol answers one question and states its boundaries. All reuse Identity envelopes; Mail signs encrypted packets. Read Identity first for the shared HTTP conventions.</p>
         </header>
         <div class="stack-grid">
           <div class="stack-vis">
@@ -1441,7 +1441,7 @@
               <p class="pc-desc" data-i18n="p6.desc">End-to-end encrypted correspondence with offline delivery: identity stays with the agent, while mailbox providers and routes can change.</p>
               <ul class="pc-list">
                 <li data-i18n="p6.f1">Recipient-signed Mailbox Cards bind independent encryption keys to delivery routes.</li>
-                <li data-i18n="p6.f2">HPKE encrypts the complete signed Letter; relays store opaque Packets.</li>
+                <li data-i18n="p6.f2">HPKE encrypts messages; Ed25519 signs packets so relays can verify senders without reading content.</li>
                 <li data-i18n="p6.f3">Replies, inline attachments, key rotation, route changes, and retries.</li>
                 <li data-i18n="p6.f4">Rust, TypeScript, and Python SDKs share vectors and exchange encrypted packets; MCP integration remains future work.</li>
               </ul>
@@ -1547,10 +1547,7 @@
         <header class="sec-h rv">
           <span class="kicker" data-i18n="ml.kicker">3 — Mail</span>
           <h2 data-i18n="ml.title">Relays carry it. Only the recipient can <em>open</em> it.</h2>
-          <p data-i18n="ml.sub">The recipient signs a Mailbox Card that binds a separate X25519 key to its routes. The sender
-            signs the entire letter, pads it to a 1 KiB boundary, and seals it with HPKE — so relays store an opaque packet,
-            with no sender, subject, or signature in sight. Everything below runs in your browser and reproduces the
-            normative <code>agent-mail/1.0</code> vectors byte for byte.</p>
+          <p data-i18n="ml.sub">The sender encrypts an immutable message, then signs its HPKE packet. Relays verify the sender before admission while subjects and content remain encrypted. This browser demo reproduces the signed <code>agent-mail/1.0</code> vectors byte for byte.</p>
         </header>
         <div class="ml rv" id="ml">
           <div class="ml-head">
@@ -1602,6 +1599,8 @@
               <div>
                 <div class="lbl" data-i18n="ml.seen">What a relay sees</div>
                 <dl class="seen">
+                  <div><dt>actor</dt><dd data-s="actor">—</dd></div>
+                  <div><dt>signature</dt><dd data-s="sig">—</dd></div>
                   <div><dt>mailbox_id</dt><dd data-s="mbx">—</dd></div>
                   <div><dt>card_hash</dt><dd data-s="card">—</dd></div>
                   <div><dt>expires_at</dt><dd data-s="exp">—</dd></div>
@@ -1612,11 +1611,11 @@
               <div>
                 <div class="lbl" data-i18n="ml.sealed">Sealed inside</div>
                 <ul class="redact">
-                  <li><span data-i18n="ml.r.from">sender</span><i style="--w:88%"></i></li>
+                  <li><span>message_id</span><i style="--w:88%"></i></li>
                   <li><span data-i18n="ml.r.subj">subject</span><i style="--w:64%"></i></li>
                   <li><span data-i18n="ml.r.thread">thread</span><i style="--w:76%"></i></li>
                   <li><span data-i18n="ml.r.parts">parts</span><i style="--w:52%"></i></li>
-                  <li><span data-i18n="ml.r.sig">signature</span><i style="--w:96%"></i></li>
+                  <li><span>created_at</span><i style="--w:96%"></i></li>
                 </ul>
               </div>
             </div>
@@ -1642,12 +1641,12 @@
           </div>
           <ol class="steps" id="mlSteps">
             <li class="step" tabindex="0"><span class="num">1</span><h4 data-i18n="ml.1t">Pin the card</h4><p data-i18n="ml.1d">Fetch <code>/v1/mailboxes/{id}/card</code> from a route, verify it under the owner's Agent ID, and pin its nonce.</p></li>
-            <li class="step" tabindex="0"><span class="num">2</span><h4 data-i18n="ml.2t">Sign the letter</h4><p data-i18n="ml.2d">The whole letter is one Identity envelope, and its hash is the letter ID.</p></li>
+            <li class="step" tabindex="0"><span class="num">2</span><h4 data-i18n="ml.2t">Prepare the message</h4><p data-i18n="ml.2d">Keep a stable random message_id and original creation time across every retry.</p></li>
             <li class="step" tabindex="0"><span class="num">3</span><h4 data-i18n="ml.3t">Frame and pad</h4><p data-i18n="ml.3d"><code>I2OSP(n, 4) || JCS(letter)</code>, zero-padded to the next 1 KiB, so size leaks only in coarse steps.</p></li>
-            <li class="step" tabindex="0"><span class="num">4</span><h4 data-i18n="ml.4t">Seal with HPKE</h4><p data-i18n="ml.4d">X25519 · HKDF-SHA256 · ChaCha20-Poly1305 — one fixed suite, no negotiation. The routing header is the AAD.</p></li>
-            <li class="step" tabindex="0"><span class="num">5</span><h4 data-i18n="ml.5t">Relay accepts</h4><p data-i18n="ml.5d">Checks shape, route membership, the current card hash, and expiry. It holds no key and cannot decrypt.</p></li>
-            <li class="step" tabindex="0"><span class="num">6</span><h4 data-i18n="ml.6t">Owner opens</h4><p data-i18n="ml.6d">Lists packets with an owner request JWT, then opens with the secret retained for that card.</p></li>
-            <li class="step" tabindex="0"><span class="num">7</span><h4 data-i18n="ml.7t">Verify and accept</h4><p data-i18n="ml.7d">Signature, recipient, and matching expiry; then deduplicate by letter ID and persist before deleting the packet.</p></li>
+            <li class="step" tabindex="0"><span class="num">4</span><h4 data-i18n="ml.4t">Encrypt, then sign</h4><p data-i18n="ml.4d">HPKE binds the sender, submission time, nonce and routing header as AAD. Ed25519 signs the complete encrypted packet.</p></li>
+            <li class="step" tabindex="0"><span class="num">5</span><h4 data-i18n="ml.5t">Relay accepts</h4><p data-i18n="ml.5d">Verifies the outer signature, sender policy, live nonce, current card and expiry before storing ciphertext.</p></li>
+            <li class="step" tabindex="0"><span class="num">6</span><h4 data-i18n="ml.6t">Owner opens</h4><p data-i18n="ml.6d">Verifies sender and local policy before opening with the retained recipient secret.</p></li>
+            <li class="step" tabindex="0"><span class="num">7</span><h4 data-i18n="ml.7t">Verify and accept</h4><p data-i18n="ml.7d">Check sender/recipient bindings and deadline; deduplicate by sender and message_id before persisting and deleting the relay copy.</p></li>
           </ol>
           <div class="dg-detail ml-detail">
             <div class="dg-cur" id="mlCur" aria-live="polite"></div>
@@ -1658,7 +1657,7 @@
         <div class="kg-facts">
           <div class="fact rv"><b data-i18n="ml.f1t">Identity stays; mailboxes move</b><p data-i18n="ml.f1d">A card lists up to eight routes and can be replaced at any time. Senders pin the card with the greatest nonce, so a stale card never comes back.</p></div>
           <div class="fact rv"><b data-i18n="ml.f2t">An acknowledgement is a reply</b><p data-i18n="ml.f2d">There is no receipt type. A reply attests only what its signer wrote — never that a letter was read, approved, or acted on.</p></div>
-          <div class="fact rv"><b data-i18n="ml.f3t">Honest limits</b><p data-i18n="ml.f3d">Relays still see timing, padded size, and the mailbox. Base-mode HPKE has no forward secrecy against a retained key, so owners rotate keys and erase retired secrets.</p></div>
+          <div class="fact rv"><b data-i18n="ml.f3t">Honest limits</b><p data-i18n="ml.f3d">Relays see authenticated senders, timing, padded sizes and mailboxes. Subjects and content remain encrypted. Base HPKE has no forward secrecy against compromise of retained recipient keys.</p></div>
         </div>
       </div>
     </section>
@@ -1969,7 +1968,7 @@
       "se.delegation": "Signed by a Controller key listed at the principal's HTTPS URL.",
       "se.discourse": "Everything else is declared per room — inline, or imported from type packs.",
       "se.knowledge": "A capsule's ID is its envelope hash; every relation points at an exact version.",
-      "se.mail": "The recipient signs its Mailbox Card. Senders encrypt signed Letters locally; relays only store Packets.",
+      "se.mail": "Messages are encrypted first; the sender signs each submission so relays can verify identity and admission.",
       "dg.o1ok": "document.id equals the signed principal_id",
       "dg.o1bad": "{a} redirects to {b}; the signed principal_id is an alias, so it is rejected",
       "dg.o2ok": "credential found; grant_event_id names the accepted record",
@@ -2021,37 +2020,37 @@
       "ml.fcap": "<b>{n}&nbsp;B</b> letter + 4&nbsp;B length + {p}&nbsp;B padding<br>= <b>{f}&nbsp;B</b> frame → {c}&nbsp;B ciphertext",
       "ml.pin": "pinned #{n}", "ml.key": "card #{n} · X25519 {k} · secret kept until receive_until",
       "ml.m.vec": "normative vector", "ml.m.yours": "your letter", "ml.m.sim": "simulated signatures",
-      "ml.lid.none": "signed on send", "ml.sent": "sent · kept for retries",
+      "ml.lid.none": "ID on send", "ml.sent": "sent · kept for retries",
       "ml.q.stored": "stored", "ml.q.deleted": "tombstone", "ml.q.mut": "rewritten", "ml.q.empty": "no packets",
       "ml.empty": "No letters yet.", "ml.ib.ok": "verified", "ml.ib.open": "opening", "ml.ib.q": "quarantined",
       "ml.ib.qd": "{why} · handled locally: no bounce, no remote error", "ml.ib.n": "{n} packets",
-      "ml.v.yes": "✓ yes", "ml.v.no": "✗ AEAD", "ml.v.new": "✓ new letter", "ml.v.dup": "duplicate", "ml.v.quar": "quarantined", "ml.v.never": "never implied",
+      "ml.v.yes": "✓ yes", "ml.v.no": "✗ verification", "ml.v.new": "✓ new letter", "ml.v.dup": "duplicate", "ml.v.quar": "quarantined", "ml.v.never": "never implied",
       "ml.net.v": "observable",
       "ml.i.card": "Mailbox Card", "ml.i.letter": "Letter", "ml.i.frame": "Plaintext frame", "ml.i.packet": "Packet",
       "ml.i.result": "Delivery result", "ml.i.record": "Packet record", "ml.i.inbox": "Local acceptance", "ml.i.wait": "Not reached yet.",
       "ml.hex.pad": "zero padding",
       "ml.o1": "card {h} verified under the owner's Agent ID · pinned nonce {n} · {r} routes",
       "ml.o1again": "refreshed: same hash {h} as the pinned card — only a greater nonce or the same hash is accepted",
-      "ml.o2": "letter ID {h} · nonce {n} · to = card owner · expires_at ≤ receive_until",
-      "ml.o2same": "the same signed letter, kept for retries — letter ID {h} is unchanged",
+      "ml.o2": "message ID {h} · immutable plaintext · next submission nonce {n}",
+      "ml.o2same": "the original message is retained for retries — message ID {h} is unchanged",
       "ml.o3": "{n} B letter → {f} B frame with {p} B of zero padding",
       "ml.o4": "enc 32 B · ciphertext {c} B · packet_id {id} · fresh ephemeral key",
       "ml.o4vec": "enc 32 B · ciphertext {c} B · packet_id {id} — byte-identical to vector “{v}”",
-      "ml.o5": "202 from {r}: {id}. The anonymous delivery result carries no seq.",
+      "ml.o5": "202 from {r}: verified signed packet {id}; no mailbox seq is disclosed.",
       "ml.o5mut": "202 from {r} — then the relay rewrote its stored {f} and recomputed packet_id",
       "ml.o6": "listed as seq {s} · AEAD tag verified · {f} B frame, minimal padding",
-      "ml.o6flip": "AEAD tag mismatch: one ciphertext byte changed. Quarantined locally — no bounce, no remote error",
-      "ml.o6ext": "AEAD tag mismatch: the header is the AAD, so a later expires_at breaks it. Quarantined locally",
-      "ml.o7": "signature ✓ · to = this agent · expirations match · new letter ID persisted, then the packet is deleted",
+      "ml.o6flip": "Outer signature failed before decryption: ciphertext changed. Quarantined locally.",
+      "ml.o6ext": "Outer signature failed before decryption: expires_at changed. The header is also bound by HPKE AAD.",
+      "ml.o7": "from = verified actor · recipient and expiry match · persist logical ID, then delete packet",
       "ml.o7dup": "letter ID {h} was already accepted — no new inbox item; the packet is deleted",
       "ml.o7bad": "the signature or recipient binding does not verify",
       "ml.s.vec": "<b>Byte-identical to the normative vector.</b> Card, letter, X25519, HKDF, ChaCha20-Poly1305, and packet <code>{id}</code> were recomputed in your browser.",
       "ml.s.vec2": "<b>Vector “reencrypted” matches too.</b> A fresh encapsulation made packet <code>{id}</code>, but the letter ID is unchanged — still one inbox item.",
-      "ml.s.new": "<b>Your letter arrived.</b> Signed with nonce {n}, padded to {f} B, and sealed under a fresh ephemeral key. No relay saw its sender or subject.",
+      "ml.s.new": "<b>Your message arrived.</b> The encrypted packet was signed with nonce {n}. Relays verified its sender; subject and content stayed encrypted.",
       "ml.s.dup": "<b>Deduplicated.</b> Packet <code>{id}</code> carried a letter ID the recipient already holds, so nothing new reached the inbox. Retries are safe.",
-      "ml.s.flip": "<b>Tampering is detected, not repaired.</b> A relay can drop or corrupt mail, but one flipped byte fails the AEAD tag — and the sender is told nothing.",
-      "ml.s.ext": "<b>Visible is not writable.</b> The header travels in the clear so relays can route it, but it is authenticated as AAD.",
-      "ml.s.draft": "Draft changed. <b>Seal &amp; send</b> signs it as a new letter (nonce {n}); resending only retries a letter already sent.",
+      "ml.s.flip": "<b>Tampering fails outer verification.</b> Recomputing the packet ID cannot repair the sender signature. No recipient secret was used.",
+      "ml.s.ext": "<b>The deadline is authenticated twice.</b> Both the outer signature and HPKE AAD bind the header.",
+      "ml.s.draft": "Draft changed. Sending creates a new message ID and signs an encrypted submission (nonce {n}).",
       "ml.s.sim": "WebCrypto Ed25519 isn't available in this browser, so signatures are simulated. HPKE and hashes are still computed for real.",
       "kg.seq": "<b>{n}</b> accepted records · {a} authors",
       "kg.empty": "Select a capsule to inspect its signed provenance.",
@@ -2089,7 +2088,7 @@
       "se.delegation": "由主体 HTTPS URL 上列出的 Controller 密钥签名。",
       "se.discourse": "其余一切都由 Room 自行声明——内联定义，或从类型包导入。",
       "se.knowledge": "胶囊 ID 就是其信封哈希；每条关系都指向确切版本。",
-      "se.mail": "收件方签署邮箱卡片；发件方在本地加密签名信件，中继只存储密文包。",
+      "se.mail": "先加密消息，再由发件人签署投递；中继可以验证身份和准入。",
       "dg.o1ok": "document.id 与签名中的 principal_id 完全一致",
       "dg.o1bad": "{a} 会重定向到 {b}；签名中的 principal_id 是别名，因此被拒绝",
       "dg.o2ok": "找到凭证；grant_event_id 指向已接受记录",
@@ -2141,37 +2140,37 @@
       "ml.fcap": "<b>{n}&nbsp;B</b> 信件 + 4&nbsp;B 长度 + {p}&nbsp;B 填充<br>= <b>{f}&nbsp;B</b> 帧 → 密文 {c}&nbsp;B",
       "ml.pin": "已固定 #{n}", "ml.key": "卡片 #{n} · X25519 {k} · 私钥保留至 receive_until",
       "ml.m.vec": "规范测试向量", "ml.m.yours": "你的信件", "ml.m.sim": "模拟签名",
-      "ml.lid.none": "发送时签名", "ml.sent": "已发送 · 保留以便重试",
+      "ml.lid.none": "发送时生成 ID", "ml.sent": "已发送 · 保留以便重试",
       "ml.q.stored": "已存储", "ml.q.deleted": "墓碑", "ml.q.mut": "已改写", "ml.q.empty": "暂无密文包",
       "ml.empty": "尚无信件。", "ml.ib.ok": "已验证", "ml.ib.open": "拆封中", "ml.ib.q": "已隔离",
       "ml.ib.qd": "{why} · 仅在本地处理：不退信，也不向远端报错", "ml.ib.n": "{n} 个密文包",
-      "ml.v.yes": "✓ 是", "ml.v.no": "✗ AEAD", "ml.v.new": "✓ 新信件", "ml.v.dup": "重复", "ml.v.quar": "已隔离", "ml.v.never": "从不隐含",
+      "ml.v.yes": "✓ 是", "ml.v.no": "✗ 验证失败", "ml.v.new": "✓ 新信件", "ml.v.dup": "重复", "ml.v.quar": "已隔离", "ml.v.never": "从不隐含",
       "ml.net.v": "可观察",
       "ml.i.card": "邮箱卡片", "ml.i.letter": "信件", "ml.i.frame": "明文帧", "ml.i.packet": "密文包",
       "ml.i.result": "投递结果", "ml.i.record": "密文包记录", "ml.i.inbox": "本地接受", "ml.i.wait": "尚未执行。",
       "ml.hex.pad": "零填充",
       "ml.o1": "卡片 {h} 已在所有者的 Agent ID 之下验证 · 固定 nonce {n} · {r} 条路由",
       "ml.o1again": "已刷新：与固定卡片哈希 {h} 相同——只接受更大的 nonce 或相同的哈希",
-      "ml.o2": "信件 ID {h} · nonce {n} · to = 卡片所有者 · expires_at ≤ receive_until",
-      "ml.o2same": "同一封签名信件，已保留以便重试——信件 ID {h} 不变",
+      "ml.o2": "消息 ID {h} · 不可变明文 · 下次投递 nonce {n}",
+      "ml.o2same": "保留原消息以便重试——消息 ID {h} 不变",
       "ml.o3": "{n} B 信件 → {f} B 帧，含 {p} B 零填充",
       "ml.o4": "enc 32 B · 密文 {c} B · packet_id {id} · 全新临时密钥",
       "ml.o4vec": "enc 32 B · 密文 {c} B · packet_id {id}——与向量 “{v}” 逐字节一致",
-      "ml.o5": "{r} 返回 202：{id}。匿名投递结果不含 seq。",
+      "ml.o5": "{r} 返回 202：已验签密文包 {id}；不公开邮箱 seq。",
       "ml.o5mut": "{r} 返回 202——随后中继改写了所存的 {f}，并重算了 packet_id",
       "ml.o6": "列表中为 seq {s} · AEAD 标签验证通过 · {f} B 帧，填充最小",
-      "ml.o6flip": "AEAD 标签不匹配：密文有一个字节被改动。在本地隔离——不退信，也不向远端报错",
-      "ml.o6ext": "AEAD 标签不匹配：头部就是 AAD，改大 expires_at 即令其失效。在本地隔离",
-      "ml.o7": "签名 ✓ · to = 本智能体 · 过期时间一致 · 新信件 ID 已持久保存，随后删除密文包",
+      "ml.o6flip": "密文被修改，解密前外层验签失败。在本地隔离。",
+      "ml.o6ext": "有效期被修改，解密前外层验签失败。头部同时由 HPKE AAD 绑定。",
+      "ml.o7": "from 等于已验证 actor · 收件人和有效期匹配 · 持久保存逻辑 ID 后删除密文包",
       "ml.o7dup": "信件 ID {h} 已被接受过——不新增收件箱条目；删除该密文包",
       "ml.o7bad": "签名或收件人绑定验证失败",
       "ml.s.vec": "<b>与规范性测试向量逐字节一致。</b>卡片、信件、X25519、HKDF、ChaCha20-Poly1305 与密文包 <code>{id}</code> 都在你的浏览器中重新计算。",
       "ml.s.vec2": "<b>向量 “reencrypted” 同样一致。</b>重新封装得到密文包 <code>{id}</code>，但信件 ID 不变——收件箱仍只有一条。",
-      "ml.s.new": "<b>你的信已送达。</b>以 nonce {n} 签名、填充到 {f} B，并用全新的临时密钥封装。没有任何中继看到发件人或主题。",
+      "ml.s.new": "<b>你的消息已送达。</b>加密密文包以 nonce {n} 签名。中继验证了发件人；主题与内容保持加密。",
       "ml.s.dup": "<b>已去重。</b>密文包 <code>{id}</code> 携带的信件 ID 收件方已经持有，收件箱没有新增。重试是安全的。",
-      "ml.s.flip": "<b>篡改会被发现，而不是被修复。</b>中继可以丢弃或损坏信件，但改动一个字节就会让 AEAD 标签失效——发件方也得不到任何反馈。",
-      "ml.s.ext": "<b>可见不等于可改。</b>头部以明文传输以便中继路由，但它作为 AAD 受到认证。",
-      "ml.s.draft": "草稿已修改。<b>封装并发送</b>会将其签署为新信件（nonce {n}）；重发只会重试已发送的信件。",
+      "ml.s.flip": "<b>篡改未通过外层验证。</b>重算密文包 ID 无法修复发件人签名。没有调用收件私钥。",
+      "ml.s.ext": "<b>截止时间受到双重认证。</b>外层签名与 HPKE AAD 都绑定头部。",
+      "ml.s.draft": "草稿已改变。发送时生成新的消息 ID，并签署加密投递（nonce {n}）。",
       "ml.s.sim": "当前浏览器不支持 WebCrypto Ed25519，签名为模拟结果；HPKE 与哈希仍是真实计算。",
       "kg.seq": "<b>{n}</b> 条已接受记录 · {a} 位作者",
       "kg.empty": "选择一个胶囊，查看它的签名来源。",
@@ -2204,7 +2203,7 @@
     "desk.key": "新密钥", "desk.tamper": "篡改", "desk.reset": "向量",
     "st.kicker": "1 — 协议栈",
     "st.title": "六个问题，六个协议，<em>一个</em>基础。",
-    "st.sub": "每个协议只回答一个问题，并明确说明它不能证明什么。所有协议复用 Agent Identity 签名信封；Mail 将签名信件加密为不透明的密文包。请先阅读 Identity：它还定义了共用的 HTTP 约定。",
+    "st.sub": "每个协议回答一个问题并明确边界。所有协议复用 Identity 信封；Mail 签署加密密文包。先读 Identity，了解共享 HTTP 约定。",
     "st.e.mail": "声明邮箱卡片", "st.e.advert": "声明知识服务", "st.e.resolve": "解析展示档案", "st.e.hints": "委托线索", "st.e.discuss": "讨论知识胶囊",
     draft: "草案", bound: "边界", "l.spec": "规范全文", "l.vectors": "测试向量", "l.packs": "类型包",
     "p1.q": "由哪把密钥签名？",
@@ -2245,7 +2244,7 @@
     "p6.q": "智能体如何异步交换私密信件？",
     "p6.desc": "支持离线投递的端到端加密通信：身份始终属于智能体，邮箱提供方和投递路由可以替换。",
     "p6.f1": "收件方签署的邮箱卡片（Mailbox Card）将独立的加密密钥绑定到投递路由。",
-    "p6.f2": "HPKE 加密完整的签名信件（Letter）；中继只存储不透明的密文包（Packet）。",
+    "p6.f2": "HPKE 加密消息，Ed25519 签署密文包；中继可验证发件人而不读取内容。",
     "p6.f3": "支持回复、内联附件、密钥轮换、路由变更与重试。",
     "p6.f4": "Rust、TypeScript 和 Python SDK 共用向量并互通密文包；MCP 集成仍属于后续工作。",
     "p6.b": "中继仍能观察投递元数据。收到信件不代表授权执行。",
@@ -2285,7 +2284,7 @@
     "ts.packs2": "Room 可以用 <code>{ \"use\": \"adp:deliberation/1.0\" }</code> 导入类型包，也可以内联定义自己的类型。",
     "ml.kicker": "3 — 邮件",
     "ml.title": "中继负责投递，只有收件人能<em>拆开</em>。",
-    "ml.sub": "收件方签署一张邮箱卡片，把独立的 X25519 密钥绑定到投递路由。发件方对整封信签名、填充到 1 KiB 边界，再用 HPKE 封装——中继只保存不透明的密文包，看不到发件人、主题或签名。下方一切都在你的浏览器中运行，并与规范性 <code>agent-mail/1.0</code> 测试向量逐字节一致。",
+    "ml.sub": "发件方先加密不可变消息，再签署 HPKE 密文包。中继在准入前验证发件人，主题和内容仍保持加密。浏览器演示逐字节复现 <code>agent-mail/1.0</code> 签名投递向量。",
     "ml.addr": "联系地址——Agent URL",
     "ml.addr2": "路径说明是什么，查询参数说明在哪里。路由只是未经认证的提示：卡片验证通过后，以卡片自身的路由为准。",
     "ml.snd": "发件方", "ml.rcp": "收件方", "ml.to": "收件人", "ml.subj": "主题", "ml.lid": "信件 ID",
@@ -2295,16 +2294,16 @@
     "ml.d.valid": "密码学上有效", "ml.d.acc": "作为通信被接受", "ml.d.auth": "获准采取行动",
     "ml.b.send": "封装并发送", "ml.b.mirror": "经镜像重发", "ml.b.flip": "中继改动一个字节", "ml.b.extend": "中继延长过期时间", "ml.b.reset": "向量",
     "ml.1t": "固定卡片", "ml.1d": "从一条路由获取 <code>/v1/mailboxes/{id}/card</code>，在所有者的 Agent ID 之下验证，并固定其 nonce。",
-    "ml.2t": "签署信件", "ml.2d": "整封信件是一个 Identity 信封，其哈希就是信件 ID。",
+    "ml.2t": "准备消息", "ml.2d": "所有重试保留同一个随机 message_id 和原始创建时间。",
     "ml.3t": "分帧与填充", "ml.3d": "<code>I2OSP(n, 4) || JCS(letter)</code>，用零填充到下一个 1 KiB 边界，长度只以粗粒度泄露。",
-    "ml.4t": "HPKE 封装", "ml.4d": "X25519 · HKDF-SHA256 · ChaCha20-Poly1305——固定套件，不做协商。路由头部作为 AAD。",
-    "ml.5t": "中继接受", "ml.5d": "检查结构、路由成员资格、当前卡片哈希与过期时间。中继不持有密钥，无法解密。",
-    "ml.6t": "所有者拆封", "ml.6d": "用所有者请求 JWT 列出密文包，再用为该卡片保留的私钥拆封。",
-    "ml.7t": "验证并接受", "ml.7d": "校验签名、收件人与一致的过期时间；再按信件 ID 去重，持久保存后才删除密文包。",
+    "ml.4t": "先加密，再签名", "ml.4d": "HPKE 将发件人、投递时间、nonce 和路由头部绑定为 AAD。Ed25519 签署整个密文包。",
+    "ml.5t": "中继接受", "ml.5d": "存储密文前验证外层签名、发件人策略、实时 nonce、当前卡片和有效期。",
+    "ml.6t": "所有者拆封", "ml.6d": "先验证发件人和本地策略，再使用保留的收件私钥解密。",
+    "ml.7t": "验证并接受", "ml.7d": "检查发件人、收件人和有效期绑定；按发件人与 message_id 去重，持久保存后再删除中继副本。",
     "ml.foot": "种子 <code>0x07</code> 与 <code>0x08</code>、邮箱私钥 <code>0x09</code>、临时私钥 <code>0x0b</code> 与 <code>0x0c</code> 都是测试向量中公开的测试材料；你自己写的信使用全新随机数。中继在本标签页中模拟——没有任何数据离开你的浏览器。",
     "ml.f1t": "身份不变，邮箱可迁", "ml.f1d": "一张卡片最多列出八条路由，并可随时替换。发件方固定 nonce 最大的卡片，陈旧卡片不会再被使用。",
     "ml.f2t": "确认就是回复", "ml.f2d": "协议不定义回执。回复只证明其签名者写下的内容——不证明信件被阅读、批准或执行。",
-    "ml.f3t": "坦诚的边界", "ml.f3d": "中继仍能看到时间、填充后的大小与邮箱。Base 模式 HPKE 对仍被保留的私钥不提供前向保密，所以所有者应轮换密钥并销毁退役私钥。",
+    "ml.f3t": "坦诚的边界", "ml.f3d": "中继可见已认证发件人、时间、填充大小和邮箱；主题与内容保持加密。Base HPKE 对仍保留的收件私钥泄露不提供前向保密。",
     "kg.kicker": "4 — 知识",
     "kg.title": "记得<em>来自何处</em>的知识。",
     "kg.sub": "胶囊是小而带签名的贡献——一个问题、一个假设、一种方法、一项负面结果。每个胶囊的 ID 就是其信封哈希，每条关系都指向一个确切版本。拖动图谱、选中胶囊，或像服务端那样查询它。",
@@ -2977,7 +2976,7 @@
       delegation: { spokes: ["delegation"], edges: ["hints"], cap: "se.cap.events", chips: ["delegation.grant", "delegation.revoke"], note: "se.delegation" },
       discourse: { spokes: ["discourse"], edges: ["resolve", "discuss"], cap: "se.cap.builtin", chips: ["room.create", "room.update", "room.close", "room.cancel", "type.define", "room.join", "room.join.request", "room.join.review", "room.leave", "room.member.role.update", "room.member.remove", "message.create"], note: "se.discourse" },
       knowledge: { spokes: ["knowledge"], edges: ["discuss", "advert"], cap: "se.cap.events", chips: ["knowledge.publish", "knowledge.assess", "knowledge.retract"], note: "se.knowledge" },
-      mail: { spokes: ["mail"], edges: ["mail-card"], cap: "se.cap.events", chips: ["mailbox.publish", "mail.message"], note: "se.mail" },
+      mail: { spokes: ["mail"], edges: ["mail-card"], cap: "se.cap.events", chips: ["mailbox.publish", "mail.submit"], note: "se.mail" },
     };
     const svg = $("#stackSvg"), box = $("#stackEvents");
     let cur = null;
@@ -3205,19 +3204,15 @@
   }
 
   /* ================================================================
-     §3 · Mail — a recipient-signed card, a signed letter, HPKE, and an
-     opaque packet through two relays. Reproduces agent-mail/1.0 vectors.
+     §3 · Mail — a recipient-signed card, an immutable message, HPKE, and a
+     sender-signed submission through two relays. Reproduces agent-mail/1.0 vectors.
      ================================================================ */
   async function mail() {
     const NOW = 1790726400000, DAY = 86400000, INFO = enc.encode("agent-mail/1.0");
     const HOST = { relay: "https://relay.example", mirror: "https://mirror.example" };
     const MBX = b64u(Uint8Array.from({ length: 16 }, (_, i) => i)), THREAD = b64u(Uint8Array.from({ length: 16 }, (_, i) => 48 + i));
     const SK = seed(9), EPH = { original: seed(11), reencrypted: seed(12) };
-    const VEC = {
-      letter: "8cOmSgLksmBdFI5hesUw0Hgm19VqnOieS1jECULjZDY",
-      original: "vV5GZriJvTTwIQ95ZH-l4ImCHWYqpTz8wQ2gobDLxzM",
-      reencrypted: "lnYJOEsXZd6jcIy6QW_CznDWBTf8UjhAnwFRBsHp1gE",
-    };
+    const VEC = {"letter": "Hx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8", "original": "FXU2xUoiDLmJAJBPX6wYPdu6_WA6kYlU8yfKRPw_U0o", "reencrypted": "eTtJS6LJA2-I-7tPBEVP-8CNpg8y4K6oTHPgr6fJd-o"};
     const V_SUBJ = "A private question / 私信", V_BODY = "Can we compare our evidence?\n我们可以核对证据吗？";
     const ATT = { media_type: "application/octet-stream", name: "evidence.bin", data: b64u(Uint8Array.of(0, 1, 254, 255)) };
     const O = { trunc: 44, inline: 64 };
@@ -3242,20 +3237,21 @@
     let S, busy = false, seen = false;
 
     function fresh() {
-      S = { letter: null, lsubj: null, lbody: null, pin: null, sent: new Set(), used: new Set(), q: { relay: [], mirror: [] }, seq: { relay: 0, mirror: 0 }, clock: NOW + 800, inbox: [], accepted: new Map(), out: [], view: [], cur: 0, say: null, dec: null, seen: null, fb: 0 };
+      S = { nextNonce: 200, nonces: { relay: new Map(), mirror: new Map() }, blocked: new Set(), letter: null, lsubj: null, lbody: null, pin: null, sent: new Set(), used: new Set(), q: { relay: [], mirror: [] }, seq: { relay: 0, mirror: 0 }, clock: NOW + 800, inbox: [], accepted: new Map(), out: [], view: [], cur: 0, say: null, dec: null, seen: null, fb: 0 };
       S.view[0] = { t: "ml.i.card", s: `GET ${HOST.relay}/v1/mailboxes/${mb}/card`, html: jsonHTML(card, O), marks: ["hash", "event.actor", "event.nonce", "event.payload.public_key", "event.payload.routes"] };
     }
     const tick = () => (S.clock += 600 + ((Math.random() * 900) | 0));
     const same = () => !!S.letter && S.lsubj === subjEl.value && S.lbody === bodyEl.value;
-    const nextNonce = () => (S.letter ? S.letter.event.nonce + 1 : 200);
-    function letterEvent(subj, body, nonce) {
-      const payload = { to: rcp.id, expires_at: NOW + DAY + 1000, thread_id: THREAD };
+    const nextNonce = () => S.nextNonce;
+    function message(subj, body) {
+      const id = !S.letter && subj === V_SUBJ && body === V_BODY ? VEC.letter : b64u(crypto.getRandomValues(new Uint8Array(32)));
+      const payload = { message_id: id, from: snd.id, created_at: NOW, to: rcp.id, expires_at: NOW + DAY + 1000, thread_id: THREAD };
       if (subj) payload.subject = subj;
       payload.parts = [{ media_type: "text/plain", data: b64u(enc.encode(body)) }, ATT];
-      return { protocol: "agent-mail/1.0", type: "mail.message", actor: snd.id, created_at: NOW, nonce, payload };
+      return payload;
     }
-    // Hash and signature have fixed lengths, so a draft's size is exact before signing.
-    const draftSize = () => enc.encode(jcs(same() ? S.letter : { hash: "x".repeat(43), event: letterEvent(subjEl.value, bodyEl.value, nextNonce()), signature: "x".repeat(86) })).length;
+    const draftSize = () => enc.encode(jcs(same() ? S.letter : message(subjEl.value, bodyEl.value))).length;
+    const aadFor = (event) => enc.encode(jcs({ protocol: event.protocol, type: event.type, actor: event.actor, created_at: event.created_at, nonce: event.nonce, header: event.payload.header }));
     function frame(letter) {
       const json = enc.encode(jcs(letter)), n = json.length, pt = new Uint8Array(1024 * Math.ceil((4 + n) / 1024));
       new DataView(pt.buffer).setUint32(0, n); pt.set(json, 4);
@@ -3273,19 +3269,19 @@
       $("#mlFcap").innerHTML = t("ml.fcap", { n, p: f - 4 - n, f, c: f + 16 });
     }
     function mode() {
-      const m = $("#mlMode"), vec = Ed.ok && (same() ? S.letter.hash === VEC.letter : !S.letter && subjEl.value === V_SUBJ && bodyEl.value === V_BODY);
+      const m = $("#mlMode"), vec = Ed.ok && (same() ? S.letter.message_id === VEC.letter : !S.letter && subjEl.value === V_SUBJ && bodyEl.value === V_BODY);
       m.className = "stamp ml-mode" + (vec ? " ok" : "");
       m.textContent = t(!Ed.ok ? "ml.m.sim" : vec ? "ml.m.vec" : "ml.m.yours");
     }
     function acts() {
-      $$("#mlActs button").forEach((b) => { b.disabled = busy || (b.dataset.a === "mirror" && !(same() && S.sent.has(S.letter.hash))); });
+      $$("#mlActs button").forEach((b) => { b.disabled = busy || (b.dataset.a === "mirror" && !(same() && S.sent.has(S.letter.message_id))); });
       subjEl.readOnly = bodyEl.readOnly = busy;
     }
     function lid() {
       const el = $("#mlLid");
-      el.title = same() ? S.letter.hash : "";
-      el.textContent = same() ? short(S.letter.hash, 6, 4) : S.letter ? t("ml.lid.none") : "—";
-      $("#mlSent").textContent = same() && S.sent.has(S.letter.hash) ? t("ml.sent") : "";
+      el.title = same() ? S.letter.message_id : "";
+      el.textContent = same() ? short(S.letter.message_id, 6, 4) : S.letter ? t("ml.lid.none") : "—";
+      $("#mlSent").textContent = same() && S.sent.has(S.letter.message_id) ? t("ml.sent") : "";
     }
     const pinTag = () => { $("#mlPin").textContent = S.pin ? t("ml.pin", { n: S.pin.nonce }) : ""; };
     const keyLine = () => { $("#mlKey").textContent = t("ml.key", { n: card.event.nonce, k: short(cp.public_key, 6, 4) }); };
@@ -3308,9 +3304,10 @@
     function seenSet(packet, len) {
       S.seen = packet ? [packet, len] : null;
       const set = (k, v) => { $(`[data-s="${k}"]`, seenEl).textContent = v; };
-      if (!packet) { ["mbx", "card", "exp", "size", "net"].forEach((k) => set(k, "—")); seenEl.classList.remove("on", "flash"); return; }
-      set("mbx", short(packet.header.mailbox_id, 6, 4)); set("card", short(packet.header.card_hash, 6, 4));
-      set("exp", new Date(packet.header.expires_at).toISOString().slice(0, 16).replace("T", " "));
+      if (!packet) { ["mbx", "card", "exp", "size", "net", "actor", "sig"].forEach((k) => set(k, "—")); seenEl.classList.remove("on", "flash"); return; }
+      set("mbx", short(packet.event.payload.header.mailbox_id, 6, 4)); set("card", short(packet.event.payload.header.card_hash, 6, 4));
+      set("exp", new Date(packet.event.payload.header.expires_at).toISOString().slice(0, 16).replace("T", " "));
+      set("actor", shortDid(packet.event.actor)); set("sig", short(packet.signature, 6, 4));
       set("size", len + " B"); set("net", t("ml.net.v"));
     }
     function renderItem(it) {
@@ -3409,27 +3406,35 @@
     const unsealSheet = () => { sheet.classList.remove("sealed"); stampEl.classList.remove("pressed"); };
 
     /* ---------- protocol roles ---------- */
-    function relayAccept(route, packet, id) {
-      // Section 7.1: shape, route membership, current card, and deadlines. No key, no decryption.
-      const h = packet.header, now = tick();
-      const ok = h.mailbox_id === cp.mailbox_id && cp.routes.includes(HOST[route]) && h.card_hash === card.hash && now < cp.expires_at && now < h.expires_at && h.expires_at <= Math.min(cp.receive_until, now + 30 * DAY + 300000);
-      if (!ok) throw new Error("relay rejected the packet");
+    async function relayAccept(route, packet, id) {
+      // Section 7.1: sender signature, policy, live nonce, current card and deadline. No recipient key.
+      const h = packet.event.payload.header, now = tick();
+      const signature = await verifyEnvelope(packet);
+      const ok = signature.hashOk && signature.sigOk && Math.abs(now - packet.event.created_at) <= 300000 && h.mailbox_id === cp.mailbox_id && cp.routes.includes(HOST[route]) && h.card_hash === card.hash && now < cp.expires_at && now < h.expires_at && h.expires_at <= Math.min(cp.receive_until, now + 30 * DAY + 300000);
+      if (!ok) throw new Error("relay rejected the signed submission");
+      const previous = S.q[route].find((r) => r.packet_id === id);
+      if (previous) return previous;
+      if (S.blocked.has(packet.event.actor)) throw new Error("sender not admitted");
+      if (packet.event.nonce <= (S.nonces[route].get(packet.event.actor) || 0)) throw new Error("submission nonce does not advance");
+      S.nonces[route].set(packet.event.actor, packet.event.nonce);
       const rec = { packet_id: id, packet: clone(packet), accepted_at: now, seq: ++S.seq[route], state: "stored", nw: true };
       S.q[route].push(rec);
       return rec;
     }
     function tamper(rec, kind) {
-      if (kind === "flip") { const ct = unb64u(rec.packet.ciphertext); ct[9] ^= 0x04; rec.packet.ciphertext = b64u(ct); rec.mut = ["packet.ciphertext"]; }
-      else { rec.packet.header.expires_at += 3600000; rec.mut = ["packet.header.expires_at"]; }
-      rec.packet_id = b64u(sha3(enc.encode(jcs(rec.packet)))); // a careful forger recomputes the ID
+      if (kind === "flip") { const ct = unb64u(rec.packet.event.payload.ciphertext); ct[9] ^= 0x04; rec.packet.event.payload.ciphertext = b64u(ct); rec.mut = ["packet.event.payload.ciphertext"]; }
+      else { rec.packet.event.payload.header.expires_at += 3600000; rec.mut = ["packet.event.payload.header.expires_at"]; }
+      rec.packet.hash = b64u(sha3(enc.encode(jcs(rec.packet.event)))); rec.packet_id = rec.packet.hash; // a careful forger recomputes the ID
       rec.state = "mut";
     }
-    function openRecord(rec) {
-      // Section 7.2 steps 1–2: bindings against the retained card, then HPKE, framing, and canonical JSON.
-      const p = rec.packet, h = p.header;
-      if (b64u(sha3(enc.encode(jcs(p)))) !== rec.packet_id) return { why: "packet_id" };
+    async function openRecord(rec) {
+      // Verify signature and local sender policy before touching the recipient private key.
+      const signed = rec.packet, p = signed.event.payload, h = p.header;
+      const checked = await verifyEnvelope(signed);
+      if (!checked.hashOk || !checked.sigOk || signed.hash !== rec.packet_id) return { why: "signature" };
+      if (S.blocked.has(signed.event.actor)) return { why: "permission_denied" };
       if (h.card_hash !== card.hash || h.mailbox_id !== cp.mailbox_id || h.expires_at > cp.receive_until) return { why: "card" };
-      const pt = hpkeOpen(SK, unb64u(p.enc), INFO, enc.encode(jcs(h)), unb64u(p.ciphertext));
+      const pt = hpkeOpen(SK, unb64u(p.enc), INFO, aadFor(signed.event), unb64u(p.ciphertext));
       if (!pt) return { why: "aead" };
       const n = new DataView(pt.buffer).getUint32(0);
       if (n < 1 || 4 + n > pt.length || pt.length !== 1024 * Math.ceil((4 + n) / 1024) || pt.subarray(4 + n).some((b) => b)) return { why: "framing" };
@@ -3456,18 +3461,18 @@
       if (!pinOk) return;
       await sleep(260);
 
-      // 2 · Sign the letter (or reuse the retained one)
+      // 2 · Create an immutable message (or reuse it unchanged)
       go(1);
       let reused = true;
       if (!same()) {
         const subj = subjEl.value, body = bodyEl.value;
-        S.letter = await seal(snd, letterEvent(subj, body, nextNonce()));
+        S.letter = message(subj, body);
         S.lsubj = subj; S.lbody = body; reused = false;
-      } else reused = S.sent.has(S.letter.hash);
+      } else reused = S.sent.has(S.letter.message_id);
       const L = S.letter;
-      if (!reused) { lid(); await scramble($("#mlLid"), short(L.hash, 6, 4), 520); } else lid();
-      S.view[1] = { t: "ml.i.letter", s: `mail.message · nonce ${L.event.nonce}`, html: jsonHTML(L, O), marks: ["hash", "event.payload.to", "event.payload.expires_at"] };
-      done(1, "ok", reused ? "ml.o2same" : "ml.o2", { h: short(L.hash, 6, 4), n: L.event.nonce });
+      if (!reused) { lid(); await scramble($("#mlLid"), short(L.message_id, 6, 4), 520); } else lid();
+      S.view[1] = { t: "ml.i.letter", s: `message_id ${short(L.message_id, 6, 4)}`, html: jsonHTML(L, O), marks: ["message_id", "from", "to", "expires_at"] };
+      done(1, "ok", reused ? "ml.o2same" : "ml.o2", { h: short(L.message_id, 6, 4), n: nextNonce() });
       mode(); acts();
       await sleep(260);
 
@@ -3483,24 +3488,26 @@
 
       // 4 · Seal with HPKE — vector ephemerals only where the vectors define them
       go(3);
-      const vname = Ed.ok && L.hash === VEC.letter ? (kind === "send" && !S.used.has("original") ? "original" : kind === "mirror" && !S.used.has("reencrypted") ? "reencrypted" : null) : null;
+      const vname = Ed.ok && L.message_id === VEC.letter ? (kind === "send" && !S.used.has("original") ? "original" : kind === "mirror" && nextNonce() === 201 && !S.used.has("reencrypted") ? "reencrypted" : null) : null;
       if (vname) S.used.add(vname);
       const eph = vname ? EPH[vname] : crypto.getRandomValues(new Uint8Array(32));
-      const header = { protocol: "agent-mail/1.0", mailbox_id: MBX, card_hash: card.hash, expires_at: L.event.payload.expires_at };
-      const sealed = hpkeSeal(unb64u(cp.public_key), eph, INFO, enc.encode(jcs(header)), fr.pt);
-      const packet = { header, enc: b64u(sealed.enc), ciphertext: b64u(sealed.ct) }, pid = b64u(sha3(enc.encode(jcs(packet))));
+      const header = { protocol: "agent-mail/1.0", mailbox_id: MBX, card_hash: card.hash, expires_at: L.expires_at };
+      const event = { protocol: "agent-mail/1.0", type: "mail.submit", actor: snd.id, created_at: vname ? NOW : S.clock, nonce: S.nextNonce++, payload: { header } };
+      const sealed = hpkeSeal(unb64u(cp.public_key), eph, INFO, aadFor(event), fr.pt);
+      event.payload.enc = b64u(sealed.enc); event.payload.ciphertext = b64u(sealed.ct);
+      const packet = await seal(snd, event), pid = packet.hash;
       const vecOk = !!vname && pid === VEC[vname];
-      S.view[3] = { t: "ml.i.packet", s: 'info "agent-mail/1.0" · aad JCS(header)', html: jsonHTML(packet, O), marks: ["header"] };
+      S.view[3] = { t: "ml.i.packet", s: 'mail.submit · AAD binds actor, time, nonce and header', html: jsonHTML(packet, O), marks: ["hash", "event.actor", "event.payload.header", "signature"] };
       show(3);
-      await sealSheet(packet.ciphertext);
+      await sealSheet(packet.event.payload.ciphertext);
       done(3, "ok", vecOk ? "ml.o4vec" : "ml.o4", { c: sealed.ct.length, id: short(pid, 6, 4), v: vname });
 
       // 5 · Relay accepts
       go(4);
       await fly("s-" + route, `${ENV}${sealed.ct.length} B`, "pkt", false, 800);
       unsealSheet();
-      const rec = relayAccept(route, packet, pid);
-      S.sent.add(L.hash); lid(); acts();
+      const rec = await relayAccept(route, packet, pid);
+      S.sent.add(L.message_id); lid(); acts();
       flash(box(route)); rows(route); seenSet(packet, sealed.ct.length);
       seenEl.classList.add("on"); seenEl.classList.remove("flash"); void seenEl.offsetWidth; seenEl.classList.add("flash");
       S.view[4] = { t: "ml.i.result", s: `POST /v1/mailboxes/${mb}/packets → 202`, html: jsonHTML({ packet_id: pid, accepted_at: rec.accepted_at }), marks: ["packet_id"] };
@@ -3517,9 +3524,9 @@
       await fly(route + "-r", `${ENV}seq ${rec.seq}`, "pkt", false, 800);
       const it = { kind: "open", pid: rec.packet_id, el: document.createElement("div"), n: 1 };
       S.inbox.unshift(it); inbox(); inboxEl.prepend(it.el); renderItem(it); hot(it);
-      const cipher = rec.packet.ciphertext.slice(0, 200);
+      const cipher = rec.packet.event.payload.ciphertext.slice(0, 200);
       $(".ib-b", it.el).textContent = cipher;
-      const o = openRecord(rec);
+      const o = await openRecord(rec);
       S.view[5] = { t: "ml.i.record", s: `GET /v1/mailboxes/${mb}/packets · owner JWT`, html: jsonHTML({ packet_id: rec.packet_id, packet: rec.packet, accepted_at: rec.accepted_at, seq: rec.seq }, O), marks: ["seq"], mut: rec.mut, bad: !o.ok };
       show(5);
       await sleep(420);
@@ -3530,8 +3537,8 @@
         decide("bad"); say(kind === "extend" ? "ml.s.ext" : "ml.s.flip");
         return;
       }
-      const E = o.letter.event, P = E.payload;
-      Object.assign(it, { kind: "letter", lid: o.letter.hash, from: E.actor, subj: P.subject || "", body: "", atts: [] });
+      const E = rec.packet.event, P = o.letter;
+      Object.assign(it, { kind: "letter", lid: o.letter.message_id, from: P.from, subj: P.subject || "", body: "", atts: [] });
       P.parts.forEach((x) => {
         if (x.media_type.startsWith("text/")) it.body += (it.body ? "\n" : "") + new TextDecoder().decode(unb64u(x.data));
         else it.atts.push(`${x.name || "part"} · ${unb64u(x.data).length} B · ${x.media_type}`);
@@ -3546,16 +3553,16 @@
 
       // 7 · Verify, deduplicate, persist, delete
       go(6);
-      const v = await verifyEnvelope(o.letter), now = S.clock;
-      const valid = v.hashOk && v.sigOk && P.to === rcp.id && P.to === card.event.actor && P.expires_at === rec.packet.header.expires_at && E.created_at <= now + 300000 && E.created_at < P.expires_at && P.expires_at <= E.created_at + 30 * DAY && now < P.expires_at;
+      const now = S.clock;
+      const valid = P.from === E.actor && P.to === rcp.id && P.to === card.event.actor && P.expires_at === rec.packet.event.payload.header.expires_at && P.created_at <= Math.min(now, E.created_at) + 300000 && P.created_at < P.expires_at && P.expires_at <= P.created_at + 30 * DAY && now < P.expires_at;
       if (!valid) { it.kind = "q"; it.why = "signature"; renderItem(it); done(6, "bad", "ml.o7bad", {}); decide("bad"); return; }
-      const prev = S.accepted.get(o.letter.hash);
+      const prev = S.accepted.get(P.from + "/" + P.message_id);
       await sleep(300);
       if (prev) { it.el.remove(); S.inbox.splice(S.inbox.indexOf(it), 1); prev.n++; renderItem(prev); hot(prev); }
-      else { S.accepted.set(o.letter.hash, it); hot(it); }
+      else { S.accepted.set(P.from + "/" + P.message_id, it); hot(it); }
       rec.state = "deleted"; rows(route);
-      S.view[6] = { t: "ml.i.inbox", s: "(recipient, letter ID)", html: jsonHTML({ recipient: rcp.id, letter_id: o.letter.hash, from: E.actor, state: prev ? "duplicate" : "accepted", transport: `DELETE /v1/mailboxes/${MBX}/packets/${rec.packet_id} → 204` }, O), marks: ["letter_id", "state"] };
-      done(6, "ok", prev ? "ml.o7dup" : "ml.o7", { h: short(o.letter.hash, 6, 4) });
+      S.view[6] = { t: "ml.i.inbox", s: "(recipient, sender, message_id)", html: jsonHTML({ recipient: rcp.id, letter_id: o.letter.message_id, from: P.from, state: prev ? "duplicate" : "accepted", transport: `DELETE /v1/mailboxes/${MBX}/packets/${rec.packet_id} → 204` }, O), marks: ["letter_id", "state"] };
+      done(6, "ok", prev ? "ml.o7dup" : "ml.o7", { h: short(o.letter.message_id, 6, 4) });
       decide(prev ? "dup" : "new");
       say(!Ed.ok ? "ml.s.sim" : vecOk ? (vname === "original" ? "ml.s.vec" : "ml.s.vec2") : prev ? "ml.s.dup" : "ml.s.new", { id: short(pid, 6, 4), n: E.nonce, f: fr.pt.length });
     }

@@ -1,7 +1,7 @@
 #![cfg(feature = "http-client")]
 use agent_protocols::{
     http_client::MailClient,
-    identity::{unix_secs, AgentSigner, RequestBinding, RequestJwtClaims},
+    identity::{AgentSigner, RequestBinding, RequestJwtClaims},
     mail::*,
 };
 use rustls::{
@@ -164,7 +164,7 @@ fn objects(
     agent_protocols::identity::AgentSigner,
     MailboxCard,
     Letter,
-    Packet,
+    Submission,
     i64,
 ) {
     let now = agent_protocols::identity::unix_ms();
@@ -185,26 +185,20 @@ fn objects(
         100,
     )
     .unwrap();
-    let letter = sign_message(
-        &sender,
-        MessagePayload {
-            to: owner.agent_id(),
-            expires_at: now + 100_000,
-            thread_id: random_id().unwrap(),
-            parts: vec![MailPart::text("hello")],
-            subject: None,
-            in_reply_to: None,
-            reply_card: None,
-        },
+    let letter = create_mail_message(
+        &sender.agent_id(),
         now,
-        200,
+        json!({
+            "to":owner.agent_id(),"expires_at":now+60_000,"thread_id":random_id().unwrap(),
+            "parts":[{"media_type":"text/plain","data":encode_bytes(b"private mail")}]
+        }),
     )
     .unwrap();
-    let packet = encrypt_letter(&letter, &card, now).unwrap();
+    let packet = encrypt_letter(&letter, &card, &sender, 800, now).unwrap();
     (owner, card, letter, packet, now)
 }
 #[test]
-fn mail_https_fixed_paths_owner_auth_and_anonymous_delivery() {
+fn mail_https_fixed_paths_owner_auth_and_sender_signed_delivery() {
     run(async {
         let server = Server::start();
         let client = server.client();
@@ -232,7 +226,7 @@ fn mail_https_fixed_paths_owner_auth_and_anonymous_delivery() {
             .sign_request_jwt(&RequestJwtClaims::new(
                 owner.agent_id(),
                 RequestBinding::new(&server.origin),
-                unix_secs(),
+                now / 1000,
                 300,
             ))
             .unwrap();
@@ -324,7 +318,7 @@ fn mail_https_redirects_malformed_and_misbound_responses_are_rejected() {
             .sign_request_jwt(&RequestJwtClaims::new(
                 owner.agent_id(),
                 RequestBinding::new(&server.origin),
-                unix_secs(),
+                now / 1000,
                 300,
             ))
             .unwrap();
@@ -335,7 +329,7 @@ fn mail_https_redirects_malformed_and_misbound_responses_are_rejected() {
             .await
             .is_err());
         let mut late = item.clone();
-        late["accepted_at"] = json!(packet.header.expires_at);
+        late["accepted_at"] = json!(packet.event.payload.header.expires_at);
         server.reply(&json!({"result":[late]}));
         assert!(client
             .list(mailbox, &owner.agent_id(), &jwt, now, 10, None)
@@ -351,7 +345,7 @@ fn mail_https_redirects_malformed_and_misbound_responses_are_rejected() {
             .sign_request_jwt(&RequestJwtClaims::new(
                 other.agent_id(),
                 RequestBinding::new(&server.origin),
-                unix_secs(),
+                now / 1000,
                 300,
             ))
             .unwrap();

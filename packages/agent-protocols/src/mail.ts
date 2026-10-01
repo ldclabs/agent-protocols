@@ -10,6 +10,7 @@ import { base64UrlDecodeCanonical, base64UrlEncode } from "./encoding.js";
 import { protocolError } from "./errors.js";
 import {
   MemoryNonceStore,
+  AgentSigner,
   createEvent,
   formatAgentUrl,
   parseAgentUrl,
@@ -48,6 +49,9 @@ export interface MailPart {
   name?: string;
 }
 export interface MailMessagePayload {
+  message_id: string;
+  from: string;
+  created_at: number;
   to: string;
   expires_at: number;
   thread_id: string;
@@ -56,7 +60,8 @@ export interface MailMessagePayload {
   in_reply_to?: string;
   reply_card?: MailboxCard;
 }
-export type MailLetter = Envelope<MailMessagePayload>;
+export type MailLetter = MailMessagePayload;
+export type MailSubmission = Envelope<MailPacket>;
 export interface MailPacketHeader {
   protocol: typeof MAIL_PROTOCOL;
   mailbox_id: string;
@@ -73,7 +78,7 @@ export interface MailDeliveryResult {
   accepted_at: number;
 }
 export interface MailPacketRecord extends MailDeliveryResult {
-  packet: MailPacket;
+  packet: MailSubmission;
   seq: number;
 }
 export interface MailDiscovery {
@@ -308,21 +313,18 @@ export function validateMailSenderCard(
   );
   requireMail(now < c.event.payload.expires_at, "stale_card", "card expired");
 }
-/** Historical verification of a signed letter; never advances live nonce state. */
+/** Validate immutable plaintext; sender authentication comes from its signed submission. */
 export function validateMailLetter(
   letter: unknown,
 ): asserts letter is MailLetter {
-  validateMailSchema(letter, "messageEnvelope");
-  const l = letter as MailLetter;
-  verifyEnvelope(l);
-  const p = l.event.payload;
-  lifetime(l.event.created_at, p.expires_at);
+  validateMailSchema(letter, "messagePayload");
+  const p = letter as MailLetter;
+  lifetime(p.created_at, p.expires_at);
   for (const part of p.parts) {
     decodeMailBytes(part.data);
     if (part.media_type.startsWith("text/")) mailPartText(part);
   }
-  if (p.reply_card !== undefined)
-    validateMailboxCard(p.reply_card, l.event.actor);
+  if (p.reply_card !== undefined) validateMailboxCard(p.reply_card, p.from);
 }
 export function mailboxPublishEvent(
   actor: string,
@@ -339,38 +341,49 @@ export function mailboxPublishEvent(
     clone(payload),
   );
 }
-export function mailMessageEvent(
+export function newMailMessageId(): string {
+  return base64UrlEncode(nacl.randomBytes(32));
+}
+export function createMailMessage(
   actor: string,
   createdAt: number,
-  nonce: number,
-  payload: MailMessagePayload,
-): Event<MailMessagePayload> {
-  return createEvent(
-    MAIL_PROTOCOL,
-    "mail.message",
-    actor,
-    createdAt,
-    nonce,
-    clone(payload),
+  payload: Omit<MailMessagePayload, "message_id" | "from" | "created_at">,
+): MailLetter {
+  requireMail(
+    payload &&
+      !["message_id", "from", "created_at"].some((k) =>
+        Object.hasOwn(payload, k),
+      ),
+    "invalid_event",
+    "message content overrides identity fields",
   );
+  const message = {
+    ...clone(payload),
+    message_id: newMailMessageId(),
+    from: actor,
+    created_at: createdAt,
+  };
+  validateMailLetter(message);
+  return message;
 }
-/** Bind a reply to a known parent: participants, parent letter ID, and thread. */
 export function validateMailReply(reply: MailLetter, parent: MailLetter): void {
   validateMailLetter(reply);
   validateMailLetter(parent);
   requireMail(
-    reply.event.payload.in_reply_to === parent.hash &&
-      reply.event.payload.thread_id === parent.event.payload.thread_id &&
-      reply.event.actor === parent.event.payload.to &&
-      reply.event.payload.to === parent.event.actor,
+    reply.in_reply_to === parent.message_id &&
+      reply.thread_id === parent.thread_id &&
+      reply.from === parent.to &&
+      reply.to === parent.from,
     "invalid_event",
-    "reply participants/thread binding mismatch",
+    "reply binding mismatch",
   );
 }
-/** Validate a packet and return its canonical bytes, computed once for ID and size checks. */
 function packetBytes(packet: unknown, expectedId?: string): Uint8Array {
-  validateMailSchema(packet, "packet");
-  const p = packet as MailPacket;
+  validateMailSchema(packet, "submissionEnvelope");
+  const submission = packet as MailSubmission;
+  verifyEnvelope(submission);
+  const e = submission.event,
+    p = e.payload;
   decodeMailBytes(p.enc, 32);
   const ct = decodeMailBytes(p.ciphertext);
   requireMail(
@@ -378,15 +391,22 @@ function packetBytes(packet: unknown, expectedId?: string): Uint8Array {
     "invalid_packet",
     "invalid ciphertext length",
   );
-  const bytes = mailCanonicalBytes(p);
+  requireMail(
+    e.created_at < p.header.expires_at &&
+      p.header.expires_at - e.created_at <=
+        MAIL_MAX_TTL_MS + MAIL_FUTURE_SKEW_MS,
+    "invalid_packet",
+    "invalid submission lifetime",
+  );
+  const bytes = mailCanonicalBytes(submission);
   requireMail(
     bytes.length <= MAIL_MAX_PACKET_BYTES,
     "payload_too_large",
-    "packet exceeds 1 MiB",
+    "submission exceeds limit",
   );
   if (expectedId !== undefined)
     requireMail(
-      base64UrlEncode(sha3_256(bytes)) === expectedId,
+      submission.hash === expectedId,
       "invalid_packet",
       "packet ID mismatch",
     );
@@ -395,11 +415,22 @@ function packetBytes(packet: unknown, expectedId?: string): Uint8Array {
 export function validateMailPacket(
   packet: unknown,
   expectedId?: string,
-): asserts packet is MailPacket {
+): asserts packet is MailSubmission {
   packetBytes(packet, expectedId);
 }
-export function mailPacketId(packet: MailPacket): string {
-  return base64UrlEncode(sha3_256(mailCanonicalBytes(packet)));
+export function mailPacketId(packet: MailSubmission): string {
+  packetBytes(packet);
+  return packet.hash;
+}
+export function mailSubmissionAad(event: Event<MailPacket>): Uint8Array {
+  return mailCanonicalBytes({
+    protocol: event.protocol,
+    type: event.type,
+    actor: event.actor,
+    created_at: event.created_at,
+    nonce: event.nonce,
+    header: event.payload.header,
+  });
 }
 export function frameMailBytes(bytes: Uint8Array): Uint8Array {
   requireMail(
@@ -492,41 +523,54 @@ export class MailEncryptionKey {
 export async function sealMailPacket(
   letter: MailLetter,
   card: MailboxCard,
+  signer: AgentSigner,
+  nonce: number,
   now = Date.now(),
-): Promise<MailPacket> {
+): Promise<MailSubmission> {
   letter = clone(letter);
   card = clone(card);
   validateMailLetter(letter);
-  validateMailSenderCard(card, letter.event.payload.to, now);
   requireMail(
-    letter.event.created_at <= now + MAIL_FUTURE_SKEW_MS &&
-      now < letter.event.payload.expires_at,
+    letter.from === signer.agentId(),
+    "invalid_actor",
+    "message sender differs from signer",
+  );
+  validateMailSenderCard(card, letter.to, now);
+  requireMail(
+    letter.created_at <= now + MAIL_FUTURE_SKEW_MS && now < letter.expires_at,
     "packet_expired",
-    "letter is expired or future-dated",
+    "message expired or future-dated",
   );
   const c = card.event.payload;
   requireMail(
-    letter.event.payload.expires_at <= c.receive_until,
+    letter.expires_at <= c.receive_until,
     "invalid_packet",
-    "letter exceeds receive_until",
+    "message exceeds receive_until",
   );
+  const plaintext = frameMailBytes(mailCanonicalBytes(letter));
   const header: MailPacketHeader = {
     protocol: MAIL_PROTOCOL,
     mailbox_id: c.mailbox_id,
     card_hash: card.hash,
-    expires_at: letter.event.payload.expires_at,
+    expires_at: letter.expires_at,
   };
-  const plaintext = frameMailBytes(mailCanonicalBytes(letter));
-  // Check base64/JSON overhead before allocating an HPKE context.
-  const estimate: MailPacket = {
-    header,
-    enc: base64UrlEncode(new Uint8Array(32)),
-    ciphertext: base64UrlEncode(new Uint8Array(plaintext.length + 16)),
-  };
+  const event = createEvent(
+    MAIL_PROTOCOL,
+    "mail.submit",
+    signer.agentId(),
+    now,
+    nonce,
+    {
+      header,
+      enc: base64UrlEncode(new Uint8Array(32)),
+      ciphertext: base64UrlEncode(new Uint8Array(plaintext.length + 16)),
+    },
+  );
+  const estimate = { event, hash: "A".repeat(43), signature: "A".repeat(86) };
   requireMail(
     mailCanonicalBytes(estimate).length <= c.max_packet_bytes,
     "payload_too_large",
-    "packet exceeds card limit",
+    "submission exceeds card limit",
   );
   const suite = hpke();
   const sender = await suite.createSenderContext({
@@ -536,19 +580,17 @@ export async function sealMailPacket(
     info: INFO,
   });
   try {
-    const ct = await sender.seal(plaintext, mailCanonicalBytes(header));
-    return {
-      header,
-      enc: base64UrlEncode(new Uint8Array(sender.enc)),
-      ciphertext: base64UrlEncode(new Uint8Array(ct)),
-    };
+    const ct = await sender.seal(plaintext, mailSubmissionAad(event));
+    event.payload.enc = base64UrlEncode(new Uint8Array(sender.enc));
+    event.payload.ciphertext = base64UrlEncode(new Uint8Array(ct));
+    return signer.signEvent(event);
   } finally {
     plaintext.fill(0);
-  } // Context is never reused; JS cannot guarantee erasure of provider-owned/GC copies.
+  }
 }
 /** Verify/decrypt a queued letter; expiration of new acceptance is checked by MailInbox. */
 export async function openMailPacket(
-  packet: MailPacket,
+  packet: MailSubmission,
   card: MailboxCard,
   key: MailEncryptionKey,
   owner: string,
@@ -564,15 +606,20 @@ export async function openMailPacket(
 }
 /** Open with a card that was already verified for `owner` (the keyring verifies at `add`). */
 async function openVerified(
-  packet: MailPacket,
+  packet: MailSubmission,
   bytes: Uint8Array,
   card: MailboxCard,
   key: MailEncryptionKey,
   owner: string,
   now: number,
 ): Promise<MailLetter> {
+  requireMail(
+    packet.event.created_at <= now + MAIL_FUTURE_SKEW_MS,
+    "timestamp_out_of_window",
+    "future submission",
+  );
   const c = card.event.payload,
-    h = packet.header;
+    h = packet.event.payload.header;
   requireMail(
     h.card_hash === card.hash && h.mailbox_id === c.mailbox_id,
     "invalid_packet",
@@ -599,11 +646,14 @@ async function openVerified(
     const suite = hpke();
     const ctx = await suite.createRecipientContext({
       recipientKey: await suite.kem.deserializePrivateKey(secret),
-      enc: decodeMailBytes(packet.enc, 32),
+      enc: decodeMailBytes(packet.event.payload.enc, 32),
       info: INFO,
     });
     plaintext = new Uint8Array(
-      await ctx.open(decodeMailBytes(packet.ciphertext), mailCanonicalBytes(h)),
+      await ctx.open(
+        decodeMailBytes(packet.event.payload.ciphertext),
+        mailSubmissionAad(packet.event),
+      ),
     );
   } catch {
     throw protocolError("invalid_packet", "HPKE opening failed");
@@ -613,17 +663,18 @@ async function openVerified(
   try {
     const letter = unframeMailLetter(plaintext);
     requireMail(
-      letter.event.payload.to === owner,
+      letter.from === packet.event.actor && letter.to === owner,
       "invalid_packet",
       "letter recipient mismatch",
     );
     requireMail(
-      letter.event.payload.expires_at === h.expires_at,
+      letter.expires_at === h.expires_at,
       "invalid_packet",
       "letter/header expiration mismatch",
     );
     requireMail(
-      letter.event.created_at <= now + MAIL_FUTURE_SKEW_MS,
+      letter.created_at <=
+        Math.min(now, packet.event.created_at) + MAIL_FUTURE_SKEW_MS,
       "timestamp_out_of_window",
       "future letter",
     );
@@ -699,11 +750,16 @@ export class MailCardCache {
   async seal(
     letter: MailLetter,
     card: MailboxCard,
+    signer: AgentSigner,
+    nonce: number,
     now = Date.now(),
-  ): Promise<MailPacket> {
+  ): Promise<MailSubmission> {
+    validateMailLetter(letter);
     return sealMailPacket(
       letter,
-      this.observe(card, letter.event.payload.to, now),
+      this.observe(card, letter.to, now),
+      signer,
+      nonce,
       now,
     );
   }
@@ -763,14 +819,14 @@ export class MailKeyring {
       }
   }
   async open(
-    packet: MailPacket,
+    packet: MailSubmission,
     now = Date.now(),
     expectedId?: string,
   ): Promise<MailLetter> {
     packet = clone(packet);
     safeTime(now);
     const bytes = packetBytes(packet, expectedId);
-    const x = this.entries.get(packet.header.card_hash);
+    const x = this.entries.get(packet.event.payload.header.card_hash);
     requireMail(x, "invalid_packet", "unknown retained card");
     return openVerified(packet, bytes, x.card, x.key, this.owner, now);
   }
@@ -778,15 +834,15 @@ export class MailKeyring {
 export interface MailInboxSnapshot {
   version: 1;
   owner: string;
-  /** Accepted letter IDs and their signed expirations. */
-  accepted: [string, number][];
+  accepted: [string, number, string][];
+  blocked_senders: string[];
 }
-/**
- * Cross-route letter deduplication. The application stores accepted letters;
- * persist the snapshot with them before deleting relay copies or acting.
- */
 export class MailInbox {
-  private readonly accepted = new Map<string, number>();
+  private readonly accepted = new Map<
+    string,
+    { expires: number; digest: string }
+  >();
+  private readonly blocked = new Set<string>();
   constructor(
     readonly keyring: MailKeyring,
     snapshot?: MailInboxSnapshot,
@@ -796,41 +852,76 @@ export class MailInbox {
         snapshot.version === 1 && snapshot.owner === keyring.owner,
         "invalid_request",
       );
-      for (const [id, expires] of snapshot.accepted)
-        this.accepted.set(id, expires);
+      for (const [id, expires, digest] of snapshot.accepted)
+        this.accepted.set(id, { expires, digest });
+      for (const sender of snapshot.blocked_senders)
+        this.setSenderBlocked(sender, true);
     }
+  }
+  setSenderBlocked(sender: string, blocked = true): void {
+    validateAgentId(sender);
+    requireMail(typeof blocked === "boolean", "invalid_request");
+    if (blocked) this.blocked.add(sender);
+    else this.blocked.delete(sender);
   }
   snapshot(): MailInboxSnapshot {
     return {
       version: 1,
       owner: this.keyring.owner,
-      accepted: [...this.accepted],
+      accepted: [...this.accepted].map(([k, v]) => [k, v.expires, v.digest]),
+      blocked_senders: [...this.blocked],
     };
   }
-  has(letterId: string): boolean {
-    return this.accepted.has(letterId);
+  has(sender: string, messageId: string): boolean {
+    return this.accepted.has(sender + "/" + messageId);
   }
   async accept(
-    packet: MailPacket,
+    packet: MailSubmission,
     now = Date.now(),
     expectedId?: string,
   ): Promise<{ kind: "accepted" | "duplicate"; letter: MailLetter }> {
-    const letter = await this.keyring.open(packet, now, expectedId);
-    // No await between lookup and commit: concurrent decryptions cannot both accept.
-    if (this.accepted.has(letter.hash)) return { kind: "duplicate", letter };
+    packet = clone(packet);
+    safeTime(now);
+    packetBytes(packet, expectedId);
     requireMail(
-      now < letter.event.payload.expires_at,
-      "packet_expired",
-      "expired new letter",
+      packet.event.created_at <= now + MAIL_FUTURE_SKEW_MS,
+      "timestamp_out_of_window",
+      "future submission",
     );
-    this.accepted.set(letter.hash, letter.event.payload.expires_at);
+    requireMail(
+      !this.blocked.has(packet.event.actor),
+      "permission_denied",
+      "sender not admitted",
+    );
+    const letter = await this.keyring.open(packet, now, expectedId);
+    requireMail(
+      !this.blocked.has(packet.event.actor),
+      "permission_denied",
+      "sender not admitted",
+    );
+    const key = letter.from + "/" + letter.message_id,
+      digest = base64UrlEncode(sha3_256(mailCanonicalBytes(letter))),
+      previous = this.accepted.get(key);
+    if (previous) {
+      requireMail(
+        previous.digest === digest,
+        "invalid_event",
+        "message ID reused for different content",
+      );
+      return { kind: "duplicate", letter };
+    }
+    requireMail(
+      now < letter.expires_at,
+      "packet_expired",
+      "expired new message",
+    );
+    this.accepted.set(key, { expires: letter.expires_at, digest });
     return { kind: "accepted", letter };
   }
-  /** Forget letters whose signed expiration has passed; they can no longer be newly accepted. */
   prune(now = Date.now()): void {
     safeTime(now);
-    for (const [id, expires] of this.accepted)
-      if (now >= expires) this.accepted.delete(id);
+    for (const [k, v] of this.accepted)
+      if (now >= v.expires) this.accepted.delete(k);
   }
 }
 export function validateMailDiscovery(
@@ -894,14 +985,14 @@ export function validateMailCardRecord(
 }
 export function validateMailDeliveryResult(
   value: unknown,
-  packet?: MailPacket,
+  packet?: MailSubmission,
 ): asserts value is MailDeliveryResult {
   validateMailSchema(value, "deliveryResult");
   const r = value as MailDeliveryResult;
   if (packet !== undefined)
     requireMail(
       r.packet_id === mailPacketId(packet) &&
-        r.accepted_at < packet.header.expires_at,
+        r.accepted_at < packet.event.payload.header.expires_at,
       "invalid_response",
       "delivery result mismatch",
     );
@@ -914,8 +1005,9 @@ export function validateMailPacketRecord(
   const r = value as MailPacketRecord;
   validateMailPacket(r.packet, r.packet_id);
   requireMail(
-    r.accepted_at < r.packet.header.expires_at &&
-      (mailboxId === undefined || r.packet.header.mailbox_id === mailboxId),
+    r.accepted_at < r.packet.event.payload.header.expires_at &&
+      (mailboxId === undefined ||
+        r.packet.event.payload.header.mailbox_id === mailboxId),
     "invalid_response",
     "packet record mismatch",
   );
@@ -941,6 +1033,7 @@ export function validateMailPacketList(
 }
 
 interface RelayMailbox {
+  blockedSenders: Set<string>;
   current: MailCardRecord;
   lastSeq: number;
   bytes: number;
@@ -948,11 +1041,13 @@ interface RelayMailbox {
   tombstones: Map<string, { accepted_at: number; expires_at: number }>;
 }
 export interface MailRelaySnapshot {
+  seen_nonces: [string, number, number][];
   version: 1;
   origin: string;
   mailboxes: {
     current: MailCardRecord;
     last_seq: number;
+    blocked_senders: string[];
     packets: MailPacketRecord[];
     tombstones: {
       packet_id: string;
@@ -973,11 +1068,12 @@ export interface MailRelayOptions {
 /**
  * Synchronous process-local relay model. All validation precedes mutation;
  * persist the snapshot atomically before emitting a successful HTTP response.
- * The short-lived nonce cache is not part of the snapshot.
+ * Snapshots preserve accepted Mail nonce maxima; hosts also persist externally shared nonce state.
  */
 export class MailRelayStore {
   private readonly boxes = new Map<string, RelayMailbox>();
   private readonly nonces: NonceStore;
+  private readonly seenNonces = new Map<string, [number, number]>();
   private readonly clock: () => number;
   private readonly maxPackets: number;
   private readonly maxBytes: number;
@@ -1000,6 +1096,7 @@ export class MailRelayStore {
     );
     const s = options.snapshot;
     if (s) {
+      for (const [a, n, t] of s.seen_nonces) this.seenNonces.set(a, [n, t]);
       requireMail(
         s.version === 1 && s.origin === origin,
         "invalid_request",
@@ -1012,6 +1109,7 @@ export class MailRelayStore {
           bytes: 0,
           packets: new Map(),
           tombstones: new Map(),
+          blockedSenders: new Set(m.blocked_senders),
         };
         for (const record of m.packets) {
           const size = mailCanonicalBytes(record.packet).length;
@@ -1031,9 +1129,11 @@ export class MailRelayStore {
     return {
       version: 1,
       origin: this.origin,
+      seen_nonces: [...this.seenNonces].map(([a, [n, t]]) => [a, n, t]),
       mailboxes: [...this.boxes.values()].map((b) => ({
         current: clone(b.current),
         last_seq: b.lastSeq,
+        blocked_senders: [...b.blockedSenders],
         packets: [...b.packets.values()].map((p) => clone(p.record)),
         tombstones: [...b.tombstones].map(([packet_id, t]) => ({
           packet_id,
@@ -1075,12 +1175,7 @@ export class MailRelayStore {
       );
     verifyTimestamp(card.event.created_at, now, MAIL_FUTURE_SKEW_MS);
     // The final fallible step, so a rejected card consumes no nonce.
-    this.nonces.checkAndUpdate(
-      card.event.actor,
-      card.event.nonce,
-      now,
-      2 * MAIL_FUTURE_SKEW_MS,
-    );
+    this.acceptNonce(card.event.actor, card.event.nonce, now);
     const record: MailCardRecord = { envelope: card, accepted_at: now };
     if (b) b.current = record;
     else
@@ -1090,6 +1185,7 @@ export class MailRelayStore {
         bytes: 0,
         packets: new Map(),
         tombstones: new Map(),
+        blockedSenders: new Set<string>(),
       });
     return clone(record);
   }
@@ -1115,11 +1211,15 @@ export class MailRelayStore {
       encoder.encode(text).length <= MAIL_MAX_PACKET_BYTES,
       "payload_too_large",
     );
-    return this.deliver(mailboxId, parseStrictJson(text) as MailPacket, now);
+    return this.deliver(
+      mailboxId,
+      parseStrictJson(text) as MailSubmission,
+      now,
+    );
   }
   deliver(
     mailboxId: string,
-    packet: MailPacket,
+    packet: MailSubmission,
     now = this.clock(),
   ): MailDeliveryResult {
     packet = clone(packet);
@@ -1127,7 +1227,7 @@ export class MailRelayStore {
     pathId(mailboxId, 16);
     const bytes = packetBytes(packet),
       size = bytes.length;
-    const h = packet.header;
+    const h = packet.event.payload.header;
     requireMail(
       h.mailbox_id === mailboxId,
       "invalid_packet",
@@ -1135,7 +1235,7 @@ export class MailRelayStore {
     );
     const b = this.boxes.get(mailboxId);
     requireMail(b, "mailbox_unavailable");
-    const id = base64UrlEncode(sha3_256(bytes)),
+    const id = packet.hash,
       prior = b.tombstones.get(id);
     if (prior) return { packet_id: id, accepted_at: prior.accepted_at };
     const c = b.current.envelope,
@@ -1162,6 +1262,13 @@ export class MailRelayStore {
       "rate_limited",
       "mailbox storage quota exhausted",
     );
+    requireMail(
+      !b.blockedSenders.has(packet.event.actor),
+      "permission_denied",
+      "sender not admitted",
+    );
+    verifyTimestamp(packet.event.created_at, now, MAIL_FUTURE_SKEW_MS);
+    this.acceptNonce(packet.event.actor, packet.event.nonce, now);
     b.lastSeq += 1;
     b.packets.set(id, {
       record: { packet_id: id, packet, accepted_at: now, seq: b.lastSeq },
@@ -1170,6 +1277,28 @@ export class MailRelayStore {
     b.bytes += size;
     b.tombstones.set(id, { accepted_at: now, expires_at: h.expires_at });
     return { packet_id: id, accepted_at: now };
+  }
+  private acceptNonce(actor: string, nonce: number, now: number): void {
+    const seen = this.seenNonces.get(actor);
+    if (seen && now < seen[1] && nonce <= seen[0])
+      throw protocolError("nonce_not_greater", "nonce does not advance", {
+        max_nonce: seen[0],
+      });
+    this.nonces.checkAndUpdate(actor, nonce, now, 2 * MAIL_FUTURE_SKEW_MS);
+    this.seenNonces.set(actor, [nonce, now + 2 * MAIL_FUTURE_SKEW_MS]);
+  }
+  setSenderBlocked(
+    mailboxId: string,
+    sender: string,
+    blocked: boolean,
+    jwt: string,
+    now = this.clock(),
+  ): void {
+    const b = this.ownerBox(mailboxId, jwt, now);
+    validateAgentId(sender);
+    requireMail(typeof blocked === "boolean", "invalid_request");
+    if (blocked) b.blockedSenders.add(sender);
+    else b.blockedSenders.delete(sender);
   }
   private ownerBox(mailboxId: string, jwt: string, now: number): RelayMailbox {
     pathId(mailboxId, 16);
@@ -1209,7 +1338,9 @@ export class MailRelayStore {
     const after = cursor === undefined ? 0 : Number(cursor);
     const rows = [...b.packets.values()]
       .map((x) => x.record)
-      .filter((r) => r.seq > after && now < r.packet.header.expires_at);
+      .filter(
+        (r) => r.seq > after && now < r.packet.event.payload.header.expires_at,
+      );
     const result = clone(rows.slice(0, limit));
     return rows.length > limit
       ? { result, next_cursor: String(result.at(-1)!.seq) }
@@ -1232,6 +1363,8 @@ export class MailRelayStore {
   /** Drop expired packets and tombstones, then forget mailboxes whose current card's `receive_until` passed. */
   prune(now = this.clock()): void {
     safeTime(now);
+    for (const [actor, [, expires]] of this.seenNonces)
+      if (now >= expires) this.seenNonces.delete(actor);
     for (const [mailboxId, b] of this.boxes) {
       this.dropExpired(b, now);
       for (const [id, t] of b.tombstones)
@@ -1242,7 +1375,7 @@ export class MailRelayStore {
   }
   private dropExpired(b: RelayMailbox, now: number): void {
     for (const [id, x] of b.packets)
-      if (now >= x.record.packet.header.expires_at) {
+      if (now >= x.record.packet.event.payload.header.expires_at) {
         b.packets.delete(id);
         b.bytes -= x.size;
       }

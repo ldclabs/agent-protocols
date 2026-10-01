@@ -164,8 +164,8 @@ def test_strict_json_and_response_shape(raw):
 def test_delivery_result_binding_and_size_limit():
     _, _, delivery = populated()
     packet = V['encryptions']['original']['packet']
-    for bad in ({**delivery, 'packet_id': ENVS['letter']['hash']}, {**delivery, 'seq': 1},
-                {**delivery, 'accepted_at': packet['header']['expires_at']}):
+    for bad in ({**delivery, 'packet_id': ENVS['letter']['message_id']}, {**delivery, 'seq': 1},
+                {**delivery, 'accepted_at': packet['event']['payload']['header']['expires_at']}):
         session, _ = transport((bad, 202, {}))
         with pytest.raises(AgentProtocolError):
             MailClient(ORIGIN, session).deliver(packet)
@@ -190,7 +190,7 @@ def test_client_pages_follow_cursors_and_detect_rewinds():
     with pytest.raises(AgentProtocolError):
         next(rewound)
     corrupt = copy.deepcopy(first['result'][0])
-    corrupt['packet']['header']['mailbox_id'] = 'AAAAAAAAAAAAAAAAAAAAAA'
+    corrupt['packet']['event']['payload']['header']['mailbox_id'] = 'AAAAAAAAAAAAAAAAAAAAAA'
     session, _ = transport({'result': [corrupt]})
     with pytest.raises(AgentProtocolError):
         MailClient(ORIGIN, session).list(MAILBOX, OWNER, TOKEN, now_ms=NOW)

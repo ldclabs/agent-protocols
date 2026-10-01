@@ -1,4 +1,4 @@
-/** Same-origin Mail HTTP client. Packet delivery is anonymous; read/delete require owner-bound JWTs. */
+/** Same-origin Mail HTTP client. Packet delivery is sender-signed; read/delete require owner-bound JWTs. */
 import { parseStrictJson, validateOrigin } from "./identity.js";
 import { protocolError } from "./errors.js";
 import { HttpResponseError, type FetchLike } from "./http-client.js";
@@ -18,7 +18,7 @@ import {
   type MailCardRecord,
   type MailDeliveryResult,
   type MailDiscovery,
-  type MailPacket,
+  type MailSubmission,
   type MailPacketList,
 } from "./mail.js";
 export interface MailClientOptions {
@@ -83,11 +83,11 @@ export class MailClient {
     );
     return r;
   }
-  /** Anonymous delivery or exact retransmission of a completed packet. */
-  async deliver(packet: MailPacket): Promise<MailDeliveryResult> {
+  /** Sender-signed delivery or exact retransmission of a completed packet. */
+  async deliver(packet: MailSubmission): Promise<MailDeliveryResult> {
     validateMailPacket(packet);
     const r = await this.request(
-      `${this.base}/${packet.header.mailbox_id}/packets`,
+      `${this.base}/${packet.event.payload.header.mailbox_id}/packets`,
       "POST",
       202,
       packet,

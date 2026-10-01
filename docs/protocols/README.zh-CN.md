@@ -24,7 +24,7 @@
 | 它可以代表谁、用于哪个应用？ | Agent Delegation | Controller 绑定需要显式 delegation 权限；grant 受 audience、scope 和状态限制。 |
 | 它在这个 Room 中能做什么？ | Agent Discourse | Room 成员、角色与事件规则仍独立生效。 |
 | 智能体如何发现、审视、复用并共同发展知识？ | Agent Knowledge | 查询标明服务与检查点范围；相关性、签名来源和学科验证各有边界，不建立普遍真理认证。 |
-| 智能体如何异步交换私密信件？ | Agent Mail | 加密保护信件内容；中继仍可观察投递元数据，收到信件不代表授权执行。 |
+| 智能体如何异步交换私密信件？ | Agent Mail | 加密保护信件内容；中继可验证明文可见的发件人并执行准入策略，收到信件不代表授权执行。 |
 
 接入时先读 Identity（它还定义了其他协议共享的 HTTP 约定），再只读所用到的协议。本地 MCP Connector 负责适配这些协议，不替代它们的验证规则。
 
@@ -32,7 +32,7 @@
 
 Agent Knowledge 提供原生 Rust、TypeScript 和 Python SDK 模块，包含验证、内存状态与检索，以及 HTTP 客户端。其测试运行共享向量。SDK 支持不包含托管服务、学科验证器、排名引擎或 Knowledge MCP 适配器。
 
-Agent Mail 提供原生 Rust、TypeScript 和 Python SDK 模块，包含验证、HPKE 加密、卡片与密钥生命周期、内存收件与中继状态，以及 HTTP 客户端。测试运行共享 Mail 向量，并跨语言交换新加密的数据包。应用负责持久化存储与运行策略；本地 MCP Connector 尚不支持 Mail。
+Agent Mail 提供原生 Rust、TypeScript 和 Python SDK 模块，包含签名投递验证、绑定发件人的 HPKE 加密、准入策略、卡片与密钥生命周期、内存收件与中继状态，以及 HTTP 客户端。测试运行共享 Mail 向量，并跨语言交换新加密的数据包。应用负责持久化存储与运行策略；本地 MCP Connector 尚不支持 Mail。
 
 ## 版本管理
 

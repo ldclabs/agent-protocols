@@ -10,7 +10,7 @@ TypeScript SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Ag
 - `discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
 - `knowledge`: signed research contributions, validation, in-memory retrieval and state.
 - `mail`: signed mailbox cards and private letters, HPKE packets, card pins, key retention, inbox deduplication, and relay state.
-- `mail-client`: anonymous Mail delivery and owner-authenticated retrieval with strict HTTP response checks.
+- `mail-client`: sender-signed Mail delivery and owner-authenticated retrieval with strict HTTP response checks.
 - `http-client`: fetch-based Profile, Delegation, Discourse, and Knowledge clients. Lists use `{ result, next_cursor }`; non-2xx responses throw `HttpResponseError` with the protocol `code`, `data`, and `Max-Seen-Nonce`.
 - `local-connector`: the Local Agent Protocols MCP connector: 23 standard tools, resource URIs, structured views, and the connector engine.
 
@@ -131,112 +131,83 @@ additional HTTP, isolation, pruning, and pagination regressions.
 
 ## Agent Mail
 
-`agent-protocols/mail` implements Agent Mail 1.0 cards, signed letters, packets,
-semantic validation, HPKE encryption, and process-local reference state.
-`MailClient` is available from the main and `agent-protocols/mail-client` entry
-points. The local MCP connector does not yet expose Mail tools.
+Messages have no inner signature. The signed `mail.submit` envelope covers the
+complete encrypted packet. HPKE AAD binds its protocol, type, actor, submission
+creation time, nonce and packet header. Relays can verify the sender without
+reading the subject or body; this format does not hide the communication graph.
+A plaintext message alone is not a transferable author-signed artifact.
+
+`message_id` is a random 32-byte base64url identifier retained across retries;
+`from`, original `created_at`, recipient, expiration, thread and parts are also
+immutable. The outer hash is the packet ID, not the logical message ID. A retry
+may use a new card, HPKE randomness, submission time and nonce while keeping the
+original message exactly. Replies refer to the parent's `message_id` and must
+bind both participants and the thread. Content is inert and never executes tools.
+
+Relay admission uses Identity's live timestamp window and origin-wide nonce
+store. Recipient processing verifies queued submissions historically, so offline
+and out-of-order messages remain usable. Inbox deduplication is scoped to the
+recipient, sender and message ID; different content under an accepted identity
+is rejected, not overwritten. Sender policy is checked before decryption.
+
+The state helpers are **in memory**, not hosted or durable services. Persist
+snapshots atomically before acknowledging storage/deletion or acting. Relay
+snapshots preserve accepted Mail nonce maxima and sender policies; an injected
+nonce store shared with other protocols must also be persisted by the host.
+Keyring snapshots contain raw private keys and need protected storage. Pruning
+keys cannot erase copies in backups. Production HPKE always uses fresh randomness.
+
+Mailbox addressing uses `did:agent:<key>/mail/<mailbox_id>` and optional
+`?route=<origin>` hints. Parse/format helpers reuse Agent Identity's Agent URLs.
+Hints do not authorize a route; verified, pinned cards supply current routes.
+The local MCP connector does not yet expose Mail tools.
 
 ```ts
 import {
   AgentSigner, ClientNonceManager, MailEncryptionKey, MailCardCache,
-  MailKeyring, MailInbox, mailboxPublishEvent, mailMessageEvent,
+  MailKeyring, MailInbox, createMailMessage, mailboxPublishEvent,
   mailTextPart, newMailId,
 } from "agent-protocols";
 
-const alice = AgentSigner.generate();
-const bob = AgentSigner.generate();
-const bobEncryption = MailEncryptionKey.generate(); // Independent X25519 key.
-const aliceNonces = new ClientNonceManager();
-const bobNonces = new ClientNonceManager();
+const sender = AgentSigner.generate(), owner = AgentSigner.generate();
+const key = MailEncryptionKey.generate(), nonces = new ClientNonceManager();
 const now = Date.now();
-const card = bob.signEvent(mailboxPublishEvent(
-  bob.agentId(), now, bobNonces.nextNonce(now), {
-    mailbox_id: newMailId(),
-    expires_at: now + 86400000, receive_until: now + 2 * 86400000,
-    public_key: bobEncryption.publicKey(),
-    routes: ["https://relay.example"], max_packet_bytes: 65536,
-  },
-));
-const letter = alice.signEvent(mailMessageEvent(
-  alice.agentId(), now, aliceNonces.nextNonce(now), {
-    to: bob.agentId(), expires_at: now + 86400000, thread_id: newMailId(),
-    subject: "A private question", parts: [mailTextPart("Can we compare results?")],
-  },
-));
-const cards = new MailCardCache();
-const packet = await cards.seal(letter, card, now);
-// Persist cards.snapshot() and the original outgoing letter before delivery.
-
-const keys = new MailKeyring(bob.agentId());
-keys.add(card, bobEncryption);
+const card = owner.signEvent(mailboxPublishEvent(owner.agentId(), now, now, {
+  mailbox_id: newMailId(), expires_at: now + 86400000,
+  receive_until: now + 172800000, public_key: key.publicKey(),
+  routes: ["https://relay.example"], max_packet_bytes: 65536,
+}));
+const message = createMailMessage(sender.agentId(), now, {
+  to: owner.agentId(), expires_at: now + 86400000, thread_id: newMailId(),
+  parts: [mailTextPart("A private question")],
+});
+const pins = new MailCardCache();
+const submission = await pins.seal(message, card, sender, nonces.nextNonce(now), now);
+const keys = new MailKeyring(owner.agentId());
+keys.add(card, key);
 const inbox = new MailInbox(keys);
-const result = await inbox.accept(packet, now);
-// Store result.letter and persist inbox.snapshot() before deleting the relay copy.
-// result.kind is "accepted" or "duplicate"; no reply or action is automatic.
+const result = await inbox.accept(submission, now);
+// Persist pins.snapshot(), keys.exportSnapshot() and inbox.snapshot() before ack.
 ```
 
-For HTTP, `new MailClient(route, options)` talks to one relay origin taken from
-a card's `routes`; paths are fixed at `/v1/mailboxes`, and `protocol()` reads the
-informational discovery document. Pass a shared `cardCache` in options and
-persist `client.cardCache.snapshot()` across requests and restarts. Card reads
-pin authentic closed, moved, or expired cards as well as usable ones; use that
-same cache for sending. `publish(card)` and `card(mailboxId, expectedOwner)`
-verify signed responses. `deliver(packet)` always omits credentials and never
-accepts a sender JWT. Owner operations `list(mailboxId, owner, jwt, { limit?,
-cursor? })`, `pages(mailboxId, owner, tokenProvider, limit?)`, and
-`delete(mailboxId, packetId, owner, jwt)` validate the token's owner and
-audience before sending it. All requests disable redirects, cookies, and
-referrers. Responses undergo strict JSON, signature, shape, binding, ordering,
-and size checks. Supply `allowUrl` and a `fetch` transport that enforces your
-DNS/private-network policy; a signed URL alone never authorizes network access.
-`clock` supports an explicit trusted clock; `maxResponseBytes` bounds streamed
-responses (default 128 MiB).
+`agent-protocols/mail` exports `MailMessagePayload`/`MailLetter` for plaintext,
+`MailPacket` for the encrypted payload and `MailSubmission = Envelope<MailPacket>`
+for transport. `sealMailPacket(message, card, signer, nonce, now)` returns a signed
+submission; `openMailPacket` verifies and decrypts it. `validateMailLetter`
+checks plaintext, `validateMailPacket` checks the signed wire object, and
+`mailPacketId` returns its event hash. `validateMailReply` checks parent bindings.
+`MailInbox.setSenderBlocked(sender, blocked)` controls local pre-decryption
+policy. `MailRelayStore.setSenderBlocked(mailboxId, sender, blocked, ownerJwt,
+now)` requires owner authentication. This policy is deployment-local, with no
+new HTTP endpoint; exact retries return historical status without new admission.
+Relay `publish` and `deliver` share the injected `nonceStore`.
 
-The main building blocks are:
-
-| API | Purpose |
-| --- | --- |
-| `validateMailboxCard`, `validateMailSenderCard`, `validateMailLetter`, `validateMailPacket` | Structural, signature, origin, lifetime, media, and encryption-key checks. A sender card must be unexpired and have routes. Historical letters never advance live nonce state. |
-| `mailboxPublishEvent`, `mailMessageEvent` | Build Identity events for signing with an `AgentSigner`. |
-| `parseMailAddress`, `formatMailAddress` | The stable address `did:agent:<key>/mail/<mailbox_id>` and the contact address with `?route=<origin>` hints (Mail Section 3.3), built on Identity's `parseAgentUrl` / `formatAgentUrl`. Routes in an address are unauthenticated hints; the pinned card's routes win. |
-| `MailEncryptionKey.generate/fromBytes/publicKey/exportSecret/destroy` | Independently generate or restore X25519 keys, export explicit sensitive backups, and clear owned secret bytes. |
-| `sealMailPacket`, `openMailPacket` | Stateless, fixed-suite HPKE with canonical framing and authenticated recipient/card/header binding. Use a `MailCardCache` for rollback protection and `MailInbox` for acceptance/deduplication. |
-| `MailCardCache.observe/seal/prune/snapshot` | Pins the greatest-nonce card per mailbox; an older or conflicting card fails with `stale_card`. A newer closed/expired card still updates the pin although sending fails, so persist the snapshot on these outcomes. `prune` drops pins once every earlier card has expired. |
-| `MailKeyring.add/open/prune/exportSnapshot/restore` | Retain old verified cards and secrets through their `receive_until`. Snapshots include secrets and require protected storage. |
-| `MailInbox.accept/has/prune/snapshot` | Cross-route, cross-encryption deduplication by letter ID, with concurrent receive protection. The application stores accepted letters. Restore with `new MailInbox(keyring, snapshot)`. |
-| `MailRelayStore` | Live card publication, injectable Identity nonce store, route checks, opaque packets, per-mailbox quotas, tombstones, owner JWT authorization, and `seq` cursors. `prune` drops expired packets and tombstones and forgets mailboxes whose current card's `receive_until` passed. |
-| `validateMailReply`, `mailTextPart`, `mailPartText` | Bind a reply to its parent's participants, letter ID, and thread; encode/decode inert UTF-8 content without rendering or executing it. |
-
-`MailRelayStore(origin, { clock?, nonceStore?, maxPackets?, maxBytes?, snapshot? })`
-provides `publish`, `card`, `deliver`, `list`, `delete`, `prune`, `discovery`, and
-`snapshot`. `publishJson` and `deliverJson` enforce a raw UTF-8 body bound before
-strict parsing. Default per-mailbox quotas are 10,000 packets and 64 MiB and
-fail with `rate_limited`; a real HTTP server must also bound raw request
-streams, registration, concurrency, and rate. Delivery results never include the
-mailbox `seq`. An injected nonce store can be shared with other protocol services
-at the same origin; the short-lived nonce cache is not part of the Mail snapshot.
-
-These stores are in-memory building blocks, not durable services. Persist relay
-state before acknowledging a write, and persist recipient acceptance before
-transport deletion or executing anything. Snapshots and returned objects are
-detached copies; restore assumes an authenticated, current local backup and
-checks only its version and shape. No API automatically authorizes actions,
-sends replies, fetches attachments, or renders active content.
-
-Encryption uses the maintained [hpke-js](https://github.com/dajiaji/hpke-js)
-packages `@hpke/core`, `@hpke/dhkem-x25519`, and `@hpke/chacha20poly1305` with
-RFC 9180 Base mode, X25519/HKDF-SHA256/ChaCha20Poly1305. Production sealing always
-uses fresh randomness and a new context for one message; deterministic material
-is confined to tests. The portable build uses Web Crypto-compatible runtimes
-(Node.js, secure browser contexts, and Workers), without Node `Buffer` APIs in
-production code. The SDK clears its owned temporary plaintext/raw key buffers;
-JavaScript garbage collection and library-owned `CryptoKey` copies prevent a
-guarantee that every secret copy is immediately erased. Base HPKE supplies no
-ratchet, recipient-compromise forward secrecy, post-quantum security, or network
-anonymity.
-
-Mail tests execute all shared structural/rejection/lifecycle cases, exact signing
-and encryption fixtures, and an independent RFC 9180 known-answer vector.
-Additional tests cover random round trips, concurrent delivery, snapshots,
-rollback, route changes and key rotation, JWT boundaries, HTTP redirects,
-credentials, malformed responses, authorization, pagination, and quotas.
+`MailClient` is exported from the root and `agent-protocols/mail-client`.
+It uses fixed HTTPS paths for `publish`, `card`, `deliver`, `list`, `pages` and
+`delete`. Pass a shared `cardCache` and persist it even when a read reports an
+unusable newer card. Delivery exposes the signed actor but never sends ambient
+credentials. Fetch uses `credentials: "omit"` and `redirect: "error"`; owner
+reads/deletes validate their JWT first. Responses have size, strict JSON and
+binding checks. Supply `allowUrl` and transport-level DNS/egress policy for the
+deployment. Production code runs in Node, browsers and Workers, with no Node-only
+crypto or Buffer. JS cannot guarantee erasure of provider-owned or GC copies.

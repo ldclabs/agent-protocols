@@ -32,7 +32,7 @@ const schema = JSON.parse(
     "utf8",
   ),
 );
-const e = v.envelopes,
+const e = { ...v.envelopes, ...v.messages },
   now = v.now,
   owner = v.keys.recipient_agent_id,
   service = "https://relay.example",
@@ -62,13 +62,14 @@ const makeCard = (changes: any = {}, nonce = 400, at = now) =>
       ...changes,
     }),
   );
-const makeLetter = (changes: any = {}, nonce = 500) =>
-  sender.signEvent(
-    m.mailMessageEvent(sender.agentId(), now, nonce, {
-      ...e.letter.event.payload,
-      ...changes,
-    }),
-  );
+const makeLetter = (changes: any = {}) => ({
+  ...structuredClone(e.letter),
+  message_id: m.newMailMessageId(),
+  ...changes,
+});
+let nextNonce = 1000;
+const seal = (letter: m.MailLetter, card: m.MailboxCard, now: number) =>
+  m.sealMailPacket(letter, card, sender, nextNonce++, now);
 function jwt(who = signer, aud = service, at = now) {
   return who.signRequestJwt({
     iss: who.agentId(),
@@ -133,7 +134,7 @@ for (const [name, c] of Object.entries(v.signing) as [string, any][])
     );
     if (e[name].event.type === "mailbox.publish")
       m.validateMailboxCard(e[name]);
-    else m.validateMailLetter(e[name]);
+    else m.validateMailPacket(e[name]);
   });
 for (const c of v.schema_cases)
   test(`Mail schema vector: ${c.name}`, () => {
@@ -212,11 +213,11 @@ for (const [name, c] of Object.entries(v.encryptions) as [string, any][])
     );
     assert.deepEqual(
       {
-        header: c.packet.header,
+        header: c.packet.event.payload.header,
         enc: base64UrlEncode(out.enc),
         ciphertext: base64UrlEncode(out.ct),
       },
-      c.packet,
+      c.packet.event.payload,
     );
     assert.equal(m.mailPacketId(c.packet), c.packet_id);
     assert.equal(
@@ -237,17 +238,19 @@ for (const [name, c] of Object.entries(v.encryptions) as [string, any][])
   });
 for (const c of v.recipient_rejections)
   test(`Mail recipient rejection: ${c.name}`, async () => {
-    await assert.rejects(() =>
-      m.openMailPacket(
-        c.packet,
-        e[c.card ?? "card"],
-        m.MailEncryptionKey.fromBytes(
-          hex(c.secret_hex ?? v.keys.recipient_secret_hex),
+    await assert.rejects(
+      () =>
+        m.openMailPacket(
+          c.packet,
+          e[c.card ?? "card"],
+          m.MailEncryptionKey.fromBytes(
+            hex(c.secret_hex ?? v.keys.recipient_secret_hex),
+          ),
+          c.owner ?? owner,
+          now,
+          c.packet_id,
         ),
-        c.owner ?? owner,
-        now,
-        c.packet_id,
-      ),
+      { code: c.code },
     );
   });
 const pinCodes: Record<string, string> = {
@@ -333,10 +336,10 @@ test("Mail relay lifecycle vectors run through real control writes", () => {
 
 test("Mail random production encryption roundtrips and concurrent acceptance is once", async () => {
   const [a, b] = await Promise.all([
-    m.sealMailPacket(e.letter, e.card, now),
-    m.sealMailPacket(e.letter, e.card, now),
+    seal(e.letter, e.card, now),
+    seal(e.letter, e.card, now),
   ]);
-  assert.notEqual(a.enc, b.enc);
+  assert.notEqual(a.event.payload.enc, b.event.payload.enc);
   const inbox = new m.MailInbox(keyring());
   const results = await Promise.all([
     inbox.accept(a, now),
@@ -347,31 +350,25 @@ test("Mail random production encryption roundtrips and concurrent acceptance is 
     "duplicate",
   ]);
   assert.deepEqual(results[0].letter, e.letter);
-  inbox.prune(e.letter.event.payload.expires_at);
-  assert.equal(inbox.has(e.letter.hash), false);
+  inbox.prune(e.letter.expires_at);
+  assert.equal(inbox.has(sender.agentId(), e.letter.message_id), false);
 });
 test("Mail sealing checks recipient, lifetime, size and card usability first", async () => {
   await assert.rejects(
-    () => m.sealMailPacket(makeLetter({ to: sender.agentId() }), e.card, now),
+    () => seal(makeLetter({ to: sender.agentId() }), e.card, now),
     { code: "invalid_actor" },
   );
   await assert.rejects(
-    () =>
-      m.sealMailPacket(makeLetter({ expires_at: now + 1 }), e.card, now + 1),
+    () => seal(makeLetter({ expires_at: now + 1 }), e.card, now + 1),
     { code: "packet_expired" },
   );
   await assert.rejects(
-    () =>
-      m.sealMailPacket(
-        makeLetter({ expires_at: now + 3 * 86400000 }),
-        e.card,
-        now,
-      ),
+    () => seal(makeLetter({ expires_at: now + 3 * 86400000 }), e.card, now),
     { code: "invalid_packet" },
   );
   await assert.rejects(
     () =>
-      m.sealMailPacket(
+      seal(
         makeLetter({
           parts: [
             {
@@ -385,16 +382,19 @@ test("Mail sealing checks recipient, lifetime, size and card usability first", a
       ),
     { code: "payload_too_large" },
   );
-  await assert.rejects(() => m.sealMailPacket(e.letter, e.closed_card, now), {
+  await assert.rejects(() => seal(e.letter, e.closed_card, now), {
     code: "mailbox_unavailable",
   });
   const cache = new m.MailCardCache();
-  const sealed = await cache.seal(e.letter, e.card, now);
+  const sealed = await cache.seal(e.letter, e.card, sender, nextNonce++, now);
   assert.deepEqual(await keyring().open(sealed, now), e.letter);
   cache.observe(e.rotated_card, owner, now);
-  await assert.rejects(() => cache.seal(e.letter, e.card, now), {
-    code: "stale_card",
-  });
+  await assert.rejects(
+    () => cache.seal(e.letter, e.card, sender, nextNonce++, now),
+    {
+      code: "stale_card",
+    },
+  );
 });
 test("Mail keys are independent, keyring retains old cards and prunes by receive_until", async () => {
   const key = m.MailEncryptionKey.generate(),
@@ -428,15 +428,13 @@ test("Mail local JSON and text parts remain strict", () => {
   assert.throws(() => m.mailCanonicalBytes("\ud800"));
   assert.throws(() => m.mailTextPart("\udc00"));
   assert.equal(m.mailPartText(m.mailTextPart("Hello 世界")), "Hello 世界");
-  const reply = signer.signEvent(
-    m.mailMessageEvent(owner, now, 501, {
-      to: sender.agentId(),
-      expires_at: now + 1000,
-      thread_id: m.newMailId(),
-      in_reply_to: e.letter.hash,
-      parts: [m.mailTextPart("reply")],
-    }),
-  );
+  const reply = m.createMailMessage(owner, now, {
+    to: sender.agentId(),
+    expires_at: now + 1000,
+    thread_id: m.newMailId(),
+    in_reply_to: e.letter.message_id,
+    parts: [m.mailTextPart("reply")],
+  });
   assert.throws(() => m.validateMailReply(reply, e.letter));
 });
 test("Mail relay publication is atomic, nonce-aware and idempotent", () => {
@@ -500,7 +498,7 @@ test("Mail relay quotas, tombstones, owner authorization and pruning", () => {
     codeOf(() => s.deliver(m.newMailId(), packet("original"))),
     "invalid_packet",
   );
-  const expires = e.letter.event.payload.expires_at;
+  const expires = e.letter.expires_at;
   s.prune(expires);
   assert.equal(
     codeOf(() => s.deliver(mailbox, packet("original"), expires)),
@@ -571,4 +569,93 @@ test("Mail owner JWT verification is strict about claims JSON", () => {
       () => m.validateMailOwnerJwt(sign(raw), service, owner, now),
       { code: "invalid_token" },
     );
+});
+
+test("Mail pre-decryption sender policy, owner management and tombstones survive restart", async () => {
+  let inbox = new m.MailInbox(new m.MailKeyring(owner));
+  inbox.setSenderBlocked(sender.agentId());
+  await assert.rejects(() => inbox.accept(packet("original"), now), {
+    code: "permission_denied",
+  });
+  const broken = packet("original");
+  broken.signature = base64UrlEncode(new Uint8Array(64));
+  await assert.rejects(() => inbox.accept(broken, now), {
+    code: "invalid_signature",
+  });
+  inbox = new m.MailInbox(inbox.keyring, inbox.snapshot());
+  await assert.rejects(() => inbox.accept(packet("original"), now), {
+    code: "permission_denied",
+  });
+  let relay = new m.MailRelayStore(service, { clock: () => now });
+  relay.publish(e.card);
+  const before = relay.snapshot();
+  assert.throws(
+    () => relay.setSenderBlocked(mailbox, sender.agentId(), true, jwt(sender)),
+    { code: "permission_denied" },
+  );
+  assert.deepEqual(relay.snapshot(), before);
+  relay.setSenderBlocked(mailbox, sender.agentId(), true, jwt());
+  assert.throws(() => relay.deliver(mailbox, packet("original")), {
+    code: "permission_denied",
+  });
+  relay.setSenderBlocked(mailbox, sender.agentId(), false, jwt());
+  const accepted = relay.deliver(mailbox, packet("original"));
+  relay.setSenderBlocked(mailbox, sender.agentId(), true, jwt());
+  relay.delete(mailbox, accepted.packet_id, jwt());
+  relay = new m.MailRelayStore(service, {
+    clock: () => now,
+    snapshot: relay.snapshot(),
+  });
+  assert.deepEqual(relay.deliver(mailbox, packet("original")), accepted);
+  assert.throws(() => relay.deliver(mailbox, packet("reencrypted")), {
+    code: "permission_denied",
+  });
+  assert.equal(relay.list(mailbox, jwt()).result.length, 0);
+});
+test("Mail live nonce admission persists while recipient accepts historical out-of-order mail", async () => {
+  let relay = new m.MailRelayStore(service, { clock: () => now });
+  relay.publish(e.card);
+  relay.deliver(mailbox, packet("original"));
+  relay = new m.MailRelayStore(service, {
+    clock: () => now,
+    snapshot: relay.snapshot(),
+  });
+  assert.throws(() => relay.deliver(mailbox, packet("lower_nonce")), {
+    code: "nonce_not_greater",
+  });
+  const late = now + m.MAIL_FUTURE_SKEW_MS + 1;
+  assert.throws(() => relay.deliver(mailbox, packet("reencrypted"), late), {
+    code: "timestamp_out_of_window",
+  });
+  const retry = await m.sealMailPacket(e.letter, e.card, sender, 900, late);
+  relay.deliver(mailbox, retry, late);
+  const inbox = new m.MailInbox(keyring());
+  assert.equal((await inbox.accept(retry, now + 86400000)).kind, "accepted");
+  assert.equal(
+    (await inbox.accept(packet("original"), now + 86400000)).kind,
+    "duplicate",
+  );
+  assert.equal(
+    (await inbox.accept(packet("lower_nonce"), now + 86400000)).kind,
+    "accepted",
+  );
+});
+test("Mail logical ID conflicts fail and distinct senders have distinct ID namespaces", async () => {
+  const c = v.lifecycle.message_conflict,
+    inbox = new m.MailInbox(keyring());
+  await inbox.accept(packet(c.first), now);
+  const before = inbox.snapshot();
+  await assert.rejects(() => inbox.accept(packet(c.second), now), {
+    code: c.expected,
+  });
+  assert.deepEqual(inbox.snapshot(), before);
+  const other = await m.sealMailPacket(
+    { ...e.letter, from: owner },
+    e.card,
+    signer,
+    1000,
+    now,
+  );
+  assert.equal((await inbox.accept(other, now)).kind, "accepted");
+  assert.equal(inbox.snapshot().accepted.length, 2);
 });

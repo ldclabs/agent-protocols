@@ -482,7 +482,7 @@ def mail_public_network_policy(url: str) -> bool:
 class MailClient:
     """Client for one relay origin (a card route); paths are fixed at ``/v1/mailboxes``.
 
-    Delivery is anonymous and reads/deletes carry explicit owner JWTs. A fresh
+    Delivery is sender-signed and reads/deletes carry explicit owner JWTs. A fresh
     PreparedRequest bypasses ambient Session auth, headers, params, cookies and
     netrc; send() gets explicit TLS/proxy/redirect settings. Injected adapters
     remain trusted transport code. ``network_policy`` runs before every request.
@@ -575,10 +575,10 @@ class MailClient:
         return record
 
     def deliver(self, packet: dict[str, Any]) -> dict[str, Any]:
-        """Anonymous delivery or exact retransmission of a completed packet."""
+        """Sender-signed delivery or exact retransmission of a completed packet."""
         from .mail import validate_mail_delivery_result, validate_mail_packet
         validate_mail_packet(packet)
-        result = self._request('POST', self._mailboxes + '/' + packet['header']['mailbox_id'] + '/packets', status=202, body=packet)
+        result = self._request('POST', self._mailboxes + '/' + packet['event']['payload']['header']['mailbox_id'] + '/packets', status=202, body=packet)
         validate_mail_delivery_result(result, packet)
         return result
 

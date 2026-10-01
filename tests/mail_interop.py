@@ -47,11 +47,11 @@ def invoke(language: str, request: dict, *, rejection: bool = False):
 
 def main():
     vectors = json.loads((ROOT / "docs/protocols/agent-mail/1.0.vectors.json").read_text())
-    expected = vectors["envelopes"][vectors["encryptions"]["original"]["letter"]]
+    expected = vectors["messages"][vectors["encryptions"]["original"]["letter"]]
     packets = []
     for sender in ADAPTERS:
-        pair = [invoke(sender, {"op": "seal"}) for _ in range(2)]
-        if pair[0]["enc"] == pair[1]["enc"]:
+        pair = [invoke(sender, {"op": "seal", "nonce": 700 + len(packets) + i}) for i in range(2)]
+        if pair[0]["event"]["payload"]["enc"] == pair[1]["event"]["payload"]["enc"]:
             raise AssertionError(f"{sender} reused an encapsulation")
         packets.extend((sender, packet) for packet in pair)
         print(f"{sender}: fresh production encapsulations generated", flush=True)
@@ -61,21 +61,26 @@ def main():
         for recipient in ADAPTERS:
             actual = invoke(recipient, {"op": "open", "packet": packet})
             if actual != expected:
-                raise AssertionError(f"{sender} -> {recipient}: signed letter changed")
+                raise AssertionError(f"{sender} -> {recipient}: immutable message changed")
             opened += 1
 
     tampered_ciphertext = copy.deepcopy(packets[0][1])
-    encoded = tampered_ciphertext["ciphertext"]
+    encoded = tampered_ciphertext["event"]["payload"]["ciphertext"]
     raw = bytearray(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
     raw[0] ^= 1
-    tampered_ciphertext["ciphertext"] = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    tampered_ciphertext["event"]["payload"]["ciphertext"] = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
     tampered_header = copy.deepcopy(packets[0][1])
-    tampered_header["header"]["expires_at"] += 1
+    tampered_header["event"]["payload"]["header"]["expires_at"] += 1
     rejected = 0
     for packet in (tampered_ciphertext, tampered_header):
         for recipient in ADAPTERS:
             invoke(recipient, {"op": "open", "packet": packet}, rejection=True)
             rejected += 1
+    for case in vectors["recipient_rejections"]:
+        if case["name"] in ("valid different signer rewraps ciphertext", "valid signature with changed nonce", "valid signature with changed time"):
+            for recipient in ADAPTERS:
+                invoke(recipient,{"op":"open","packet":case["packet"]},rejection=True)
+                rejected += 1
     print(f"PASS: {opened} cross-SDK decryptions, 6 fresh packets, {rejected} tamper rejections.")
 
 

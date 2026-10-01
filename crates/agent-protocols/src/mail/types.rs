@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub type MailboxCard = Envelope<MailboxCardPayload>;
-pub type Letter = Envelope<Value>;
+pub type Letter = MessagePayload;
+pub type Submission = Envelope<Packet>;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MailboxCardPayload {
@@ -18,6 +19,10 @@ pub struct MailboxCardPayload {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MessagePayload {
+    pub message_id: String,
+    #[serde(rename = "from")]
+    pub sender: AgentId,
+    pub created_at: i64,
     pub to: AgentId,
     pub expires_at: i64,
     pub thread_id: String,
@@ -68,7 +73,7 @@ pub struct Packet {
     pub enc: String,
     pub ciphertext: String,
 }
-/// Anonymous delivery result. It never carries the mailbox `seq`.
+/// Sender-authenticated delivery result. It never carries the mailbox `seq`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DeliveryResult {
@@ -79,7 +84,7 @@ pub struct DeliveryResult {
 #[serde(deny_unknown_fields)]
 pub struct PacketRecord {
     pub packet_id: String,
-    pub packet: Packet,
+    pub packet: Submission,
     pub accepted_at: i64,
     pub seq: u64,
 }
