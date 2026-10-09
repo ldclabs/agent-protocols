@@ -133,9 +133,10 @@ export interface KnowledgeAssessPayload extends KnowledgeResearchPayload {
   verdict: KnowledgeVerdict;
   summary: string;
 }
-export interface KnowledgeRetractPayload extends KnowledgeLicensedPayload {
+export interface KnowledgeRetractPayload {
   target: string;
   reason: string;
+  extra?: Record<string, unknown>;
 }
 export type KnowledgePayload =
   KnowledgePublishPayload | KnowledgeAssessPayload | KnowledgeRetractPayload;
@@ -160,7 +161,6 @@ export interface KnowledgeFilters {
   created_before?: number;
 }
 export interface KnowledgeQuery extends KnowledgeFilters {
-  q?: string;
   after_seq?: number;
   limit?: number;
   cursor?: string;
@@ -407,7 +407,8 @@ export function validateKnowledgeEnvelope(
   verifyEnvelope(item);
   validateKnowledgeId(item.hash);
   const payload = item.event.payload;
-  https(payload.license);
+  if (item.event.type !== "knowledge.retract")
+    https((payload as KnowledgeLicensedPayload).license);
   if ("evidence" in payload)
     for (const ref of payload.evidence ?? []) {
       https(ref.url);
@@ -648,14 +649,12 @@ export function validateKnowledgeQuery(
 ): asserts value is KnowledgeQuery {
   validateKnowledgeSchema(value, "queryRequest", "invalid_request");
   const {
-    q,
     limit: _l,
     cursor: _c,
     after_seq: _a,
     ...filters
   } = value as KnowledgeQuery;
   filterCheck(filters);
-  if (q !== undefined) knowledgeTextTerms(q);
 }
 const INTEGER_PARAMETERS = [
   "created_from",
@@ -691,7 +690,7 @@ export function parseKnowledgeQuery(
   validateKnowledgeQuery(result);
   return result;
 }
-/** Exact filter and text predicate; `after_seq`, `limit` and `cursor` are not payload filters. */
+/** Exact filter predicate; `after_seq`, `limit` and `cursor` are not payload filters. */
 export function knowledgeQueryMatches(
   item: KnowledgeEnvelope,
   filters: KnowledgeQuery | KnowledgeFilters,
@@ -703,12 +702,6 @@ export function knowledgeQueryMatches(
   if (
     (filters.actor !== undefined && event.actor !== filters.actor) ||
     (filters.type !== undefined && event.type !== filters.type)
-  )
-    return false;
-  if (
-    "q" in filters &&
-    filters.q !== undefined &&
-    !knowledgeTextMatches(item, filters.q)
   )
     return false;
   if (

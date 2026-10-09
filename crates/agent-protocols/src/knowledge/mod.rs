@@ -183,7 +183,9 @@ pub fn validate_knowledge_envelope(value: &Value) -> Result<Envelope<Value>> {
     identity::verify_envelope(&envelope)?;
     validate_knowledge_id(&envelope.hash)?;
     let p = &envelope.event.payload;
-    https_url(string(&p["license"]))?;
+    if envelope.event.kind != "knowledge.retract" {
+        https_url(string(&p["license"]))?;
+    }
     for evidence in arr(&p["evidence"]) {
         https_url(string(&evidence["url"]))?;
         if let Some(digest) = evidence.get("digest") {
@@ -453,14 +455,10 @@ pub fn validate_knowledge_query(request: &Value) -> Result<()> {
     validate_knowledge_schema(request, "queryRequest")
         .map_err(|e| fail("invalid_request", e.to_string()))?;
     let mut filters = request.clone();
-    for key in ["q", "cursor", "limit", "after_seq"] {
+    for key in ["cursor", "limit", "after_seq"] {
         filters.as_object_mut().unwrap().remove(key);
     }
-    validate_filters(&filters)?;
-    if let Some(q) = request.get("q") {
-        knowledge_text_terms(string(q), true)?;
-    }
-    Ok(())
+    validate_filters(&filters)
 }
 
 /// Parse decoded HTTP parameter pairs; duplicate names remain observable.
@@ -501,18 +499,13 @@ pub fn parse_knowledge_query(parameters: &[(String, String)]) -> Result<Value> {
     Ok(request)
 }
 
-/// Exact filter and text predicate; `after_seq`, `limit` and `cursor` are not payload filters.
+/// Exact filter predicate; `after_seq`, `limit` and `cursor` are not payload filters.
 pub fn knowledge_query_matches(item: &Value, filters: &Value) -> Result<bool> {
     let e = &item["event"];
     let p = &e["payload"];
     let publish = e["type"] == "knowledge.publish";
     for key in ["actor", "type"] {
         if filters.get(key).is_some_and(|v| *v != e[key]) {
-            return Ok(false);
-        }
-    }
-    if let Some(q) = filters.get("q") {
-        if !knowledge_text_matches(item, string(q))? {
             return Ok(false);
         }
     }

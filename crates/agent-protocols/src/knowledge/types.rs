@@ -105,7 +105,6 @@ pub struct KnowledgeAssessPayload {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeRetractPayload {
-    pub license: String,
     pub target: String,
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

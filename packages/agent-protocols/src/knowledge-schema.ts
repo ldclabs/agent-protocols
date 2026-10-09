@@ -474,14 +474,10 @@ export const KNOWLEDGE_SCHEMA = {
     "retractPayload": {
       "type": "object",
       "required": [
-        "license",
         "target",
         "reason"
       ],
       "properties": {
-        "license": {
-          "$ref": "#/$defs/httpsUrl"
-        },
         "target": {
           "$ref": "#/$defs/eventHash"
         },
@@ -893,9 +889,6 @@ export const KNOWLEDGE_SCHEMA = {
         },
         "after_seq": {
           "$ref": "#/$defs/nonNegativeInteger"
-        },
-        "q": {
-          "$ref": "#/$defs/queryText"
         },
         "limit": {
           "type": "integer",

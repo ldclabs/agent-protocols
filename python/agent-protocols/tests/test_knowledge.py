@@ -98,7 +98,7 @@ def test_withheld_dependencies_resolve_and_exact_receipts_bypass_admission():
     second = signed(2, relations=[{'relation': 'derived_from', 'target': first['hash']}])
     record = store.submit(second)
     retraction = SIGNER.sign_event(k.knowledge_retract_event(SIGNER.agent_id(), NOW, 3, {
-        'license': 'https://example.com/license', 'target': first['hash'], 'reason': 'mistake'}))
+        'target': first['hash'], 'reason': 'mistake'}))
     assert store.submit(retraction)['seq'] == 3
     store.admit = lambda _: (_ for _ in ()).throw(AgentProtocolError('permission_denied', 'closed'))
     assert store.submit(second) == record
@@ -122,7 +122,7 @@ def test_relationships_may_cite_or_dispute_assessments():
 def test_known_set_validation_rejects_unresolved_forged_and_wrong_keys():
     item = signed()
     withdrawal = SIGNER.sign_event(k.knowledge_retract_event(SIGNER.agent_id(), NOW, 2, {
-        'license': 'https://example.com/license', 'target': item['hash'], 'reason': 'mistake'}))
+        'target': item['hash'], 'reason': 'mistake'}))
     assert code(lambda: k.materialize_knowledge({withdrawal['hash']: withdrawal})) == 'missing_dependency'
     with pytest.raises(AgentProtocolError):
         k.materialize_knowledge({'wrong': item})
@@ -162,7 +162,7 @@ def test_page_tracker_rejects_cross_page_drift(mutation):
     store = k.KnowledgeStore(ORIGIN, clock=lambda: NOW)
     for n in range(1, 4):
         store.submit(signed(n))
-    request = {'q': 'cache', 'limit': 1}
+    request = {'type': 'knowledge.publish', 'limit': 1}
     first = store.query(request)
     tracker = k.KnowledgePageTracker(ORIGIN)
     tracker.accept(request, first)
@@ -173,7 +173,7 @@ def test_page_tracker_rejects_cross_page_drift(mutation):
     elif mutation == 'duplicate':
         second['result'] = first['result']
     elif mutation == 'request':
-        request['q'] = 'Cache'
+        request['type'] = 'knowledge.assess'
     elif mutation == 'cursor':
         request['cursor'] = 'other'
     with pytest.raises(AgentProtocolError) as exc:

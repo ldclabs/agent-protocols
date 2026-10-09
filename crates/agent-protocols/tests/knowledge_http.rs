@@ -199,7 +199,7 @@ fn knowledge_https_endpoints_and_unsigned_reads() {
         );
         server.reply(&record);
         client.submit(&item, Some(&token)).await.unwrap();
-        let request = json!({"q":"alpha","limit":1.0});
+        let request = json!({"type":"knowledge.publish","limit":1.0});
         server.reply(&store.query(&request, 1000).unwrap());
         assert_eq!(
             client.query_all(&request, 3).await.unwrap(),
@@ -233,7 +233,10 @@ fn knowledge_https_endpoints_and_unsigned_reads() {
             serde_json::from_str::<Value>(&requests[2].body).unwrap(),
             item
         );
-        assert_eq!(requests[3].path, "/v1/knowledge/query?limit=1&q=alpha");
+        assert_eq!(
+            requests[3].path,
+            "/v1/knowledge/query?limit=1&type=knowledge.publish"
+        );
         assert_eq!(requests[4].path, "/v1/knowledge/batch");
         assert_eq!(requests[5].path, "/custom/search");
         for index in [0, 1, 3, 4, 5] {
@@ -266,7 +269,7 @@ fn knowledge_https_rejects_response_substitution_and_duplicates() {
             .replacen("\"seq\":1", "\"seq\":1,\"seq\":1", 1);
         server.raw(200, &raw, None);
         assert!(client.event(hash).await.is_err());
-        let request = json!({"q":"does-not-match"});
+        let request = json!({"type":"knowledge.assess"});
         let page = json!({"result":[record],"service":server.origin,"checkpoint":1,"as_of":1000});
         server.reply(&page);
         assert!(client.query(&request).await.is_err());

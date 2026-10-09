@@ -155,13 +155,13 @@ def test_http_verifies_read_envelopes_ids_scope_filters_and_order(mutation):
 
 def test_query_pages_check_scope_and_repeat_parameters():
     store, _, _, _, _ = populated()
-    request = {'q': 'cache', 'limit': 1}
+    request = {'type': 'knowledge.publish', 'limit': 1}
     first = store.query(request)
     second = store.query({**request, 'cursor': first['next_cursor']})
     session = Session(Response(first), Response(second))
     assert len(list(KnowledgeClient(ORIGIN, session).query_pages(request))) == 2
     params = parse_qs(urlsplit(session.calls[1][1]).query)
-    assert params == {'q': ['cache'], 'limit': ['1'], 'cursor': [first['next_cursor']]}
+    assert params == {'type': ['knowledge.publish'], 'limit': ['1'], 'cursor': [first['next_cursor']]}
     second['as_of'] += 1
     with pytest.raises(AgentProtocolError) as exc:
         list(KnowledgeClient(ORIGIN, Session(Response(first), Response(second))).query_pages(request))

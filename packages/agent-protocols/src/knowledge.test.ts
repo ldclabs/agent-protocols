@@ -311,7 +311,10 @@ test("HTTP discovery uses advertised endpoints, validates results and reads with
     2,
   );
   const pages = [];
-  for await (const page of client.queryPages({ q: "alpha", limit: 1 }))
+  for await (const page of client.queryPages({
+    type: "knowledge.publish",
+    limit: 1,
+  }))
     pages.push(page);
   assert.equal(pages.length, 2);
   const polls = [];
@@ -472,7 +475,7 @@ test("page tracker rejects scope drift, repeated events and changed requests", (
   const engine = store();
   engine.submit(env("text_publication"));
   engine.submit(env("text_regional"));
-  const request: k.KnowledgeQuery = { q: "alpha", limit: 1 };
+  const request: k.KnowledgeQuery = { type: "knowledge.publish", limit: 1 };
   const first = engine.query(request),
     nextRequest = { ...request, cursor: first.next_cursor },
     second = engine.query(nextRequest);
@@ -488,7 +491,7 @@ test("page tracker rejects scope drift, repeated events and changed requests", (
     code("invalid_response"),
   );
   assert.throws(
-    () => tracker.accept({ ...nextRequest, q: "ALPHA" }, second),
+    () => tracker.accept({ ...nextRequest, kind: "question" }, second),
     code("invalid_response"),
   );
   tracker.accept(nextRequest, second);
@@ -515,10 +518,10 @@ test("HTTP response verification binds the request actually sent despite caller 
     (await pendingBatch).result[0].envelope.hash,
     env("text_publication").hash,
   );
-  const request: k.KnowledgeQuery = { q: "alpha" },
+  const request: k.KnowledgeQuery = { type: "knowledge.publish" },
     pendingQuery = client.query(request);
-  request.q = "will-not-match";
-  release(json(engine.query({ q: "alpha" })));
+  request.type = "knowledge.assess";
+  release(json(engine.query({ type: "knowledge.publish" })));
   assert.equal((await pendingQuery).result.length, 2);
   const item = env("original"),
     pendingSubmit = client.submit(item);

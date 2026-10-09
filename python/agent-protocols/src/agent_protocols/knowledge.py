@@ -46,7 +46,7 @@ SCHEMA = parse_strict_json(files(__package__).joinpath("knowledge.schema.json").
 ASCII_FOLD = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
 # Relationships that may point at an assessment as well as a publication.
 _ASSESSMENT_RELATIONS = ("derived_from", "supports", "contradicts")
-_READ_ONLY = ("q", "cursor", "limit", "after_seq")
+_READ_ONLY = ("cursor", "limit", "after_seq")
 _VALIDATORS = {name: Draft202012Validator({"$ref": "#/$defs/" + name, "$defs": SCHEMA["$defs"]}, format_checker=FormatChecker()) for name in SCHEMA["$defs"]}
 
 
@@ -145,7 +145,8 @@ def validate_knowledge_envelope(item: Envelope) -> None:
     verify_envelope(_identity_envelope(item))
     payload = item["event"]["payload"]
     validate_knowledge_id(item["hash"])
-    _https_url(payload["license"])
+    if item["event"]["type"] != KNOWLEDGE_RETRACT:
+        _https_url(payload["license"])
     for evidence in payload.get("evidence", []):
         _https_url(evidence["url"])
         if "digest" in evidence:
@@ -293,8 +294,6 @@ def validate_knowledge_query(value: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a parsed query and return a normalized copy."""
     validate_knowledge_schema(value, 'queryRequest', 'invalid_request')
     _validate_filters({k: v for k, v in value.items() if k not in _READ_ONLY})
-    if 'q' in value:
-        knowledge_text_terms(value['q'])
     return _normalize_read_numbers(value)
 
 
@@ -317,14 +316,12 @@ def parse_knowledge_query(parameters: Iterable[tuple[str, str]]) -> dict[str, An
 
 
 def knowledge_query_matches(item: Envelope, filters: Mapping[str, Any]) -> bool:
-    """Exact filter and text predicate; `after_seq`, `limit` and `cursor` are not payload filters."""
+    """Exact filter predicate; `after_seq`, `limit` and `cursor` are not payload filters."""
     event, payload = item['event'], item['event']['payload']
     is_publication = event['type'] == KNOWLEDGE_PUBLISH
     for key in ('actor', 'type'):
         if key in filters and event[key] != filters[key]:
             return False
-    if 'q' in filters and not knowledge_text_matches(item, filters['q']):
-        return False
     if 'language' in filters and (not is_publication or _ascii_fold(payload['language']) != _ascii_fold(filters['language'])):
         return False
     if 'verdict' in filters and (event['type'] != KNOWLEDGE_ASSESS or payload['verdict'] != filters['verdict']):
@@ -779,7 +776,6 @@ class KnowledgeAssessPayload(KnowledgeAssessRequired, total=False):
 
 
 class KnowledgeRetractRequired(TypedDict):
-    license: str
     target: str
     reason: str
 

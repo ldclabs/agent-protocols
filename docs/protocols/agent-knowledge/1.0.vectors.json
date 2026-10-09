@@ -322,9 +322,9 @@
     },
     "retract_original": {
       "signer": "publisher",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":30,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"Withdraw this exact contribution.\",\"target\":\"KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":30,\"payload\":{\"reason\":\"Withdraw this exact contribution.\",\"target\":\"KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "V4bzImaHa9O95E1VDoVlpBNNhq0eTpxoQS6BBpjXwd0",
+        "hash": "nmIw3xsT4scB2Q1OBJXho_18Qqv_LqfjiLIkq1vpaO0",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -332,19 +332,18 @@
           "created_at": 1790553600000,
           "nonce": 30,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU",
             "reason": "Withdraw this exact contribution."
           }
         },
-        "signature": "Q82bMJVV7pU85U1ZUO1YTnTbcSwE6eBonaLbBbo3LCKEiU6vkqPrODZu-Oh0JnR7jlxirLs8EZKZ0j8kWiFPCw"
+        "signature": "DIHFIW0pJ5HB4MtGULGw5-Ms9fBLekE6BpchpT1FWf7kPEL-1Hg7sB_eMHx0aLI_KIxcsKV4k7fTLky9vKvHAQ"
       }
     },
     "retract_left": {
       "signer": "publisher",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":31,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"Withdraw this exact contribution.\",\"target\":\"SX0NzTE7hgPmCX9F2zmoR0V4O4uidirRABQbrMEXQUs\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":31,\"payload\":{\"reason\":\"Withdraw this exact contribution.\",\"target\":\"SX0NzTE7hgPmCX9F2zmoR0V4O4uidirRABQbrMEXQUs\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "WVoSf1oznKpsQdxmkvTTcJCcP_Sv_CzHYo34oxsjM3Q",
+        "hash": "Q7G8OPFxuL_V8O3NWw1w6jGBTTncn51vGFglEIL0ySk",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -352,19 +351,18 @@
           "created_at": 1790553600000,
           "nonce": 31,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "SX0NzTE7hgPmCX9F2zmoR0V4O4uidirRABQbrMEXQUs",
             "reason": "Withdraw this exact contribution."
           }
         },
-        "signature": "ux3c2O1WRnxN_uWLd0K6FpciE0V4B4l2XwklPhDdWJBztP0bqGnAchExsm07p4ZbphQxOp8HftNC6JhXvU7IAg"
+        "signature": "vWxt5biZv3J6XA_PnUCw928PpuRBC0wAWZkkjincBPU0DskMTbjqh_nzQbyUKBx-H9xByVAWT4B3-xwlhZ0OBA"
       }
     },
     "retract_assessment": {
       "signer": "assessor",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\",\"created_at\":1790553600000,\"nonce\":3,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"Withdraw this exact contribution.\",\"target\":\"2T6rmmqv3-heUNAWjYK-hyEykqcvMLKMwq1OfhVoxgQ\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\",\"created_at\":1790553600000,\"nonce\":3,\"payload\":{\"reason\":\"Withdraw this exact contribution.\",\"target\":\"2T6rmmqv3-heUNAWjYK-hyEykqcvMLKMwq1OfhVoxgQ\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "GbDljl2vs2WRo40AXc5ZECvRChDOIScm38Ks4vc6ja8",
+        "hash": "9tPsDSJ7l_i3WUlwNi8qC4Y_wzUI6HArUKFd_uooViU",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -372,12 +370,11 @@
           "created_at": 1790553600000,
           "nonce": 3,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "2T6rmmqv3-heUNAWjYK-hyEykqcvMLKMwq1OfhVoxgQ",
             "reason": "Withdraw this exact contribution."
           }
         },
-        "signature": "hqPTOTW98PgHocHfRRGTEG1BPRe1wC0cTyNZPYOvFxsN04YX5f0kdhdGBXjqjZz5bG73uW7zjRhMdpmhGYsrAA"
+        "signature": "VaNJk4S7UEcMih0z2BHFswR6FtxTEj_tr6QwVk0KviNjF0-bu9uCYuX_wp9V3vBTGvL9Dc4i34sBR0AK5dgXDg"
       }
     },
     "cross_author_supersedes": {
@@ -547,9 +544,9 @@
     },
     "cross_author_retract": {
       "signer": "assessor",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\",\"created_at\":1790553600000,\"nonce\":5,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"Withdraw this exact contribution.\",\"target\":\"KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\",\"created_at\":1790553600000,\"nonce\":5,\"payload\":{\"reason\":\"Withdraw this exact contribution.\",\"target\":\"KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "XUS0QWH-kiAsgfRbiPcxGmvtpt4ThJ0bxiagB70PExQ",
+        "hash": "pufJt8HMOtLOayay2Chd-iYVVgly8ZBCg0vVsuQTyHk",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -557,19 +554,18 @@
           "created_at": 1790553600000,
           "nonce": 5,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU",
             "reason": "Withdraw this exact contribution."
           }
         },
-        "signature": "mTQQ3FUaMK-I0IQgv-gJIAXHTs3xNaEZ2oVWnLlARtPtXvTUeU6mcLAS7w-1jj3zZvQI1KH47fAScDfkikQTCQ"
+        "signature": "b0rsjcHt7rpUUcCZLVCJsubRKb1JCiOH-SwlJrqCppybbncp3Tio3ACyCNmdL48g4EPamax8AbMgSlZStAhPAA"
       }
     },
     "backwards_retract": {
       "signer": "publisher",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":9,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"Withdraw this exact contribution.\",\"target\":\"KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":9,\"payload\":{\"reason\":\"Withdraw this exact contribution.\",\"target\":\"KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "AduLYbcJTmvKcu98vNrDhiolE9gwq9caQc9c0fJ3Dbs",
+        "hash": "mdV2_OB-6mUulK3hkShj1jkT6MkCT6P1mQpnU6vbymQ",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -577,19 +573,18 @@
           "created_at": 1790553600000,
           "nonce": 9,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU",
             "reason": "Withdraw this exact contribution."
           }
         },
-        "signature": "NlWuQJSdAGNpx3vVUHt64dvrkIkYyJ7zPkKtokv0tW03KrHvkXn6G1GRoZ1PZtkEDMAsy5d0q37hSvRBdcN_AA"
+        "signature": "tykoeqgd8Y4q-NLARXEbM25ZkJQ557bwM04KFlymWKlJyaEe3BLVHVfQonJaBzSnWyKF9a6Lj7L83cBr5ABRDQ"
       }
     },
     "retract_retraction": {
       "signer": "publisher",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":40,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"Withdraw this exact contribution.\",\"target\":\"V4bzImaHa9O95E1VDoVlpBNNhq0eTpxoQS6BBpjXwd0\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":40,\"payload\":{\"reason\":\"Withdraw this exact contribution.\",\"target\":\"nmIw3xsT4scB2Q1OBJXho_18Qqv_LqfjiLIkq1vpaO0\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "sHy09hOyyy-swWMYsyVRAIghm_oyAKDwCsfz_P2xfHc",
+        "hash": "CuSbyyya52vbK5X4S_nvlpuHuwnYXJ9C5pfwbhzCxnc",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -597,12 +592,11 @@
           "created_at": 1790553600000,
           "nonce": 40,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
-            "target": "V4bzImaHa9O95E1VDoVlpBNNhq0eTpxoQS6BBpjXwd0",
+            "target": "nmIw3xsT4scB2Q1OBJXho_18Qqv_LqfjiLIkq1vpaO0",
             "reason": "Withdraw this exact contribution."
           }
         },
-        "signature": "puNZ52hyo0Um3Nhn8UvlLAiMr9tojtxgVJQXaJq-4CemmAyTWwROHD0CkCmFgF8fPkx_oCbqk-vELyA-7HnBCA"
+        "signature": "DA6yJ13_gCEtfUYMxOeHHpVf5AKbGkf8OlTEA3oeCwCJqrfqeU7Tluyh0lq1a_T33xX46YdIIJ3CH5WnMpGLBQ"
       }
     },
     "wrong_assessment_target": {
@@ -1045,9 +1039,9 @@
     },
     "equal_nonce_retract": {
       "signer": "publisher",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":10,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"Withdraw this exact contribution.\",\"target\":\"KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":10,\"payload\":{\"reason\":\"Withdraw this exact contribution.\",\"target\":\"KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "u7mU7MqUp_8_GIVaPxzFKFpv2BCmdPd-hSriAtY0Zc8",
+        "hash": "p08dgNDKHKFUCpxSRfh0ATCprlgJc0B7xNJqU3TKasg",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -1055,12 +1049,11 @@
           "created_at": 1790553600000,
           "nonce": 10,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "KWtFdKFxoxMcQsaQgFGhfYMtC7Gaa3i0o-i2BBKl0wU",
             "reason": "Withdraw this exact contribution."
           }
         },
-        "signature": "KSC2aNCYK_PQth4WAUoKPLpYRKlxkr_5fpT4TEkxhfWZrAZapV7iRbzCc809YFlHg4gk37eDCJHMMTv2XcV7AQ"
+        "signature": "NbX74Lcyxy9Eey8kOge4VKKc1l653jVxdRnRB6LgSqyXmxXQ0Gqx87SISjn-Zsqdy_DoUu5336G9BzbiXi9BAQ"
       }
     },
     "research_question": {
@@ -1765,9 +1758,9 @@
     },
     "research_retracted_data": {
       "signer": "publisher",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":213,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"Withdraw the original description; the collection keeps its exact original member ID.\",\"target\":\"A6-U-M4jajvEFZo3zfCfm23K4sPdY3mJ0YO7jeDfqbM\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":213,\"payload\":{\"reason\":\"Withdraw the original description; the collection keeps its exact original member ID.\",\"target\":\"A6-U-M4jajvEFZo3zfCfm23K4sPdY3mJ0YO7jeDfqbM\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "lHo5G6M_5S1udJV7-KhVNTM4-SacHApzgeUQWOSx1f8",
+        "hash": "XfcdaGQ2LUDVSXcCS1XJQiMUtsKOhDydEwDwKCo_mrI",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -1775,19 +1768,18 @@
           "created_at": 1790553600000,
           "nonce": 213,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "A6-U-M4jajvEFZo3zfCfm23K4sPdY3mJ0YO7jeDfqbM",
             "reason": "Withdraw the original description; the collection keeps its exact original member ID."
           }
         },
-        "signature": "yUrJlkUvU7QSzN3NCKWQkrISvfcAIoO5Cj6ihL1G5byt6GBsBhMU5fuy83F1Kp6r0Lmdgk0muPbTrgCNib9TDA"
+        "signature": "KEG-DN8j6HC0NAnDK6DvdzGE3ZaZPQerQ1h3CA48GLfaZdXbXHvu1xveDTZPoAsoRWMBfil21qlNqSZ_ZjxBAQ"
       }
     },
     "research_retracted_application": {
       "signer": "assessor",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\",\"created_at\":1790553600000,\"nonce\":214,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"The assessor withdraws this application report.\",\"target\":\"Jajl5fuVBN1VsrReZxHjZRFQlsD9FqytCAgs7GmrZ0M\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA\",\"created_at\":1790553600000,\"nonce\":214,\"payload\":{\"reason\":\"The assessor withdraws this application report.\",\"target\":\"Jajl5fuVBN1VsrReZxHjZRFQlsD9FqytCAgs7GmrZ0M\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "kq0de4o1UnrPj4T743WSy15SyGoZ0uhUyvKonGU_qHg",
+        "hash": "ogG_PLiaNLCSN9-GRkeNEzGAi_2xQu5YDpcXa1byqak",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -1795,12 +1787,11 @@
           "created_at": 1790553600000,
           "nonce": 214,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "Jajl5fuVBN1VsrReZxHjZRFQlsD9FqytCAgs7GmrZ0M",
             "reason": "The assessor withdraws this application report."
           }
         },
-        "signature": "DwUxalDZnHjh7HdIprU7DW-22PBo5gzD5LaZ8NaiZFhJg_4-VPiyU735847JEP9g7GyA9avFAyrgN2YVE5NwDQ"
+        "signature": "9_vIc7ErCFZYttp6vEKFdtpKp0-Syi4SN5MRji-OgtaAs8BgPyN9SkWdVrWYe43RCpiosR_HkBPHwfmrJG3fBg"
       }
     },
     "research_two_profiles": {
@@ -3002,9 +2993,9 @@
     },
     "text_retraction": {
       "signer": "publisher",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600003,\"nonce\":203,\"payload\":{\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"reason\":\"ALPHA withdrawn \u8bed\u8a00\",\"target\":\"RFP7GCQiz5iopwrUTvdjZ_uIxUOfh9ZD9GBf53AjVCA\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600003,\"nonce\":203,\"payload\":{\"reason\":\"ALPHA withdrawn \u8bed\u8a00\",\"target\":\"RFP7GCQiz5iopwrUTvdjZ_uIxUOfh9ZD9GBf53AjVCA\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.retract\"}",
       "envelope": {
-        "hash": "2WCryj7hb-4PILdMo1KjxUvZ37P3uxlNDEAq0E5TBXQ",
+        "hash": "ZfY8L94k2UeqkjFbm53HN_CB2HfiF7nmXQqkw24kknI",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.retract",
@@ -3012,12 +3003,11 @@
           "created_at": 1790553600003,
           "nonce": 203,
           "payload": {
-            "license": "https://creativecommons.org/licenses/by/4.0/",
             "target": "RFP7GCQiz5iopwrUTvdjZ_uIxUOfh9ZD9GBf53AjVCA",
             "reason": "ALPHA withdrawn \u8bed\u8a00"
           }
         },
-        "signature": "sM0WfBUavrePPRYDIYImhgMlZZUUq1WHPvRo-NlP8lTmN2upyDDtfA2bBlsNzXminabI8fVrQUdVcg4-gk2zCQ"
+        "signature": "PPFcHB4PiF8PR0-j0XN_WyuBaa_rbviGnHb_NzZcxthZ6B48RcgXN1uKGDJeQj1VrZPuH3b_05cVN6JTRzQrAg"
       }
     },
     "contradicts_assessment": {
@@ -3077,9 +3067,9 @@
     },
     "supports_retraction": {
       "signer": "publisher",
-      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":46,\"payload\":{\"basis\":\"The English request populated the cache and the Chinese request read the same entry.\",\"context\":{\"conditions\":[\"The requested languages differ.\"],\"limitations\":[\"This fixture does not establish behavior of other caches.\"],\"scope\":\"Two greeting requests for one user in an in-memory fixture.\"},\"evidence\":[{\"description\":\"Exact fixture output bytes.\",\"digest\":\"txT8wzviFxiqJA9KzQKzRFJWCtZmVFiEybnYGddh1hw\",\"media_type\":\"text/plain\",\"url\":\"https://example.com/cache-output.txt\"}],\"kind\":\"inference\",\"language\":\"en\",\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"relations\":[{\"relation\":\"supports\",\"target\":\"V4bzImaHa9O95E1VDoVlpBNNhq0eTpxoQS6BBpjXwd0\"}],\"reproduction\":{\"environment\":\"Fresh map; en returns Hello; zh returns \u4f60\u597d.\",\"expected\":\"Hello is returned twice with a user-only key.\",\"observed\":\"Hello was returned twice.\",\"steps\":[\"Request user-7 in en.\",\"Request user-7 in zh.\"]},\"statement\":\"This publication incorrectly cites a retraction as support.\",\"title\":\"A retraction is not a contribution\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.publish\"}",
+      "canonical_event_utf8": "{\"actor\":\"did:agent:iEuIV_TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs\",\"created_at\":1790553600000,\"nonce\":46,\"payload\":{\"basis\":\"The English request populated the cache and the Chinese request read the same entry.\",\"context\":{\"conditions\":[\"The requested languages differ.\"],\"limitations\":[\"This fixture does not establish behavior of other caches.\"],\"scope\":\"Two greeting requests for one user in an in-memory fixture.\"},\"evidence\":[{\"description\":\"Exact fixture output bytes.\",\"digest\":\"txT8wzviFxiqJA9KzQKzRFJWCtZmVFiEybnYGddh1hw\",\"media_type\":\"text/plain\",\"url\":\"https://example.com/cache-output.txt\"}],\"kind\":\"inference\",\"language\":\"en\",\"license\":\"https://creativecommons.org/licenses/by/4.0/\",\"relations\":[{\"relation\":\"supports\",\"target\":\"nmIw3xsT4scB2Q1OBJXho_18Qqv_LqfjiLIkq1vpaO0\"}],\"reproduction\":{\"environment\":\"Fresh map; en returns Hello; zh returns \u4f60\u597d.\",\"expected\":\"Hello is returned twice with a user-only key.\",\"observed\":\"Hello was returned twice.\",\"steps\":[\"Request user-7 in en.\",\"Request user-7 in zh.\"]},\"statement\":\"This publication incorrectly cites a retraction as support.\",\"title\":\"A retraction is not a contribution\"},\"protocol\":\"agent-knowledge/1.0\",\"type\":\"knowledge.publish\"}",
       "envelope": {
-        "hash": "sSlXJ6H3k0dpnaUAc6Ry_Z7Z1PQOffS6uiE6VbKJXj4",
+        "hash": "TLvEkoeifzyLaZDVc89Hk-q3iaxivOUygag5AkK2_iQ",
         "event": {
           "protocol": "agent-knowledge/1.0",
           "type": "knowledge.publish",
@@ -3122,12 +3112,12 @@
             "relations": [
               {
                 "relation": "supports",
-                "target": "V4bzImaHa9O95E1VDoVlpBNNhq0eTpxoQS6BBpjXwd0"
+                "target": "nmIw3xsT4scB2Q1OBJXho_18Qqv_LqfjiLIkq1vpaO0"
               }
             ]
           }
         },
-        "signature": "isr8f5fmglp25_3OFfWqgznuMGjCG-f0DFgPRXvnvScL5rOpAta--Z6ZioQxqMVqVOvLLl_hAGZ5wheXz2XaCw"
+        "signature": "hy9w3blOLe-mGw60xWuFHJvjr-33g6ApTqUUEMaC-l-QkXPAYusJrcP1tCQQEnkUXRaXndeOGYFl9ye2OGHFAw"
       }
     }
   },
@@ -7137,71 +7127,6 @@
       "expected": "invalid_request"
     },
     {
-      "name": "text terms may match different eligible fields",
-      "layer": "query",
-      "scope": "fixture:portable-text-and-exact-filters",
-      "accepted": [
-        "text_publication",
-        "text_regional",
-        "text_assessment",
-        "text_retraction"
-      ],
-      "parameters": [
-        [
-          "q",
-          "alpha beta"
-        ]
-      ],
-      "expected": "valid",
-      "matches": [
-        "text_publication",
-        "text_regional",
-        "text_assessment"
-      ]
-    },
-    {
-      "name": "retraction reason is searchable",
-      "layer": "query",
-      "scope": "fixture:portable-text-and-exact-filters",
-      "accepted": [
-        "text_publication",
-        "text_regional",
-        "text_assessment",
-        "text_retraction"
-      ],
-      "parameters": [
-        [
-          "q",
-          "withdrawn"
-        ]
-      ],
-      "expected": "valid",
-      "matches": [
-        "text_retraction"
-      ]
-    },
-    {
-      "name": "assessment context is searchable",
-      "layer": "query",
-      "scope": "fixture:portable-text-and-exact-filters",
-      "accepted": [
-        "text_publication",
-        "text_regional",
-        "text_assessment",
-        "text_retraction"
-      ],
-      "parameters": [
-        [
-          "q",
-          "assesscondition assesslimit"
-        ]
-      ],
-      "expected": "valid",
-      "matches": [
-        "text_assessment"
-      ]
-    },
-    {
       "name": "full language label folds ASCII",
       "layer": "query",
       "scope": "fixture:portable-text-and-exact-filters",
@@ -7414,10 +7339,6 @@
         "text_retraction"
       ],
       "parameters": [
-        [
-          "q",
-          "alpha"
-        ],
         [
           "language",
           "EN"
@@ -7643,7 +7564,7 @@
       "matches": []
     },
     {
-      "name": "empty query text",
+      "name": "text is not a query parameter",
       "layer": "query",
       "scope": "fixture:portable-text-and-exact-filters",
       "accepted": [
@@ -7655,14 +7576,14 @@
       "parameters": [
         [
           "q",
-          ""
+          "alpha"
         ]
       ],
       "expected": "invalid_request",
       "matches": []
     },
     {
-      "name": "only ASCII whitespace query",
+      "name": "repeated kind",
       "layer": "query",
       "scope": "fixture:portable-text-and-exact-filters",
       "accepted": [
@@ -7673,69 +7594,12 @@
       ],
       "parameters": [
         [
-          "q",
-          " \t\r\n"
-        ]
-      ],
-      "expected": "invalid_request",
-      "matches": []
-    },
-    {
-      "name": "query 17 terms",
-      "layer": "query",
-      "scope": "fixture:portable-text-and-exact-filters",
-      "accepted": [
-        "text_publication",
-        "text_regional",
-        "text_assessment",
-        "text_retraction"
-      ],
-      "parameters": [
-        [
-          "q",
-          "a a a a a a a a a a a a a a a a a"
-        ]
-      ],
-      "expected": "invalid_request",
-      "matches": []
-    },
-    {
-      "name": "query over 1024 scalars",
-      "layer": "query",
-      "scope": "fixture:portable-text-and-exact-filters",
-      "accepted": [
-        "text_publication",
-        "text_regional",
-        "text_assessment",
-        "text_retraction"
-      ],
-      "parameters": [
-        [
-          "q",
-          "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
-        ]
-      ],
-      "expected": "invalid_request",
-      "matches": []
-    },
-    {
-      "name": "repeated q",
-      "layer": "query",
-      "scope": "fixture:portable-text-and-exact-filters",
-      "accepted": [
-        "text_publication",
-        "text_regional",
-        "text_assessment",
-        "text_retraction"
-      ],
-      "parameters": [
-        [
-          "q",
-          "a"
+          "kind",
+          "question"
         ],
         [
-          "q",
-          "a"
+          "kind",
+          "question"
         ]
       ],
       "expected": "invalid_request",
@@ -8232,6 +8096,31 @@
         "a",
         "a"
       ]
+    },
+    {
+      "name": "retraction reason is searchable",
+      "layer": "portable-text",
+      "text": "withdrawn",
+      "lexical": true,
+      "expected": "valid",
+      "terms": [
+        "withdrawn"
+      ],
+      "fixture": "text_retraction",
+      "matches": true
+    },
+    {
+      "name": "assessment context is searchable",
+      "layer": "portable-text",
+      "text": "assesscondition assesslimit",
+      "lexical": true,
+      "expected": "valid",
+      "terms": [
+        "assesscondition",
+        "assesslimit"
+      ],
+      "fixture": "text_assessment",
+      "matches": true
     }
   ],
   "batch_cases": [
@@ -8247,7 +8136,7 @@
       "hidden": [],
       "request": {
         "hashes": [
-          "2WCryj7hb-4PILdMo1KjxUvZ37P3uxlNDEAq0E5TBXQ",
+          "ZfY8L94k2UeqkjFbm53HN_CB2HfiF7nmXQqkw24kknI",
           "-fN6f0oqOtcqkPSApdv9WFtalggltmhJCHWfPydTgww",
           "RFP7GCQiz5iopwrUTvdjZ_uIxUOfh9ZD9GBf53AjVCA",
           "Rw_t_Z_ACEzF25tDY7Q4i_bgA7GgOjLtMR3DHOd7TjQ"
@@ -8255,7 +8144,7 @@
       },
       "expected": "valid",
       "result": [
-        "2WCryj7hb-4PILdMo1KjxUvZ37P3uxlNDEAq0E5TBXQ",
+        "ZfY8L94k2UeqkjFbm53HN_CB2HfiF7nmXQqkw24kknI",
         "RFP7GCQiz5iopwrUTvdjZ_uIxUOfh9ZD9GBf53AjVCA",
         "Rw_t_Z_ACEzF25tDY7Q4i_bgA7GgOjLtMR3DHOd7TjQ"
       ],
@@ -8913,7 +8802,7 @@
       ],
       "expected": "valid",
       "result": [
-        "2WCryj7hb-4PILdMo1KjxUvZ37P3uxlNDEAq0E5TBXQ",
+        "ZfY8L94k2UeqkjFbm53HN_CB2HfiF7nmXQqkw24kknI",
         "Rw_t_Z_ACEzF25tDY7Q4i_bgA7GgOjLtMR3DHOd7TjQ",
         "JTL7h3SndI0iS5TwUP5QwDWItKdOFO6zOPys4dWP2sI",
         "RFP7GCQiz5iopwrUTvdjZ_uIxUOfh9ZD9GBf53AjVCA"
@@ -10004,10 +9893,6 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
-            ],
-            [
               "limit",
               "1"
             ]
@@ -10020,10 +9905,6 @@
         },
         {
           "parameters": [
-            [
-              "q",
-              "alpha"
-            ],
             [
               "limit",
               "1"
@@ -10057,10 +9938,6 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
-            ],
-            [
               "limit",
               "1"
             ]
@@ -10073,10 +9950,6 @@
         },
         {
           "parameters": [
-            [
-              "q",
-              "alpha"
-            ],
             [
               "limit",
               "1"
@@ -10095,10 +9968,6 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
-            ],
-            [
               "limit",
               "1"
             ]
@@ -10113,7 +9982,7 @@
       ]
     },
     {
-      "name": "query cursor binds text",
+      "name": "query cursor binds filter value",
       "layer": "pagination",
       "accepted": [
         "text_publication",
@@ -10126,8 +9995,8 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
+              "type",
+              "knowledge.publish"
             ],
             [
               "limit",
@@ -10143,8 +10012,8 @@
         {
           "parameters": [
             [
-              "q",
-              "beta"
+              "type",
+              "knowledge.assess"
             ],
             [
               "limit",
@@ -10170,10 +10039,6 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
-            ],
-            [
               "limit",
               "1"
             ]
@@ -10186,10 +10051,6 @@
         },
         {
           "parameters": [
-            [
-              "q",
-              "alpha"
-            ],
             [
               "limit",
               "2"
@@ -10214,10 +10075,6 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
-            ],
-            [
               "limit",
               "1"
             ]
@@ -10230,10 +10087,6 @@
         },
         {
           "parameters": [
-            [
-              "q",
-              "alpha"
-            ],
             [
               "limit",
               "1"
@@ -10262,8 +10115,8 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
+              "type",
+              "knowledge.publish"
             ],
             [
               "limit",
@@ -10343,10 +10196,6 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
-            ],
-            [
               "limit",
               "2"
             ]
@@ -10374,10 +10223,6 @@
       "steps": [
         {
           "parameters": [
-            [
-              "q",
-              "alpha"
-            ],
             [
               "limit",
               "2"
@@ -10407,10 +10252,6 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
-            ],
-            [
               "limit",
               "2"
             ]
@@ -10438,10 +10279,6 @@
       "steps": [
         {
           "parameters": [
-            [
-              "q",
-              "alpha"
-            ],
             [
               "limit",
               "2"
@@ -10640,10 +10477,6 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
-            ],
-            [
               "limit",
               "1"
             ]
@@ -10656,10 +10489,6 @@
         },
         {
           "parameters": [
-            [
-              "q",
-              "alpha"
-            ],
             [
               "limit",
               "1"
@@ -10692,8 +10521,8 @@
         {
           "parameters": [
             [
-              "q",
-              "alpha"
+              "type",
+              "knowledge.publish"
             ],
             [
               "limit",
@@ -10713,8 +10542,8 @@
               "1"
             ],
             [
-              "q",
-              "alpha"
+              "type",
+              "knowledge.publish"
             ]
           ],
           "continue": true,
@@ -10738,10 +10567,6 @@
       "steps": [
         {
           "parameters": [
-            [
-              "q",
-              "alpha"
-            ],
             [
               "cursor",
               "not-a-cursor"
