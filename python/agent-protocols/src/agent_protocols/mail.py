@@ -227,11 +227,11 @@ def validate_mail_envelope(envelope: Envelope, definition: str = 'envelope', *, 
             validate_origin(route)
         _public_key(payload['public_key'])
     else:
-        _decode(payload['enc'], 32, 'invalid_packet')
-        ct = _decode(payload['ciphertext'], code='invalid_packet')
-        _require(len(ct) >= 1040 and len(ct) % 1024 == 16, 'invalid_packet', 'invalid ciphertext block length')
+        _decode(payload['enc'], 32, 'invalid_event')
+        ct = _decode(payload['ciphertext'], code='invalid_event')
+        _require(len(ct) >= 1040 and len(ct) % 1024 == 16, 'invalid_event', 'invalid ciphertext block length')
         _require(event['created_at'] < payload['header']['expires_at'] <= event['created_at'] + MAIL_MAX_TTL_MS + MAIL_FUTURE_SKEW_MS,
-                 'invalid_packet', 'invalid packet lifetime')
+                 'invalid_event', 'invalid packet lifetime')
 
 
 def parse_mail_envelope(raw: str | bytes, *, max_bytes: int = MAIL_MAX_PACKET_BYTES) -> Envelope:
@@ -284,14 +284,14 @@ def encode_mail_plaintext(message: dict[str, Any]) -> bytes:
 
 def decode_mail_plaintext(plaintext: bytes) -> dict[str, Any]:
     _require(isinstance(plaintext, bytes) and 1024 <= len(plaintext) <= MAIL_MAX_PACKET_BYTES
-             and len(plaintext) % 1024 == 0, 'invalid_packet', 'invalid plaintext block length')
+             and len(plaintext) % 1024 == 0, 'invalid_event', 'invalid plaintext block length')
     n = int.from_bytes(plaintext[:4], 'big')
-    _require(0 < n <= len(plaintext) - 4, 'invalid_packet', 'invalid plaintext JSON length')
-    _require(len(plaintext) == 1024 * ((4 + n + 1023) // 1024), 'invalid_packet', 'nonminimal padding')
-    _require(not any(plaintext[4+n:]), 'invalid_packet', 'nonzero padding')
+    _require(0 < n <= len(plaintext) - 4, 'invalid_event', 'invalid plaintext JSON length')
+    _require(len(plaintext) == 1024 * ((4 + n + 1023) // 1024), 'invalid_event', 'nonminimal padding')
+    _require(not any(plaintext[4+n:]), 'invalid_event', 'nonzero padding')
     data = plaintext[4:4+n]
-    message = _parse_bounded(data, MAIL_MAX_PACKET_BYTES, 'invalid_packet')
-    _require(_jcs(message) == data, 'invalid_packet', 'plaintext JSON is not JCS')
+    message = _parse_bounded(data, MAIL_MAX_PACKET_BYTES, 'invalid_event')
+    _require(_jcs(message) == data, 'invalid_event', 'plaintext JSON is not JCS')
     validate_mail_message(message)
     return message
 
@@ -307,7 +307,7 @@ def _packet_bytes(packet: dict[str, Any], packet_id: str | None = None) -> bytes
     raw = _jcs(packet)
     _require(len(raw) <= MAIL_MAX_PACKET_BYTES, 'payload_too_large', 'packet exceeds limit')
     if packet_id is not None:
-        _require(packet['hash'] == packet_id, 'invalid_packet', 'packet ID mismatch')
+        _require(packet['hash'] == packet_id, 'invalid_event', 'packet ID mismatch')
     return raw
 
 
@@ -322,7 +322,7 @@ def validate_mail_packet(packet: dict[str, Any], *, packet_id: str | None = None
 
 
 def parse_mail_packet(raw: str | bytes, *, max_body_bytes: int = MAIL_MAX_PACKET_BYTES + 65536) -> dict[str, Any]:
-    packet = _parse_bounded(raw, max_body_bytes, 'invalid_packet')
+    packet = _parse_bounded(raw, max_body_bytes, 'invalid_event')
     validate_mail_packet(packet)
     return packet
 
@@ -342,7 +342,7 @@ def encrypt_mail(message: dict[str, Any], card: Envelope, signer: AgentSigner, n
     c = card['event']['payload']
     _require(message['created_at'] <= now + MAIL_FUTURE_SKEW_MS and now < message['expires_at'],
              'packet_expired', 'message is expired or future-dated')
-    _require(message['expires_at'] <= c['receive_until'], 'invalid_packet', 'message exceeds receive_until')
+    _require(message['expires_at'] <= c['receive_until'], 'invalid_event', 'message exceeds receive_until')
     header = {'mailbox_id': c['mailbox_id'], 'card_hash': card['hash'], 'expires_at': message['expires_at']}
     event = create_event(MAIL_PROTOCOL, MAIL_SUBMIT, signer.agent_id(), now, nonce, {'header': header})
     plaintext = encode_mail_plaintext(message)
@@ -356,7 +356,7 @@ def encrypt_mail(message: dict[str, Any], card: Envelope, signer: AgentSigner, n
         finally:
             del context
     except (PyHPKEError, ValueError) as exc:
-        raise AgentProtocolError('invalid_packet', 'HPKE encryption failed') from exc
+        raise AgentProtocolError('invalid_event', 'HPKE encryption failed') from exc
     event['payload'].update(enc=_b64(enc), ciphertext=_b64(ciphertext))
     packet = signer.sign_event(event)
     _require(len(_packet_bytes(packet)) <= c['max_packet_bytes'], 'payload_too_large', 'packet exceeds card limit')
@@ -378,9 +378,9 @@ def _open_verified(packet: dict[str, Any], raw: bytes, card: Envelope, key: Mail
     c, h = card['event']['payload'], packet['event']['payload']['header']
     _require(packet['event']['created_at'] <= now + MAIL_FUTURE_SKEW_MS, 'timestamp_out_of_window', 'packet is future-dated')
     _require(h['card_hash'] == card['hash'] and h['mailbox_id'] == c['mailbox_id'],
-             'invalid_packet', 'packet/card binding mismatch')
+             'invalid_event', 'packet/card binding mismatch')
     _require(len(raw) <= c['max_packet_bytes'], 'payload_too_large', 'packet exceeds card limit')
-    _require(h['expires_at'] <= c['receive_until'], 'invalid_packet', 'packet exceeds key retention deadline')
+    _require(h['expires_at'] <= c['receive_until'], 'invalid_event', 'packet exceeds key retention deadline')
     _require(isinstance(key, MailEncryptionKey) and key.public_key() == c['public_key'],
              'invalid_private_key', 'recipient secret does not match card')
     try:
@@ -390,11 +390,11 @@ def _open_verified(packet: dict[str, Any], raw: bytes, card: Envelope, key: Mail
         finally:
             del context
     except (PyHPKEError, ValueError) as exc:
-        raise AgentProtocolError('invalid_packet', 'HPKE decryption failed') from exc
+        raise AgentProtocolError('invalid_event', 'HPKE decryption failed') from exc
     message = decode_mail_plaintext(plaintext)
     e = packet['event']
     _require(message['from'] == e['actor'] and message['to'] == owner and message['expires_at'] == h['expires_at'],
-             'invalid_packet', 'sender, recipient or expiration mismatch')
+             'invalid_event', 'sender, recipient or expiration mismatch')
     _require(message['created_at'] <= min(now, e['created_at']) + MAIL_FUTURE_SKEW_MS,
              'timestamp_out_of_window', 'message timestamp too far in future')
     return message

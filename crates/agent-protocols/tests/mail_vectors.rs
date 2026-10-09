@@ -203,7 +203,7 @@ fn every_shared_recipient_rejection() {
             if let Some(id) = case["packet_id"].as_str() {
                 if packet_id(&p)? != id {
                     return Err(agent_protocols::SdkError::protocol(
-                        "invalid_packet",
+                        "invalid_event",
                         "wrong id",
                     ));
                 }
@@ -633,7 +633,7 @@ fn keyring_and_card_cache_seal_prune_and_bind_keys() {
     keys.prune(c.event.payload.receive_until).unwrap();
     assert_eq!(
         code(keys.open(&packet(&v, "original"), now)).as_deref(),
-        Some("invalid_packet")
+        Some("invalid_event")
     );
 }
 

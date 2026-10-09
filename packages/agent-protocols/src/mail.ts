@@ -387,14 +387,14 @@ function packetBytes(packet: unknown, expectedId?: string): Uint8Array {
   const ct = decodeMailBytes(p.ciphertext);
   requireMail(
     ct.length >= 1040 && ct.length % 1024 === 16,
-    "invalid_packet",
+    "invalid_event",
     "invalid ciphertext length",
   );
   requireMail(
     e.created_at < p.header.expires_at &&
       p.header.expires_at - e.created_at <=
         MAIL_MAX_TTL_MS + MAIL_FUTURE_SKEW_MS,
-    "invalid_packet",
+    "invalid_event",
     "invalid packet lifetime",
   );
   const bytes = mailCanonicalBytes(signed);
@@ -406,7 +406,7 @@ function packetBytes(packet: unknown, expectedId?: string): Uint8Array {
   if (expectedId !== undefined)
     requireMail(
       signed.hash === expectedId,
-      "invalid_packet",
+      "invalid_event",
       "packet ID mismatch",
     );
   return bytes;
@@ -435,7 +435,7 @@ export function mailPacketAad(event: Event<MailPacketPayload>): Uint8Array {
 export function frameMailBytes(bytes: Uint8Array): Uint8Array {
   requireMail(
     bytes.length > 0 && bytes.length <= MAIL_MAX_PACKET_BYTES,
-    "invalid_packet",
+    "invalid_event",
     "invalid frame input length",
   );
   const frame = new Uint8Array(1024 * Math.ceil((4 + bytes.length) / 1024));
@@ -448,7 +448,7 @@ export function unframeMailMessage(frame: Uint8Array): MailMessagePayload {
     frame.length >= 1024 &&
       frame.length <= MAIL_MAX_PACKET_BYTES &&
       frame.length % 1024 === 0,
-    "invalid_packet",
+    "invalid_event",
     "invalid frame length",
   );
   const n = new DataView(
@@ -460,12 +460,12 @@ export function unframeMailMessage(frame: Uint8Array): MailMessagePayload {
     n > 0 &&
       n <= frame.length - 4 &&
       frame.length === 1024 * Math.ceil((4 + n) / 1024),
-    "invalid_packet",
+    "invalid_event",
     "invalid/nonminimal frame length",
   );
   requireMail(
     frame.subarray(4 + n).every((x) => x === 0),
-    "invalid_packet",
+    "invalid_event",
     "nonzero padding",
   );
   let text: string;
@@ -474,12 +474,12 @@ export function unframeMailMessage(frame: Uint8Array): MailMessagePayload {
       frame.subarray(4, 4 + n),
     );
   } catch {
-    throw protocolError("invalid_packet", "invalid UTF-8 frame");
+    throw protocolError("invalid_event", "invalid UTF-8 frame");
   }
   const message = parseStrictJson(text);
   requireMail(
     canonicalize(message) === text,
-    "invalid_packet",
+    "invalid_event",
     "noncanonical message JSON",
   );
   validateMailMessage(message);
@@ -544,7 +544,7 @@ export async function sealMailPacket(
   const c = card.event.payload;
   requireMail(
     message.expires_at <= c.receive_until,
-    "invalid_packet",
+    "invalid_event",
     "message exceeds receive_until",
   );
   const plaintext = frameMailBytes(mailCanonicalBytes(message));
@@ -621,7 +621,7 @@ async function openVerified(
     h = packet.event.payload.header;
   requireMail(
     h.card_hash === card.hash && h.mailbox_id === c.mailbox_id,
-    "invalid_packet",
+    "invalid_event",
     "card/header binding mismatch",
   );
   requireMail(
@@ -631,7 +631,7 @@ async function openVerified(
   );
   requireMail(
     h.expires_at <= c.receive_until,
-    "invalid_packet",
+    "invalid_event",
     "packet exceeds receive_until",
   );
   requireMail(
@@ -655,7 +655,7 @@ async function openVerified(
       ),
     );
   } catch {
-    throw protocolError("invalid_packet", "HPKE opening failed");
+    throw protocolError("invalid_event", "HPKE opening failed");
   } finally {
     secret.fill(0);
   }
@@ -663,12 +663,12 @@ async function openVerified(
     const message = unframeMailMessage(plaintext);
     requireMail(
       message.from === packet.event.actor && message.to === owner,
-      "invalid_packet",
+      "invalid_event",
       "message recipient mismatch",
     );
     requireMail(
       message.expires_at === h.expires_at,
-      "invalid_packet",
+      "invalid_event",
       "message/header expiration mismatch",
     );
     requireMail(
@@ -833,7 +833,7 @@ export class MailKeyring {
     now: number,
   ): Promise<MailMessagePayload> {
     const x = this.entries.get(packet.event.payload.header.card_hash);
-    requireMail(x, "invalid_packet", "unknown retained card");
+    requireMail(x, "invalid_event", "unknown retained card");
     return openVerified(packet, bytes, x.card, x.key, this.owner, now);
   }
 }
@@ -1226,7 +1226,7 @@ export class MailRelayStore {
     const h = packet.event.payload.header;
     requireMail(
       h.mailbox_id === mailboxId,
-      "invalid_packet",
+      "invalid_event",
       "path mailbox mismatch",
     );
     const b = this.boxes.get(mailboxId);
@@ -1242,7 +1242,7 @@ export class MailRelayStore {
     requireMail(
       h.expires_at <= p.receive_until &&
         h.expires_at - now <= MAIL_MAX_TTL_MS + MAIL_FUTURE_SKEW_MS,
-      "invalid_packet",
+      "invalid_event",
       "packet lifetime exceeds bound",
     );
     requireMail(

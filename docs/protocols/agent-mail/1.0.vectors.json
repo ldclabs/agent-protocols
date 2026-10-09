@@ -1716,7 +1716,7 @@
         "signature": "8Y_uMfS0NZrvMl4WAnTPfivS5PK2yXBXitpCuD84K5OSw6_CMzkWBPnaMcdHtojbFkIfKVI8CIgQ464KGrl9Ag"
       },
       "expected": "aead",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "valid signature with changed nonce",
@@ -1741,7 +1741,7 @@
         "signature": "SooQYjuCFodh9cM4touhd0AF-bbGWjzP7N_4HgoofC7U1hAegHVVZl9fNBh90hMrsir1wYTbUm1VD6yaMVfgCA"
       },
       "expected": "aead",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "valid signature with changed time",
@@ -1766,7 +1766,7 @@
         "signature": "4Tat4_WQHExs1Dsk40acyJINjbHRcTyP1CbRoQfE5KBkRjmnj1zbB4aIgAsmbD_WxB4IZN44fENbtNbL0TZWDg"
       },
       "expected": "aead",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "valid signature with changed expiration",
@@ -1791,7 +1791,7 @@
         "signature": "7SvxGs3v_C7qX_BiNHC0gICD7_h_p-fvZ0kdy-toR7booVaAzsM41dMTJ5gQWovgx0Kwg6AKqhKPgBfK6GuZBQ"
       },
       "expected": "aead",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "ciphertext length not 16 modulo 1024",
@@ -1816,7 +1816,7 @@
         "signature": "H7FoQriI6ZY7ukcJ1uH3K_fJa9tMTMV3H3IuVAl2GmQpCH4BtVveyY3_JFbyeul-UKDZxWcwqgeeiUq0hX00AA"
       },
       "expected": "ciphertext_length",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "card packet size limit",
@@ -1867,7 +1867,7 @@
         "signature": "imvnRRHJGA3DL_ZNWmsCvPtwXxIy5pwdnAmQdFWppdURcNohR4KkNIN7u8i03WYLBChvFEnkWkAqWYbSL1rjCA"
       },
       "expected": "receive_until",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "wrong encapsulated key",
@@ -1892,7 +1892,7 @@
         "signature": "vbGqQdEc4hLASNaEoWwvA74DhVTQEjULCTxuEMai0D8qy5yeAo9EZZUbNreI3S3j9SCiwiJnY5x8h-evFrpeCw"
       },
       "expected": "aead",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "all-zero encapsulated key",
@@ -1917,7 +1917,7 @@
         "signature": "QUURG1RFcqrfyj5BglP2zvkBDUHbddSkqjZlqMXjJJCik8w-2MV5dkw11_we9NjMXwZ-JCoOBHxUL8JDw_uMDw"
       },
       "expected": "x25519",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "wrong recipient secret",
@@ -1994,7 +1994,7 @@
         "signature": "bjbsK1vpJ-zwzZ3Ud6Z5R_HdPRCLvUv2EdJtZ-X9oggEXGloudlprt7BhlKuFMPKDFkqsfEhoENOs6HtKtFMAg"
       },
       "expected": "packet_id",
-      "code": "invalid_packet",
+      "code": "invalid_event",
       "packet_id": "UFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFA"
     },
     {
@@ -2020,7 +2020,7 @@
         "signature": "wt45F0CKU7VzHasv2y0GfCkAOseS40_GtNNZW5T5xpaSQyOScfYSZ4dStz3gvb3QwDQrBhrJsR9tvUJ2jhpuDw"
       },
       "expected": "aead",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "wrong HPKE AAD",
@@ -2045,7 +2045,7 @@
         "signature": "0sVfA4BkTs_CfoyeOhCEfb-Eq5No_zTTfcFeVjEopaG00hACkqjz8NXN9isfpSDc2I_WOXeLuLA0cSHnFoVnDg"
       },
       "expected": "aead",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "nonzero padding",
@@ -2070,7 +2070,7 @@
         "signature": "9UYKcdho8ztMvXkLgs-X8cVt9V2hozYsZhtH_LaCm71So6fKHduZjpHRx15Uy1Hlxr3vb5cV2OVTshiGozmPBQ"
       },
       "expected": "nonzero_padding",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "nonminimal padding",
@@ -2095,7 +2095,7 @@
         "signature": "mna4tgUkntf3JWLvYUZrtjMy_aV78hLfUUS7rpEZvDFuQEXUTss_yUWSoWHgsvNBR_QpJOAe74pFeGEQ0gbjDQ"
       },
       "expected": "nonminimal_padding",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "out of bounds frame length",
@@ -2120,7 +2120,7 @@
         "signature": "rZjKxwwfPQCow1yqbuq7Pow2mK0YSWOX-hqOmdYjNTgNNkCIV32LpkGkLN-mWEbCSDu0EOCNXb-cevCdk12tAA"
       },
       "expected": "length",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "zero frame length",
@@ -2145,7 +2145,7 @@
         "signature": "8sBSC2qyoKzTTNCf7sGY2IK2q2RVtM0qAGgoW-H42BpaMBkItuVqCMn2nN7paDaTGVKYVUndGL4d58zNBb5iCw"
       },
       "expected": "length",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "invalid UTF-8",
@@ -2170,7 +2170,7 @@
         "signature": "5mIGPuE9UoJcEvpGx4GQCj09HwSvV7IV5xuAOrO3wbbbjq4uuTh76eabpZXwxCnU8AWYlngIC-fm5bqRppYWBA"
       },
       "expected": "utf8",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "duplicate JSON keys",
@@ -2220,7 +2220,7 @@
         "signature": "-neNlCYXIIAKwMEhpXevZbVM1T7COuaDeM3dn5CEQ1XjXPPltAQR-O7X9P256MdQfKvxYXWUyroj9g9RC2KwCA"
       },
       "expected": "noncanonical_json",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "unpaired surrogate",
@@ -2270,7 +2270,7 @@
         "signature": "vRBO3I_iQHV8Fddl4MaijQ5STbgqlZTTeb0CNSXFVcLs4GZP_w16Y8DX-U88H9LLz7b8Kd6cKBLWIprW-XRGDQ"
       },
       "expected": "recipient",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "authenticated unequal expiration",
@@ -2295,7 +2295,7 @@
         "signature": "MGpMCX0PePgJEe9ByWDVjRrWNw2AC2jMSxhM8TZ6gCD1TiOSY3Bs-4uGo47QWDyiATY-6-9VNhWDZBn_gAsPCg"
       },
       "expected": "expiry_binding",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     },
     {
       "name": "signed invalid text part",
@@ -2420,7 +2420,7 @@
         "signature": "xqp3NwDwHtV0-KOusDtmCPE0ykF1IyYCclec49wUpf8idqP_UEMHo-cxuLLMunTJhvq9zveN19x7Z7_rwprhDg"
       },
       "expected": "sender",
-      "code": "invalid_packet"
+      "code": "invalid_event"
     }
   ],
   "sender_card_cases": [

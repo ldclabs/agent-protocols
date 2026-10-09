@@ -86,7 +86,7 @@ def test_encryption_checks_happen_before_hpke(monkeypatch):
     large = signed_change(ENVS['message'], SENDER, parts=[mail_part('application/octet-stream', bytes(5000))])
     assert code_of(lambda: encrypt_mail(large, ENVS['small_limit_card'], now_ms=NOW)) == 'payload_too_large'
     long = signed_change(ENVS['message'], SENDER, expires_at=NOW+3*DAY)
-    assert code_of(lambda: encrypt_mail(long, ENVS['card'], now_ms=NOW)) == 'invalid_packet'
+    assert code_of(lambda: encrypt_mail(long, ENVS['card'], now_ms=NOW)) == 'invalid_event'
     assert code_of(lambda: encrypt_mail(ENVS['message'], ENVS['card'], now_ms=NOW+DAY+1000)) == 'stale_card'
 
 
@@ -122,7 +122,7 @@ def test_keyring_old_secret_retention_and_prune():
     assert keys.open(packet('original'), now_ms=NOW+DAY+500) == ENVS['message']
     restored = MailKeyring.from_snapshot(keys.snapshot())
     assert restored.prune(now_ms=NOW+2*DAY) == 3
-    assert code_of(lambda: restored.open(packet('original'), now_ms=NOW)) == 'invalid_packet'
+    assert code_of(lambda: restored.open(packet('original'), now_ms=NOW)) == 'invalid_event'
     assert code_of(lambda: MailKeyring(OWNER).add(ENVS['card'], key_for(ENVS['rotated_card']))) == 'invalid_private_key'
 
 
@@ -213,7 +213,7 @@ def test_relay_raw_bounds_strict_json_route_change_and_path_binding():
         relay.deliver(MAILBOX, raw + ' ' * relay.max_body_bytes, now_ms=NOW)
     with pytest.raises(AgentProtocolError):
         relay.deliver(MAILBOX, raw[:-1] + ',"enc":"bad"}', now_ms=NOW)
-    assert code_of(lambda: relay.deliver(new_mail_id(), raw, now_ms=NOW)) == 'invalid_packet'
+    assert code_of(lambda: relay.deliver(new_mail_id(), raw, now_ms=NOW)) == 'invalid_event'
     # A valid sender signature still cannot prove ciphertext decryptability.
     assert code_of(lambda: relay.deliver(MAILBOX, V['recipient_rejections'][0]['packet'], now_ms=NOW)) == 'invalid_event_hash'
     bad = signed_change(next(c['packet'] for c in V['recipient_rejections'] if c['name'] == 'wrong HPKE AAD'), SENDER, nonce=900)

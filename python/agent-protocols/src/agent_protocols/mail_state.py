@@ -102,7 +102,7 @@ class MailKeyring:
         """Open a packet already checked by ``_packet_bytes``; used by MailInbox."""
         with self._lock:
             entry = self._entries.get(packet['event']['payload']['header']['card_hash'])
-        _require(entry is not None, 'invalid_packet', 'unknown retained mailbox card')
+        _require(entry is not None, 'invalid_event', 'unknown retained mailbox card')
         return _open_verified(packet, raw, entry[0], entry[1], self.owner, now)
 
     def prune(self, *, now_ms: int | None = None) -> int:
@@ -269,10 +269,10 @@ class MailRelayStore:
         """Packets are asynchronous signed objects: no live-write window or nonce maximum applies."""
         now = _now(now_ms)
         validate_mail_id(mailbox_id, size=16)
-        packet = _parse_bounded(packet, self.max_body_bytes, 'invalid_packet') if isinstance(packet, (str, bytes)) else copy.deepcopy(packet)
+        packet = _parse_bounded(packet, self.max_body_bytes, 'invalid_event') if isinstance(packet, (str, bytes)) else copy.deepcopy(packet)
         raw = _packet_bytes(packet)
         h = packet['event']['payload']['header']
-        _require(h['mailbox_id'] == mailbox_id, 'invalid_packet', 'path/header mailbox mismatch')
+        _require(h['mailbox_id'] == mailbox_id, 'invalid_event', 'path/header mailbox mismatch')
         pid, size = packet['hash'], len(raw)
         with self._lock:
             box = self._boxes.get(mailbox_id)
@@ -286,7 +286,7 @@ class MailRelayStore:
             _require(card['hash'] == h['card_hash'] and now < c['expires_at'], 'stale_card', 'packet needs the current unexpired card')
             _require(now < h['expires_at'], 'packet_expired', 'packet expired')
             _require(h['expires_at'] <= min(c['receive_until'], now + MAIL_MAX_TTL_MS + MAIL_FUTURE_SKEW_MS),
-                     'invalid_packet', 'packet exceeds accepted lifetime')
+                     'invalid_event', 'packet exceeds accepted lifetime')
             _require(packet['event']['created_at'] <= now + MAIL_FUTURE_SKEW_MS, 'timestamp_out_of_window', 'packet is future-dated')
             _require(size <= c['max_packet_bytes'], 'payload_too_large', 'packet exceeds card limit')
             box.drop_expired(now)

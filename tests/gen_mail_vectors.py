@@ -408,7 +408,7 @@ class RelayModel:
 
     def deliver(self, mailbox, packet, now):
         check_packet_shape(packet)
-        require(packet['event']['payload']['header']['mailbox_id'] == mailbox, 'invalid_packet')
+        require(packet['event']['payload']['header']['mailbox_id'] == mailbox, 'invalid_event')
         box = self.boxes.get(mailbox)
         require(box, 'mailbox_unavailable')
         pid = packet['hash']
@@ -419,7 +419,7 @@ class RelayModel:
         require(RELAY in c['routes'], 'mailbox_unavailable')
         require(h['card_hash'] == card['hash'] and now < c['expires_at'], 'stale_card')
         require(now < h['expires_at'], 'packet_expired')
-        require(h['expires_at'] <= min(c['receive_until'], now + MAX_TTL + SKEW), 'invalid_packet')
+        require(h['expires_at'] <= min(c['receive_until'], now + MAX_TTL + SKEW), 'invalid_event')
         # Packets are not live writes: only a future-dated packet is rejected, and no nonce maximum applies.
         require(packet['event']['created_at'] <= now + SKEW, 'timestamp_out_of_window')
         require(len(jcs(packet)) <= c['max_packet_bytes'], 'payload_too_large')
@@ -551,7 +551,7 @@ def generate():
                  'card_owner':'invalid_actor','recipient_key':'invalid_private_key','packet_size':'payload_too_large',
                  'text_utf8':'invalid_event','reply_card_owner':'invalid_actor','future':'timestamp_out_of_window',
                  'lifetime':'invalid_event','strict_json':'invalid_event'}
-        rejections.append({'name': name, 'packet': packet, 'expected': expected, 'code':codes.get(expected,'invalid_packet'), **kwargs})
+        rejections.append({'name': name, 'packet': packet, 'expected': expected, 'code':codes.get(expected,'invalid_event'), **kwargs})
     def resign(value, by=sender):
         event = copy.deepcopy(value['event']); event['actor'] = by.agent_id()
         return by.sign_event(event)

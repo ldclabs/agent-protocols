@@ -143,7 +143,7 @@ impl MailKeyring {
         let (card, key) = self
             .entries
             .get(&packet.event.payload.header.card_hash)
-            .ok_or_else(|| fail("invalid_packet", "unknown retained card"))?;
+            .ok_or_else(|| fail("invalid_event", "unknown retained card"))?;
         open_verified(packet, bytes, card, key, &self.owner, now)
     }
     /// Only keys past the signed `receive_until` are removed. This cannot erase
@@ -224,7 +224,7 @@ impl MailInbox {
         clock(now)?;
         let (packet, bytes) = checked_packet(&serde_json::to_value(packet)?)?;
         if claimed_packet_id.is_some_and(|id| id != packet.hash) {
-            return Err(fail("invalid_packet", "packet ID mismatch"));
+            return Err(fail("invalid_event", "packet ID mismatch"));
         }
         if self.blocked_senders.contains(&packet.event.actor) {
             return Err(SdkError::PermissionDenied);
@@ -413,7 +413,7 @@ impl MailRelayStore {
         let (packet, bytes) = checked_packet(&serde_json::to_value(packet)?)?;
         let h = &packet.event.payload.header;
         if h.mailbox_id != mailbox_id {
-            return Err(fail("invalid_packet", "path mailbox mismatch"));
+            return Err(fail("invalid_event", "path mailbox mismatch"));
         }
         let (id, size) = (packet.hash.clone(), bytes.len());
         let mailbox = self
@@ -441,7 +441,7 @@ impl MailRelayStore {
             > p.receive_until
                 .min(now.saturating_add(MAX_TTL_MS + FUTURE_SKEW_MS))
         {
-            return Err(fail("invalid_packet", "packet expiry bound"));
+            return Err(fail("invalid_event", "packet expiry bound"));
         }
         if packet.event.created_at > now.saturating_add(FUTURE_SKEW_MS) {
             return Err(SdkError::TimestampOutOfWindow);

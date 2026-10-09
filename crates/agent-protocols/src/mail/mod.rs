@@ -306,7 +306,7 @@ impl MailEncryptionKey {
 /// Exact framing, also useful for boundary conformance tests. Inputs are bounded.
 pub fn frame_bytes(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     if bytes.is_empty() || bytes.len() > MAX_PACKET_BYTES {
-        return Err(fail("invalid_packet", "invalid frame length"));
+        return Err(fail("invalid_event", "invalid frame length"));
     }
     let size = (4 + bytes.len()).div_ceil(1024) * 1024;
     let mut frame = Zeroizing::new(vec![0; size]);
@@ -316,7 +316,7 @@ pub fn frame_bytes(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
 }
 fn unframe(bytes: &[u8]) -> Result<Value> {
     if bytes.len() < 1024 || bytes.len() % 1024 != 0 {
-        return Err(fail("invalid_packet", "invalid frame length"));
+        return Err(fail("invalid_event", "invalid frame length"));
     }
     let n = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
     if n == 0
@@ -324,13 +324,13 @@ fn unframe(bytes: &[u8]) -> Result<Value> {
         || (4 + n).div_ceil(1024) * 1024 != bytes.len()
         || bytes[4 + n..].iter().any(|b| *b != 0)
     {
-        return Err(fail("invalid_packet", "invalid frame padding"));
+        return Err(fail("invalid_event", "invalid frame padding"));
     }
     let data = &bytes[4..4 + n];
-    let text = std::str::from_utf8(data).map_err(|_| fail("invalid_packet", "invalid UTF-8"))?;
+    let text = std::str::from_utf8(data).map_err(|_| fail("invalid_event", "invalid UTF-8"))?;
     let value = identity::parse_strict_json(text)?;
     if canonical_bytes(&value)? != data {
-        return Err(fail("invalid_packet", "noncanonical plaintext"));
+        return Err(fail("invalid_event", "noncanonical plaintext"));
     }
     Ok(value)
 }
@@ -348,7 +348,7 @@ pub(crate) fn checked_packet(value: &Value) -> Result<(Packet, Vec<u8>)> {
         || p.header.expires_at > e.created_at.saturating_add(MAX_TTL_MS + FUTURE_SKEW_MS)
     {
         return Err(fail(
-            "invalid_packet",
+            "invalid_event",
             "invalid ciphertext length or packet lifetime",
         ));
     }
@@ -396,7 +396,7 @@ pub fn encrypt_message(
         return Err(fail("packet_expired", "message expired or future-dated"));
     }
     if message.expires_at > card.event.payload.receive_until {
-        return Err(fail("invalid_packet", "message exceeds receive_until"));
+        return Err(fail("invalid_event", "message exceeds receive_until"));
     }
     let plaintext = frame_bytes(&Zeroizing::new(canonical_bytes(&message)?))?;
     let mut event = Event::new(
@@ -424,7 +424,7 @@ pub fn encrypt_message(
         return Err(fail("payload_too_large", "packet exceeds card limit"));
     }
     let pk = PublicKey::from_bytes(&fixed_bytes(&card.event.payload.public_key, 32)?)
-        .map_err(|_| fail("invalid_packet", "invalid encryption key"))?;
+        .map_err(|_| fail("invalid_event", "invalid encryption key"))?;
     let (enc, ciphertext) = hpke::single_shot_seal::<ChaCha20Poly1305, HkdfSha256, Kem>(
         &OpModeS::Base,
         &pk,
@@ -432,7 +432,7 @@ pub fn encrypt_message(
         &plaintext,
         &mail_packet_aad(&event)?,
     )
-    .map_err(|_| fail("invalid_packet", "encryption failed"))?;
+    .map_err(|_| fail("invalid_event", "encryption failed"))?;
     event.payload.enc = encode_bytes(&enc.to_bytes());
     event.payload.ciphertext = encode_bytes(&ciphertext);
     signer.sign_event(event)
@@ -474,10 +474,10 @@ pub(crate) fn open_verified(
         return Err(fail("invalid_private_key", "recipient key mismatch"));
     }
     if h.card_hash != card.hash || h.mailbox_id != p.mailbox_id || h.expires_at > p.receive_until {
-        return Err(fail("invalid_packet", "recipient/card/key binding"));
+        return Err(fail("invalid_event", "recipient/card/key binding"));
     }
     let enc = <Kem as hpke::Kem>::EncappedKey::from_bytes(&fixed_bytes(&e.payload.enc, 32)?)
-        .map_err(|_| fail("invalid_packet", "invalid encapsulated key"))?;
+        .map_err(|_| fail("invalid_event", "invalid encapsulated key"))?;
     let plaintext = Zeroizing::new(
         hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, Kem>(
             &OpModeR::Base,
@@ -487,12 +487,12 @@ pub(crate) fn open_verified(
             &decode_bytes(&e.payload.ciphertext)?,
             &mail_packet_aad(e)?,
         )
-        .map_err(|_| fail("invalid_packet", "unable to decrypt packet"))?,
+        .map_err(|_| fail("invalid_event", "unable to decrypt packet"))?,
     );
     let message = validate_message(&unframe(&plaintext)?)?;
     if message.sender != e.actor || &message.to != owner || message.expires_at != h.expires_at {
         return Err(fail(
-            "invalid_packet",
+            "invalid_event",
             "sender, recipient or expiration binding",
         ));
     }

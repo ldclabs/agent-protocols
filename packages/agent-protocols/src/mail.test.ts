@@ -367,7 +367,7 @@ test("Mail sealing checks recipient, lifetime, size and card usability first", a
   );
   await assert.rejects(
     () => seal(makeMessage({ expires_at: now + 3 * 86400000 }), e.card, now),
-    { code: "invalid_packet" },
+    { code: "invalid_event" },
   );
   await assert.rejects(
     () =>
@@ -415,7 +415,7 @@ test("Mail keys are independent, keyring retains old cards and prunes by receive
   const restored = m.MailKeyring.restore(k.exportSnapshot());
   restored.prune(e.card.event.payload.receive_until);
   await assert.rejects(() => restored.open(packet("original"), now), {
-    code: "invalid_packet",
+    code: "invalid_event",
   });
 });
 test("Mail local JSON and text parts remain strict", () => {
@@ -499,7 +499,7 @@ test("Mail relay quotas, tombstones, owner authorization and pruning", () => {
   assert.equal(s.deliver(mailbox, packet("reencrypted")).accepted_at, now);
   assert.equal(
     codeOf(() => s.deliver(m.newMailId(), packet("original"))),
-    "invalid_packet",
+    "invalid_event",
   );
   const expires = e.message.expires_at;
   s.prune(expires);
