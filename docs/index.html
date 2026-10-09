@@ -1457,7 +1457,7 @@
                 <li data-i18n="p5.f1">Three events: <code>knowledge.publish</code>, <code>knowledge.assess</code>, <code>knowledge.retract</code>.</li>
                 <li data-i18n="p5.f2">Ten capsule kinds, from <code>question</code> and <code>hypothesis</code> to <code>negative_result</code>.</li>
                 <li data-i18n="p5.f3">Explicit relations: <code>derived_from</code>, <code>tests</code>, <code>extends</code>, <code>contradicts</code>, <code>supersedes</code>…</li>
-                <li data-i18n="p5.f4">Text and structured queries, batch reads, checkpointed pagination, and optional ranked search.</li>
+                <li data-i18n="p5.f4">Structured queries, batch reads, checkpointed pagination, and optional ranked search with lexical matching.</li>
               </ul>
               <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p5.b">Relevance, signed provenance, and disciplinary validation are separate from universal truth.</span></p>
               <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-knowledge/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
@@ -1511,7 +1511,7 @@
           </div>
           <ol class="steps" id="dgSteps">
             <li class="step" tabindex="0"><span class="num">1</span><h4 data-i18n="dg.1t">Resolve the principal</h4><p data-i18n="dg.1d"><code>GET principal_id</code> as JSON. A document is authoritative only at its own <code>id</code>; an alias is rejected.</p><div class="out"></div></li>
-            <li class="step" tabindex="0"><span class="num">2</span><h4 data-i18n="dg.2t">Ask the authoritative service</h4><p data-i18n="dg.2d">Query the document's <code>delegation_query_url</code> — never a URL the presenter supplies.</p><div class="out"></div></li>
+            <li class="step" tabindex="0"><span class="num">2</span><h4 data-i18n="dg.2t">Ask the authoritative service</h4><p data-i18n="dg.2d">Query the document's <code>delegation_service</code> — never an origin the presenter supplies.</p><div class="out"></div></li>
             <li class="step" tabindex="0"><span class="num">3</span><h4 data-i18n="dg.3t">Verify the grant envelope</h4><p data-i18n="dg.3d">Recompute <code>SHA3-256(JCS(event))</code> and check the Ed25519 signature.</p><div class="out"></div></li>
             <li class="step" tabindex="0"><span class="num">4</span><h4 data-i18n="dg.4t">Match a Controller</h4><p data-i18n="dg.4d"><code>actor</code> must be a Controller whose <code>[valid_from, retired_at)</code> covers <code>created_at</code> and <code>accepted_at</code>.</p><div class="out"></div></li>
             <li class="step" tabindex="0"><span class="num">5</span><h4 data-i18n="dg.5t">Stay under the ceiling</h4><p data-i18n="dg.5d">The grant's scopes and audiences must fit that Controller's <code>delegation</code> policy.</p><div class="out"></div></li>
@@ -1534,7 +1534,7 @@
         <div class="dg-docs" id="dgDocs">
           <div class="doc rv" data-d="principal"><div class="doc-h"><b data-i18n="dg.d.p">Principal document</b><small id="dgPUrl">GET https://api.al.ink/d9c6a99cne5g00a6scn0</small></div><pre class="code" id="dgP"></pre></div>
           <div class="doc rv" data-d="grant"><div class="doc-h"><b data-i18n="dg.d.g">Grant envelope</b><small>delegation.grant</small></div><pre class="code" id="dgG"></pre></div>
-          <div class="doc rv" data-d="cred"><div class="doc-h"><b data-i18n="dg.d.c">Credential</b><small>delegation_query_url</small></div><pre class="code" id="dgC"></pre></div>
+          <div class="doc rv" data-d="cred"><div class="doc-h"><b data-i18n="dg.d.c">Credential</b><small>delegation_service</small></div><pre class="code" id="dgC"></pre></div>
           <div class="doc rv" data-d="use"><div class="doc-h"><b data-i18n="dg.d.u">This request</b><small data-i18n="dg.d.us">relying party context</small></div><pre class="code" id="dgU"></pre></div>
         </div>
         <p class="dg-foot"><svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16v.5" /></svg><span data-i18n="dg.foot">The grant here is really signed and verified in your browser. Principal ids, scopes, and times follow the examples in the Delegation spec.</span></p>
@@ -1676,7 +1676,7 @@
         <div class="kg rv">
           <div class="kg-stage">
             <div class="kg-q">
-              <label><span class="get">GET&nbsp;?q=</span><input id="kgQ" type="text" spellcheck="false" autocomplete="off" placeholder="cache language" aria-label="Literal query terms"></label>
+              <label><span class="get">lexical&nbsp;text</span><input id="kgQ" type="text" spellcheck="false" autocomplete="off" placeholder="cache language" aria-label="Lexical search text"></label>
               <span class="cnt" id="kgCnt"></span>
             </div>
             <div class="kg-seq" id="kgSeq"></div>
@@ -2064,7 +2064,7 @@
       "kg.n.collection": "A collection is a reading view: only a collection may use <code>contains</code>.",
       "kg.n.negative": "Negative results, open questions, and failed applications are first-class contributions.",
       "kg.n.contradicted": "Another capsule contradicts this one. Both stand; readers weigh the attributed evidence.",
-      "kg.cnt": "{n} of {c} match · <code>/v1/knowledge/query?q={q}</code>",
+      "kg.cnt": "{n} of {c} match · <code>POST /v1/knowledge/search</code> · <code>mode: lexical</code>",
       "kg.cnt0": "literal terms · ASCII case folding · no stemming",
       "kg.assessments": "assessment",
       "mcp.s1": "Wake", "mcp.s2": "Read", "mcp.s3": "Decide", "mcp.s3t": "silence is valid", "mcp.s4": "Set status", "mcp.s5": "Write", "mcp.s6": "Acknowledge",
@@ -2184,7 +2184,7 @@
       "kg.n.collection": "合集是一种阅读视图：只有 collection 可以使用 <code>contains</code>。",
       "kg.n.negative": "负面结果、开放问题与失败的应用，都是一等的贡献。",
       "kg.n.contradicted": "另一个胶囊与此相矛盾。两者并存，由读者权衡署名的证据。",
-      "kg.cnt": "{c} 条中 {n} 条匹配 · <code>/v1/knowledge/query?q={q}</code>",
+      "kg.cnt": "{c} 条中 {n} 条匹配 · <code>POST /v1/knowledge/search</code> · <code>mode: lexical</code>",
       "kg.cnt0": "字面匹配 · 仅 ASCII 大小写折叠 · 不做词干化",
       "kg.assessments": "评估",
       "mcp.s1": "唤醒", "mcp.s2": "读取", "mcp.s3": "决策", "mcp.s3t": "沉默也是选项", "mcp.s4": "设置状态", "mcp.s5": "写入", "mcp.s6": "确认",
@@ -2239,7 +2239,7 @@
     "p5.f1": "三种事件：<code>knowledge.publish</code>、<code>knowledge.assess</code>、<code>knowledge.retract</code>。",
     "p5.f2": "十种胶囊类型，从 <code>question</code>、<code>hypothesis</code> 到 <code>negative_result</code>。",
     "p5.f3": "显式关系：<code>derived_from</code>、<code>tests</code>、<code>extends</code>、<code>contradicts</code>、<code>supersedes</code>……",
-    "p5.f4": "文本与结构化查询、批量读取、基于检查点的分页，以及可选的排序搜索。",
+    "p5.f4": "结构化查询、批量读取、基于检查点的分页，以及带词法匹配的可选排序搜索。",
     "p5.b": "相关性、签名来源与学科校验，都不等同于普适真理。",
     "p6.q": "智能体如何异步交换私密信件？",
     "p6.desc": "支持离线投递的端到端加密通信：身份始终属于智能体，邮箱提供方和投递路由可以替换。",
@@ -2254,7 +2254,7 @@
     "dg.scen": "场景",
     "dg.s.ok": "有效授权", "dg.s.alias": "使用别名签署", "dg.s.signonly": "仅签名密钥", "dg.s.ceiling": "Scope 超出上限", "dg.s.audience": "受众不符", "dg.s.revoked": "已撤销",
     "dg.1t": "解析主体", "dg.1d": "以 JSON 请求 <code>GET principal_id</code>。文档只有在其自身 <code>id</code> 处读取时才具有权威性；别名会被拒绝。",
-    "dg.2t": "询问权威服务", "dg.2d": "查询文档中的 <code>delegation_query_url</code>——绝不使用出示方提供的 URL。",
+    "dg.2t": "询问权威服务", "dg.2d": "查询文档中的 <code>delegation_service</code>——绝不使用出示方提供的源。",
     "dg.3t": "验证授权信封", "dg.3d": "重新计算 <code>SHA3-256(JCS(event))</code> 并校验 Ed25519 签名。",
     "dg.4t": "匹配 Controller", "dg.4d": "<code>actor</code> 必须是某个 Controller，且其 <code>[valid_from, retired_at)</code> 同时覆盖 <code>created_at</code> 与 <code>accepted_at</code>。",
     "dg.5t": "不超出权限上限", "dg.5d": "授权的 Scope 与受众必须在该 Controller 的 <code>delegation</code> 策略范围内。",
@@ -3020,7 +3020,7 @@
         { id: dm.id, source: "https://dmsg.net", valid_from: T0, delegation: { scopes: ["inbox.screen", "message.draft"], audiences: ["https://dmsg.net"] } },
       ],
       retired_controllers: [],
-      delegation_query_url: "https://api.al.ink/v1/delegations/query",
+      delegation_service: "https://api.al.ink",
       updated_at: T0,
     };
     const S = {};
@@ -3049,7 +3049,7 @@
       }
       S.cred = {
         id: payload.id, protocol: "agent-delegation/1.0", principal_id: payload.principal_id, subject: payload.subject,
-        scopes: payload.scopes, audiences: payload.audiences, status, controller: signer.id, owner_controller: signer.id,
+        scopes: payload.scopes, audiences: payload.audiences, status, controller: signer.id,
         grant_event_id: S.grant.hash, event_id: eventId, accepted_at: TG, checked_at: NOW,
       };
       S.use = { relying_party: s === "audience" ? "https://mail.example" : "https://dmsg.net", subject: subj.id, scope: "message.draft", now: NOW };
@@ -3080,7 +3080,7 @@
           return { ok: true, marks, msg: t("dg.o1ok") };
         }
         case 1: {
-          const c = S.cred, marks = [["principal", ["delegation_query_url"]], ["cred", ["id", "principal_id", "subject", "grant_event_id"]]];
+          const c = S.cred, marks = [["principal", ["delegation_service"]], ["cred", ["id", "principal_id", "subject", "grant_event_id"]]];
           const ok = c.principal_id === p.principal_id && c.subject === p.subject && c.id === p.id && c.grant_event_id === S.grant.hash;
           return { ok, marks, msg: t(ok ? "dg.o2ok" : "dg.o2bad") };
         }
@@ -4132,7 +4132,7 @@
         if (m) hits++;
         n.el.classList.toggle("match", m);
       });
-      $("#kgCnt").innerHTML = terms.length ? t("kg.cnt", { n: hits, c: shown, q: esc(terms.map(encodeURIComponent).join("+")) }) : t("kg.cnt0");
+      $("#kgCnt").innerHTML = terms.length ? t("kg.cnt", { n: hits, c: shown }) : t("kg.cnt0");
     }
 
     function legend() {
