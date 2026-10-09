@@ -80,7 +80,7 @@ test("validates principal documents and event protocol", () => {
       protocol: DELEGATION_PROTOCOL, updated_at: 1000,
       controllers: [{ id: controller.agentId(), source: "local", valid_from: 0 }],
       aliases: ["https://profiles.example.com/acme"],
-      delegation_query_url: "https://profiles.example.com/v1/delegations/query",
+      delegation_service: "https://profiles.example.com",
     }),
   );
   assert.throws(() =>
@@ -97,7 +97,7 @@ test("validates principal documents and event protocol", () => {
         protocol: DELEGATION_PROTOCOL, updated_at: 1000,
         controllers: [{ id: controller.agentId(), source: "local", valid_from: 0, delegation: "*" }],
       }),
-    /delegation_query_url/,
+    /delegation_service/,
   );
 
   const wrong = controller.signEvent(

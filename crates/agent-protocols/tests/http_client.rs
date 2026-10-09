@@ -524,7 +524,7 @@ fn credential_body(id: &str) -> String {
     const PRINCIPAL_ID: &str = "https://api.al.ink/d9c6a99cne5g00a6scn0";
     let aid = sample_agent_id();
     format!(
-        r#"{{"id":"{id}","protocol":"agent-delegation/1.0","principal_id":"{PRINCIPAL_ID}","controller":"{aid}","owner_controller":"{aid}","grant_event_id":"e","accepted_at":1,"subject":"{aid}","scopes":["inbox.screen"],"audiences":["https://dmsg.net"],"status":"active","updated_at":1,"checked_at":2,"event_id":"e"}}"#
+        r#"{{"id":"{id}","protocol":"agent-delegation/1.0","principal_id":"{PRINCIPAL_ID}","controller":"{aid}","grant_event_id":"e","accepted_at":1,"subject":"{aid}","scopes":["inbox.screen"],"audiences":["https://dmsg.net"],"status":"active","updated_at":1,"checked_at":2,"event_id":"e"}}"#
     )
 }
 

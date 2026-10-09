@@ -45,7 +45,7 @@ const other = AgentSigner.fromSeed(new Uint8Array(32).fill(64));
 const id = "https://example.com/p";
 const origin = "https://dmsg.net";
 function document(): d.PrincipalDocument {
-  return { protocol: d.DELEGATION_PROTOCOL, id, updated_at: 2000, delegation_query_url: `${id}/query`, controllers: [
+  return { protocol: d.DELEGATION_PROTOCOL, id, updated_at: 2000, delegation_service: "https://example.com", controllers: [
     { id: signer.agentId(), source: origin, valid_from: 100, delegation: { scopes: ["draft"], audiences: [origin] } },
     { id: root.agentId(), source: "local", valid_from: 100, delegation: "*" },
   ] };
@@ -62,7 +62,6 @@ test("authority, ownership and materialization remain separate from signature va
   assert.equal(credential.accepted_at, 250);
   assert.equal(credential.checked_at, 250);
   assert.equal(credential.principal_id, id);
-  assert.equal(credential.owner_controller, signer.agentId());
   assert.equal(credential.grant_event_id, envelope.hash);
   d.validateDelegationUse(credential, origin, 300);
   assert.throws(() => d.validateDelegationUse(credential, "https://tokenlist.ing", 300));
@@ -74,22 +73,25 @@ test("authority, ownership and materialization remain separate from signature va
   const only = structuredClone(doc); delete only.controllers[0].delegation;
   d.validateDelegationEnvelope(envelope); // Mathematically valid, but not authorized.
   assert.throws(() => d.validateDelegationAcceptance(envelope, only, id, 250));
+  // A restricted key manages another key's credential only within its ceiling.
   const rootCredential = d.materializeDelegationCredential(grant(root), { acceptedAt: 250 });
-  assert.throws(() => d.validateDelegationAcceptance(envelope, doc, id, 300, rootCredential));
-  assert.throws(() => d.validateControllerEnumeration(doc, signer.agentId(), 300, root.agentId()));
-  d.validateControllerEnumeration(doc, root.agentId(), 300, signer.agentId());
+  d.validateDelegationAcceptance(envelope, doc, id, 300, rootCredential);
+  const wide = d.materializeDelegationCredential(grant(root, 2, { scopes: ["draft", "admin"] }), { acceptedAt: 250 });
+  assert.throws(() => d.validateDelegationAcceptance(envelope, doc, id, 300, wide), /ceiling/);
+  assert.throws(() => d.validateControllerEnumeration(doc, signer.agentId(), 300, wide), /ceiling/);
+  d.validateControllerEnumeration(doc, signer.agentId(), 300, credential);
+  d.validateControllerEnumeration(doc, root.agentId(), 300, wide);
   const revoke = root.signEvent(d.delegationRevokeEvent(root.agentId(), 400, 2, { id: "del", principal_id: id }));
   d.validateDelegationAcceptance(revoke, doc, id, 450, credential);
   const revoked = d.materializeDelegationCredential(revoke, { acceptedAt: 450, previous: credential });
   assert.equal(revoked.status, "revoked");
-  assert.equal(revoked.owner_controller, signer.agentId());
   assert.equal(revoked.controller, root.agentId());
   assert.equal(revoked.grant_event_id, envelope.hash);
   assert.deepEqual(revoked.audiences, credential.audiences);
   assert.throws(() => d.validateDelegationAcceptance(revoke, doc, id, 450));
   const replacement = grant(root, 3);
   d.validateDelegationAcceptance(replacement, doc, id, 500, revoked);
-  assert.equal(d.materializeDelegationCredential(replacement, { acceptedAt: 500, previous: revoked }).owner_controller, signer.agentId());
+  assert.equal(d.materializeDelegationCredential(replacement, { acceptedAt: 500, previous: revoked }).controller, root.agentId());
 });
 test("a replacement cannot move a credential to another subject", () => {
   const doc = document();
@@ -111,25 +113,27 @@ test("retired history needs trusted accepted records and the original ceiling", 
   assert.throws(() => d.validateHistoricalDelegation(record, doc, id));
   assert.throws(() => d.validateHistoricalDelegation({ envelope: grant(signer, 2, { scopes: ["admin"] }), accepted_at: 250 }, doc, id));
 });
-test("a restricted successor manages its predecessor's credentials within its own ceiling", () => {
+test("a restricted controller manages other keys' credentials within its own ceiling", () => {
   const doc = document();
   const retired = doc.controllers.shift()!;
   retired.retired_at = 600; doc.retired_controllers = [retired];
-  doc.controllers.push({ id: successor.agentId(), source: origin, valid_from: 600, delegation: { scopes: ["draft", "inbox"], audiences: [origin] }, supersedes: [signer.agentId()] });
+  doc.controllers.push({ id: successor.agentId(), source: origin, valid_from: 600, delegation: { scopes: ["draft", "inbox"], audiences: [origin] } });
   d.validatePrincipalDocument(doc);
-  assert.deepEqual([...d.controllerLineage(doc, successor.agentId())].sort(), [signer.agentId(), successor.agentId()].sort());
   const credential = d.materializeDelegationCredential(grant(), { acceptedAt: 250 });
+  assert.equal(d.controllerCoversCredential(doc.controllers[1], credential), true);
   const revoke = successor.signEvent(d.delegationRevokeEvent(successor.agentId(), 700, 1, { id: "del", principal_id: id }));
   d.validateDelegationAcceptance(revoke, doc, id, 700, credential);
-  d.validateControllerEnumeration(doc, successor.agentId(), 700, signer.agentId());
+  d.validateControllerEnumeration(doc, successor.agentId(), 700, credential);
   const widened = successor.signEvent(d.delegationGrantEvent(successor.agentId(), 700, 2, {
     id: "del", principal_id: id, subject: root.agentId(), scopes: ["draft", "inbox"], audiences: [origin], expires_at: 1900,
   }));
   d.validateDelegationAcceptance(widened, doc, id, 700, credential);
-  assert.equal(d.materializeDelegationCredential(widened, { acceptedAt: 700, previous: credential }).owner_controller, signer.agentId());
-  // Without the supersedes link the successor owns nothing.
-  const unlinked = structuredClone(doc); delete unlinked.controllers[1].supersedes;
-  assert.throws(() => d.validateDelegationAcceptance(revoke, unlinked, id, 700, credential), /own/);
+  assert.equal(d.materializeDelegationCredential(widened, { acceptedAt: 700, previous: credential }).controller, successor.agentId());
+  // A credential outside the ceiling cannot be revoked, replaced, or enumerated by the restricted key.
+  const wide = d.materializeDelegationCredential(grant(root, 3, { scopes: ["draft", "admin"] }), { acceptedAt: 250 });
+  assert.equal(d.controllerCoversCredential(doc.controllers[1], wide), false);
+  assert.throws(() => d.validateDelegationAcceptance(revoke, doc, id, 700, wide), /ceiling/);
+  assert.throws(() => d.validateControllerEnumeration(doc, successor.agentId(), 700, wide), /ceiling/);
 });
 test("verifyDelegationCredential checks the latest grant and use", () => {
   const doc = document();

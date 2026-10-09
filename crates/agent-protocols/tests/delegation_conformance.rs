@@ -87,7 +87,7 @@ fn other() -> AgentSigner {
     key(64)
 }
 fn document() -> PrincipalDocument {
-    serde_json::from_value(json!({"protocol":PROTOCOL,"id":ID,"updated_at":2000,"delegation_query_url":format!("{ID}/query"),"controllers":[
+    serde_json::from_value(json!({"protocol":PROTOCOL,"id":ID,"updated_at":2000,"delegation_service":"https://example.com","controllers":[
         {"id":signer().agent_id(),"source":ORIGIN,"valid_from":100,"delegation":{"scopes":["draft"],"audiences":[ORIGIN]}},
         {"id":root().agent_id(),"source":"local","valid_from":100,"delegation":"*"}
     ]})).unwrap()
@@ -240,7 +240,6 @@ fn authority_ownership_and_materialization() {
     assert_eq!(credential.accepted_at, 250);
     assert_eq!(credential.checked_at, 250);
     assert_eq!(credential.principal_id, ID);
-    assert_eq!(credential.owner_controller, signer().agent_id());
     assert_eq!(credential.grant_event_id, envelope.hash);
     validate_delegation_use(&credential, ORIGIN, 300).unwrap();
     assert!(validate_delegation_use(&credential, "https://tokenlist.ing", 300).is_err());
@@ -263,29 +262,38 @@ fn authority_ownership_and_materialization() {
     // Mathematically valid, but not authorized.
     validate_delegation_envelope(&envelope).unwrap();
     assert!(validate_delegation_acceptance(&envelope, &only, ID, 250, None).is_err());
+    // A restricted key manages another key's credential only within its ceiling.
     let root_credential = materialize(&grant(&root(), 1), 250, None);
-    assert!(
-        validate_delegation_acceptance(&envelope, &doc, ID, 300, Some(&root_credential)).is_err()
+    validate_delegation_acceptance(&envelope, &doc, ID, 300, Some(&root_credential)).unwrap();
+    let wide = materialize(
+        &grant_with(&root(), 2, |p| {
+            p.scopes = vec!["draft".into(), "admin".into()]
+        }),
+        250,
+        None,
     );
-    assert!(
-        validate_controller_enumeration(&doc, &signer().agent_id(), 300, &root().agent_id())
-            .is_err()
+    assert_eq!(
+        validate_delegation_acceptance(&envelope, &doc, ID, 300, Some(&wide))
+            .unwrap_err()
+            .code(),
+        Some("delegation_ceiling_exceeded")
     );
-    validate_controller_enumeration(&doc, &root().agent_id(), 300, &signer().agent_id()).unwrap();
+    assert!(validate_controller_enumeration(&doc, &signer().agent_id(), 300, &wide).is_err());
+    validate_controller_enumeration(&doc, &signer().agent_id(), 300, &credential).unwrap();
+    validate_controller_enumeration(&doc, &root().agent_id(), 300, &wide).unwrap();
     let revocation = revoke(&root(), 400, 2);
     validate_delegation_acceptance(&revocation, &doc, ID, 450, Some(&credential)).unwrap();
     let revoked = materialize(&revocation, 450, Some(&credential));
     assert_eq!(revoked.status, DelegationStatus::Revoked);
     assert_eq!(revoked.controller, root().agent_id());
-    assert_eq!(revoked.owner_controller, signer().agent_id());
     assert_eq!(revoked.grant_event_id, envelope.hash);
     assert_eq!(revoked.audiences, credential.audiences);
     assert!(validate_delegation_acceptance(&revocation, &doc, ID, 450, None).is_err());
     let replacement = grant(&root(), 3);
     validate_delegation_acceptance(&replacement, &doc, ID, 500, Some(&revoked)).unwrap();
     assert_eq!(
-        materialize(&replacement, 500, Some(&revoked)).owner_controller,
-        signer().agent_id()
+        materialize(&replacement, 500, Some(&revoked)).controller,
+        root().agent_id()
     );
 }
 
@@ -319,7 +327,7 @@ fn retired_history_needs_accepted_records_and_the_original_ceiling() {
 }
 
 #[test]
-fn a_restricted_successor_manages_its_predecessors_credentials() {
+fn a_restricted_controller_manages_credentials_within_its_ceiling() {
     let mut doc = document();
     let mut retired = doc.controllers.remove(0);
     retired.retired_at = Some(600);
@@ -327,19 +335,19 @@ fn a_restricted_successor_manages_its_predecessors_credentials() {
     doc.controllers.push(
         serde_json::from_value(json!({
             "id": successor().agent_id(), "source": ORIGIN, "valid_from": 600,
-            "delegation": {"scopes": ["draft", "inbox"], "audiences": [ORIGIN]},
-            "supersedes": [signer().agent_id()]
+            "delegation": {"scopes": ["draft", "inbox"], "audiences": [ORIGIN]}
         }))
         .unwrap(),
     );
     validate_principal_document(&doc).unwrap();
-    let lineage = controller_lineage(&doc, &successor().agent_id());
-    assert!(lineage.contains(&signer().agent_id()) && lineage.contains(&successor().agent_id()));
     let credential = materialize(&grant(&signer(), 1), 250, None);
+    assert!(controller_covers_credential(
+        &doc.controllers[1],
+        &credential
+    ));
     let revocation = revoke(&successor(), 700, 1);
     validate_delegation_acceptance(&revocation, &doc, ID, 700, Some(&credential)).unwrap();
-    validate_controller_enumeration(&doc, &successor().agent_id(), 700, &signer().agent_id())
-        .unwrap();
+    validate_controller_enumeration(&doc, &successor().agent_id(), 700, &credential).unwrap();
     let widened = {
         let mut payload = DelegationGrantPayload::new(
             "del",
@@ -358,15 +366,26 @@ fn a_restricted_successor_manages_its_predecessors_credentials() {
     };
     validate_delegation_acceptance(&widened, &doc, ID, 700, Some(&credential)).unwrap();
     assert_eq!(
-        materialize(&widened, 700, Some(&credential)).owner_controller,
-        signer().agent_id()
+        materialize(&widened, 700, Some(&credential)).controller,
+        successor().agent_id()
     );
-    // Without the supersedes link the successor owns nothing.
-    let mut unlinked = doc.clone();
-    unlinked.controllers[1].supersedes = None;
-    assert!(
-        validate_delegation_acceptance(&revocation, &unlinked, ID, 700, Some(&credential)).is_err()
+    // A credential outside the ceiling cannot be revoked, replaced, or
+    // enumerated by the restricted key.
+    let wide = materialize(
+        &grant_with(&root(), 3, |p| {
+            p.scopes = vec!["draft".into(), "admin".into()]
+        }),
+        250,
+        None,
     );
+    assert!(!controller_covers_credential(&doc.controllers[1], &wide));
+    assert_eq!(
+        validate_delegation_acceptance(&revocation, &doc, ID, 700, Some(&wide))
+            .unwrap_err()
+            .code(),
+        Some("delegation_ceiling_exceeded")
+    );
+    assert!(validate_controller_enumeration(&doc, &successor().agent_id(), 700, &wide).is_err());
 }
 
 #[test]

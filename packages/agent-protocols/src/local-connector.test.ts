@@ -612,7 +612,7 @@ test("delegation writes derive the service from the principal and check policy a
     const url = String(input);
     if (url === principalId) return new Response(JSON.stringify({
       id: principalId, protocol: "agent-delegation/1.0", updated_at: Date.now(),
-      delegation_query_url: `${HOST}/v1/delegations/query`,
+      delegation_service: HOST,
       controllers: [{ id: active.agentId(), source: "local", valid_from: 0, ...(policy === undefined ? {} : { delegation: policy }) }],
     }));
     if (url.endsWith("/.well-known/agent-delegation")) return new Response("{}", { status: 404 });
@@ -637,9 +637,9 @@ test("delegation writes derive the service from the principal and check policy a
   await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input));
   policy = { scopes: ["draft"], audiences: ["https://dmsg.net"] };
   readStatus = 200;
-  previous = { id: "del.opaque", principal_id: principalId, subject: other.agentId(), protocol: "agent-delegation/1.0", accepted_at: 1, owner_controller: other.agentId() };
-  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input), /own/);
-  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_REVOKE, input), /own/);
+  previous = { id: "del.opaque", principal_id: principalId, subject: other.agentId(), protocol: "agent-delegation/1.0", accepted_at: 1, scopes: ["draft", "admin"], audiences: ["https://dmsg.net"] };
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input), /ceiling/);
+  await assert.rejects(() => connector.callTool(TOOL_DELEGATION_REVOKE, input), /ceiling/);
   readStatus = 503;
   await assert.rejects(() => connector.callTool(TOOL_DELEGATION_GRANT, input));
   assert.equal(posts.length, 1, "denied writes were never submitted");
@@ -650,7 +650,7 @@ test("delegation_check verifies each candidate for the requested audience", asyn
   const controller = signer(71), subject = signer(72);
   const principalId = `${HOST}/p`;
   const document: delegation.PrincipalDocument = {
-    id: principalId, protocol: delegation.DELEGATION_PROTOCOL, updated_at: 1000, delegation_query_url: `${HOST}/v1/delegations/query`,
+    id: principalId, protocol: delegation.DELEGATION_PROTOCOL, updated_at: 1000, delegation_service: HOST,
     controllers: [{ id: controller.agentId(), source: "local", valid_from: 0, delegation: { scopes: ["draft"], audiences: ["https://dmsg.net"] } }],
   };
   const envelope = controller.signEvent(delegation.delegationGrantEvent(controller.agentId(), 500, 1, {

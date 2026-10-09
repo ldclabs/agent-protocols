@@ -19,13 +19,12 @@ pub const DELEGATION_GRANT: &str = "delegation.grant";
 pub const DELEGATION_REVOKE: &str = "delegation.revoke";
 
 /// Delegation-specific error codes (Agent Delegation Section 9.7).
-pub const DELEGATION_ERROR_CODES: [&str; 9] = [
+pub const DELEGATION_ERROR_CODES: [&str; 8] = [
     "principal_unresolvable",
     "principal_not_canonical",
     "controller_not_current",
     "delegation_not_permitted",
     "delegation_ceiling_exceeded",
-    "not_owner_controller",
     "credential_not_found",
     "credential_identity_mismatch",
     "grant_expired",
@@ -86,14 +85,6 @@ pub struct Controller {
         skip_serializing_if = "Option::is_none"
     )]
     pub delegation: Option<DelegationAuthority>,
-    /// Earlier controllers of this principal whose credentials this key may
-    /// manage (Section 5.1). `None` when the field is absent.
-    #[serde(
-        default,
-        deserialize_with = "non_null_option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub supersedes: Option<Vec<AgentId>>,
     #[serde(
         default,
         deserialize_with = "non_null_option",
@@ -117,7 +108,6 @@ impl Controller {
             valid_from,
             name: None,
             delegation: None,
-            supersedes: None,
             retired_at: None,
             invalid_from: None,
         }
@@ -167,9 +157,10 @@ pub struct PrincipalDocument {
     pub controllers: Vec<Controller>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired_controllers: Vec<Controller>,
-    /// Delegation query endpoint; required when any controller carries `delegation`.
+    /// Origin of the authoritative delegation service; required when any
+    /// controller carries `delegation`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegation_query_url: Option<String>,
+    pub delegation_service: Option<String>,
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, Value>,
@@ -247,7 +238,6 @@ pub struct DelegationCredential {
     pub expires_at: Option<i64>,
     pub status: DelegationStatus,
     pub controller: AgentId,
-    pub owner_controller: AgentId,
     pub grant_event_id: String,
     pub event_id: String,
     pub accepted_at: i64,
@@ -361,10 +351,6 @@ pub fn validate_controller(controller: &Controller, retired: bool) -> Result<()>
         }
         _ => {}
     }
-    if let Some(supersedes) = &controller.supersedes {
-        let ids: Vec<String> = supersedes.iter().map(ToString::to_string).collect();
-        strings(&ids, "supersedes", false)?;
-    }
     if retired {
         let end = controller
             .retired_at
@@ -410,17 +396,6 @@ pub fn validate_principal_document(document: &PrincipalDocument) -> Result<()> {
             }
         }
     }
-    // Succession (Section 5.1): each entry names another, earlier record.
-    for record in records.values() {
-        for id in record.supersedes.iter().flatten() {
-            match records.get(id.as_str()) {
-                Some(predecessor)
-                    if predecessor.id != record.id
-                        && predecessor.valid_from < record.valid_from => {}
-                _ => return fail("invalid supersedes entry"),
-            }
-        }
-    }
     strings(&document.aliases, "aliases", true)?;
     for alias in &document.aliases {
         validate_https_url(alias, "alias")?;
@@ -428,10 +403,10 @@ pub fn validate_principal_document(document: &PrincipalDocument) -> Result<()> {
     if let Some(url) = &document.avatar_url {
         validate_https_url(url, "avatar_url")?;
     }
-    match &document.delegation_query_url {
-        Some(url) => validate_https_url(url, "delegation_query_url")?,
+    match &document.delegation_service {
+        Some(origin) => validate_origin(origin)?,
         None if delegates => {
-            return fail("delegation_query_url is required when a controller carries delegation")
+            return fail("delegation_service is required when a controller carries delegation")
         }
         None => {}
     }
@@ -463,30 +438,25 @@ pub fn is_principal_alias(document: &PrincipalDocument, url: &str) -> bool {
     document.aliases.iter().any(|alias| alias == url)
 }
 
-/// The lineage of a controller (Section 5.1): its own ID plus, transitively,
-/// every record it supersedes. A restricted controller owns a credential
-/// whose `owner_controller` is in its lineage.
-pub fn controller_lineage(
-    document: &PrincipalDocument,
-    controller_id: &AgentId,
-) -> BTreeSet<AgentId> {
-    let records: BTreeMap<&AgentId, &Controller> = document
-        .controllers
-        .iter()
-        .chain(document.retired_controllers.iter())
-        .map(|record| (&record.id, record))
-        .collect();
-    let mut lineage = BTreeSet::new();
-    let mut pending = vec![controller_id.clone()];
-    while let Some(id) = pending.pop() {
-        if !lineage.insert(id.clone()) {
-            continue;
+/// The Section 5 management rule: a restricted controller may replace, revoke,
+/// or enumerate a credential only when every scope and audience of its latest
+/// grant is within the controller's ceiling; an unrestricted controller covers
+/// every credential of the principal.
+pub fn controller_covers_credential(
+    controller: &Controller,
+    credential: &DelegationCredential,
+) -> bool {
+    match &controller.delegation {
+        None => false,
+        Some(DelegationAuthority::Restricted(policy)) => {
+            credential.scopes.iter().all(|x| policy.scopes.contains(x))
+                && credential
+                    .audiences
+                    .iter()
+                    .all(|x| policy.audiences.contains(x))
         }
-        if let Some(record) = records.get(&id) {
-            pending.extend(record.supersedes.iter().flatten().cloned());
-        }
+        Some(_) => unrestricted(controller),
     }
-    lineage
 }
 
 pub fn validate_delegation_grant_payload(
@@ -665,9 +635,6 @@ pub fn materialize_delegation_credential(
                 expires_at: payload.expires_at,
                 status,
                 controller: envelope.event.actor.clone(),
-                owner_controller: previous
-                    .map(|p| p.owner_controller.clone())
-                    .unwrap_or_else(|| envelope.event.actor.clone()),
                 grant_event_id: envelope.hash.clone(),
                 event_id: envelope.hash.clone(),
                 accepted_at,
@@ -725,11 +692,12 @@ pub fn validate_controller_enumeration(
     document: &PrincipalDocument,
     actor: &AgentId,
     now: i64,
-    owner: &AgentId,
+    credential: &DelegationCredential,
 ) -> Result<()> {
     validate_principal_document(document)?;
     timestamp(now, "now")?;
-    owner.public_key_bytes()?;
+    strings(&credential.scopes, "scopes", false)?;
+    strings(&credential.audiences, "audiences", false)?;
     let c = document
         .controllers
         .iter()
@@ -744,10 +712,10 @@ pub fn validate_controller_enumeration(
             "controller cannot enumerate",
         ));
     }
-    if !unrestricted(c) && !controller_lineage(document, actor).contains(owner) {
+    if !controller_covers_credential(c, credential) {
         return Err(SdkError::protocol(
-            "not_owner_controller",
-            "controller does not own credential",
+            "delegation_ceiling_exceeded",
+            "credential is outside the controller's ceiling",
         ));
     }
     Ok(())
@@ -778,8 +746,8 @@ pub fn validate_delegation_use(
 /// service-trusting evidence policy: checks the accepted record of its latest
 /// grant — signature, Controller binding, ceiling, and authority interval —
 /// confirms that the grant matches the credential, and then checks use for
-/// `audience` at `now`. Ownership and `supersedes` lineage govern management,
-/// which the service enforced at acceptance; auditors replay them with
+/// `audience` at `now`. The Section 5 management rule governs management,
+/// which the service enforced at acceptance; auditors replay it with
 /// [`audit_delegation_history`]. Relying parties still enforce scopes and
 /// constraints and authenticate the subject.
 pub fn verify_delegation_credential(
@@ -855,7 +823,7 @@ fn latest_grant_matches(
 
 /// Auditor check (Section 8): replays every accepted record of a credential
 /// against the authoritative principal document — signatures, controller
-/// intervals, ceilings, and ownership lineage — and confirms that the replay
+/// intervals, and ceilings — and confirms that the replay
 /// matches the credential. Relying parties use
 /// [`verify_delegation_credential`] instead.
 pub fn audit_delegation_history(
@@ -885,7 +853,6 @@ pub fn audit_delegation_history(
         || r.accepted_at != credential.accepted_at
         || r.event_id != credential.event_id
         || r.grant_event_id != credential.grant_event_id
-        || r.owner_controller != credential.owner_controller
         || r.controller != credential.controller
         || (r.status == DelegationStatus::Revoked)
             != (credential.status == DelegationStatus::Revoked)
@@ -921,7 +888,8 @@ fn check_previous(
 ) -> Result<()> {
     let (id, principal) = event_identity(event);
     if let Some(previous) = previous {
-        previous.owner_controller.public_key_bytes()?;
+        strings(&previous.scopes, "previous.scopes", false)?;
+        strings(&previous.audiences, "previous.audiences", false)?;
         timestamp(previous.accepted_at, "previous.accepted_at")?;
         let same_subject = match &event.payload {
             DelegationPayload::Grant(p) => p.subject == previous.subject,
@@ -1008,12 +976,10 @@ fn check_authority(
         if accepted_at < previous.accepted_at {
             return fail("acceptance order reversed");
         }
-        if !unrestricted(c)
-            && !controller_lineage(document, &event.actor).contains(&previous.owner_controller)
-        {
+        if !controller_covers_credential(c, previous) {
             return Err(SdkError::protocol(
-                "not_owner_controller",
-                "controller does not own credential",
+                "delegation_ceiling_exceeded",
+                "credential is outside the controller's ceiling",
             ));
         }
     }
@@ -1254,7 +1220,7 @@ mod tests {
             protocol: PROTOCOL.into(),
             retired_controllers: vec![],
             controllers: vec![Controller::new(controller.agent_id(), "local", 0)],
-            delegation_query_url: None,
+            delegation_service: None,
             updated_at: 1000,
             extra: BTreeMap::new(),
         };
@@ -1287,9 +1253,7 @@ mod tests {
             protocol: PROTOCOL.into(),
             retired_controllers: vec![],
             controllers: vec![Controller::new(controller.agent_id(), "local", 0)],
-            delegation_query_url: Some(
-                "https://profiles.example.com/v1/delegations/query".to_owned(),
-            ),
+            delegation_service: Some("https://profiles.example.com".to_owned()),
             updated_at: 1000,
             extra: BTreeMap::new(),
         };
@@ -1303,7 +1267,7 @@ mod tests {
         let mut delegating = document;
         delegating.controllers[0].delegation = Some(DelegationAuthority::Unrestricted("*".into()));
         validate_principal_document(&delegating).unwrap();
-        delegating.delegation_query_url = None;
+        delegating.delegation_service = None;
         assert!(validate_principal_document(&delegating).is_err());
     }
 

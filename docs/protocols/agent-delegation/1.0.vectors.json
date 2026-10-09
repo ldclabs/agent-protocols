@@ -41,8 +41,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -85,8 +85,8 @@
             "delegation": "*"
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -96,6 +96,7 @@
         "id": "https://example.com/p",
         "protocol": "agent-delegation/1.0",
         "controllers": [],
+        "delegation_service": "https://example.com",
         "updated_at": 1000,
         "retired_controllers": [
           {
@@ -113,8 +114,7 @@
             "retired_at": 500,
             "invalid_from": 300
           }
-        ],
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        ]
       }
     },
     {
@@ -124,6 +124,7 @@
         "id": "https://example.com/p",
         "protocol": "agent-delegation/1.0",
         "controllers": [],
+        "delegation_service": "https://example.com",
         "updated_at": 1000,
         "retired_controllers": [
           {
@@ -140,8 +141,7 @@
             },
             "retired_at": 100
           }
-        ],
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        ]
       }
     },
     {
@@ -158,8 +158,8 @@
             "delegation": null
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -176,8 +176,8 @@
             "delegation": {}
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -194,8 +194,8 @@
             "delegation": "all"
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -222,8 +222,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -245,8 +245,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -270,8 +270,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -296,8 +296,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -321,8 +321,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -346,8 +346,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -371,8 +371,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -396,8 +396,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -421,8 +421,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -446,8 +446,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -471,8 +471,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -496,8 +496,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -521,8 +521,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -546,8 +546,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -571,8 +571,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -596,8 +596,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -621,8 +621,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -646,8 +646,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -671,8 +671,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -696,8 +696,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -722,8 +722,8 @@
             "retired_at": 500
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -748,8 +748,8 @@
             "invalid_from": 200
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -773,6 +773,7 @@
             }
           }
         ],
+        "delegation_service": "https://example.com",
         "updated_at": 1000,
         "retired_controllers": [
           {
@@ -789,8 +790,7 @@
             },
             "retired_at": 500
           }
-        ],
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        ]
       }
     },
     {
@@ -825,8 +825,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com",
+        "updated_at": 1000
       }
     },
     {
@@ -836,6 +836,7 @@
         "id": "https://example.com/p",
         "protocol": "agent-delegation/1.0",
         "controllers": [],
+        "delegation_service": "https://example.com",
         "updated_at": 1000,
         "retired_controllers": [
           {
@@ -853,8 +854,7 @@
             "retired_at": 500,
             "invalid_from": 501
           }
-        ],
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        ]
       }
     },
     {
@@ -864,6 +864,7 @@
         "id": "https://example.com/p",
         "protocol": "agent-delegation/1.0",
         "controllers": [],
+        "delegation_service": "https://example.com",
         "updated_at": 1000,
         "retired_controllers": [
           {
@@ -879,12 +880,11 @@
               ]
             }
           }
-        ],
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        ]
       }
     },
     {
-      "name": "delegation without query url",
+      "name": "delegation without service",
       "valid": false,
       "document": {
         "id": "https://example.com/p",
@@ -908,7 +908,7 @@
       }
     },
     {
-      "name": "signing only without query url",
+      "name": "signing only without service",
       "valid": true,
       "document": {
         "id": "https://example.com/p",
@@ -924,136 +924,16 @@
       }
     },
     {
-      "name": "successor supersedes retired key",
-      "valid": true,
+      "name": "delegation service is a URL, not an origin",
+      "valid": false,
       "document": {
         "id": "https://example.com/p",
         "protocol": "agent-delegation/1.0",
         "controllers": [
-          {
-            "id": "did:agent:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-            "source": "https://dmsg.net",
-            "valid_from": 600,
-            "delegation": {
-              "scopes": [
-                "message.draft",
-                "inbox.screen"
-              ],
-              "audiences": [
-                "https://dmsg.net"
-              ]
-            },
-            "supersedes": [
-              "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            ]
-          }
-        ],
-        "updated_at": 1000,
-        "retired_controllers": [
           {
             "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "source": "https://dmsg.net",
             "valid_from": 100,
-            "delegation": {
-              "scopes": [
-                "message.draft"
-              ],
-              "audiences": [
-                "https://dmsg.net"
-              ]
-            },
-            "retired_at": 600
-          }
-        ],
-        "delegation_query_url": "https://example.com/v1/delegations/query"
-      }
-    },
-    {
-      "name": "supersedes unknown key",
-      "valid": false,
-      "document": {
-        "id": "https://example.com/p",
-        "protocol": "agent-delegation/1.0",
-        "controllers": [
-          {
-            "id": "did:agent:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-            "source": "https://dmsg.net",
-            "valid_from": 600,
-            "delegation": {
-              "scopes": [
-                "message.draft",
-                "inbox.screen"
-              ],
-              "audiences": [
-                "https://dmsg.net"
-              ]
-            },
-            "supersedes": [
-              "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            ]
-          }
-        ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
-      }
-    },
-    {
-      "name": "supersedes itself",
-      "valid": false,
-      "document": {
-        "id": "https://example.com/p",
-        "protocol": "agent-delegation/1.0",
-        "controllers": [
-          {
-            "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "source": "https://dmsg.net",
-            "valid_from": 600,
-            "delegation": {
-              "scopes": [
-                "message.draft",
-                "inbox.screen"
-              ],
-              "audiences": [
-                "https://dmsg.net"
-              ]
-            },
-            "supersedes": [
-              "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            ]
-          }
-        ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
-      }
-    },
-    {
-      "name": "supersedes a later key",
-      "valid": false,
-      "document": {
-        "id": "https://example.com/p",
-        "protocol": "agent-delegation/1.0",
-        "controllers": [
-          {
-            "id": "did:agent:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-            "source": "https://dmsg.net",
-            "valid_from": 100,
-            "delegation": {
-              "scopes": [
-                "message.draft",
-                "inbox.screen"
-              ],
-              "audiences": [
-                "https://dmsg.net"
-              ]
-            },
-            "supersedes": [
-              "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            ]
-          },
-          {
-            "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "source": "https://dmsg.net",
-            "valid_from": 600,
             "delegation": {
               "scopes": [
                 "message.draft"
@@ -1064,54 +944,8 @@
             }
           }
         ],
-        "updated_at": 1000,
-        "delegation_query_url": "https://example.com/v1/delegations/query"
-      }
-    },
-    {
-      "name": "supersedes duplicates",
-      "valid": false,
-      "document": {
-        "id": "https://example.com/p",
-        "protocol": "agent-delegation/1.0",
-        "controllers": [
-          {
-            "id": "did:agent:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-            "source": "https://dmsg.net",
-            "valid_from": 600,
-            "delegation": {
-              "scopes": [
-                "message.draft",
-                "inbox.screen"
-              ],
-              "audiences": [
-                "https://dmsg.net"
-              ]
-            },
-            "supersedes": [
-              "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-              "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            ]
-          }
-        ],
-        "updated_at": 1000,
-        "retired_controllers": [
-          {
-            "id": "did:agent:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "source": "https://dmsg.net",
-            "valid_from": 100,
-            "delegation": {
-              "scopes": [
-                "message.draft"
-              ],
-              "audiences": [
-                "https://dmsg.net"
-              ]
-            },
-            "retired_at": 600
-          }
-        ],
-        "delegation_query_url": "https://example.com/v1/delegations/query"
+        "delegation_service": "https://example.com/v1/delegations/query",
+        "updated_at": 1000
       }
     }
   ],
@@ -1171,15 +1005,25 @@
             "audiences": [
               "https://dmsg.net"
             ]
-          },
-          "supersedes": [
-            "did:agent:Y1VpHBeKj_kQB6dHivuVXvc1LGPnslcDmEz3iybiGlY"
-          ]
+          }
         },
         {
           "id": "did:agent:11l5O7wTooGagnx2rbb7qKSa7gB_SfLQmS2ZuCWtLEg",
           "source": "https://tokenlist.ing",
           "valid_from": 100
+        },
+        {
+          "id": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+          "source": "https://dmsg.net",
+          "valid_from": 100,
+          "delegation": {
+            "scopes": [
+              "inbox.screen"
+            ],
+            "audiences": [
+              "https://dmsg.net"
+            ]
+          }
         }
       ],
       "retired_controllers": [
@@ -1213,7 +1057,7 @@
           "invalid_from": 300
         }
       ],
-      "delegation_query_url": "https://example.com/p/query",
+      "delegation_service": "https://example.com",
       "updated_at": 2000
     },
     "cases": [
@@ -1398,7 +1242,7 @@
         "expected": "delegation_ceiling_exceeded"
       },
       {
-        "name": "restricted controller replaces a credential it does not own",
+        "name": "restricted controller replaces another key's credential within its ceiling",
         "mode": "live",
         "envelope": {
           "hash": "3Llv6vFzSRNzo34wq0Bo-hvUP1YPENQXqwxxHyfy0Q8",
@@ -1438,16 +1282,15 @@
           "expires_at": 1900,
           "status": "active",
           "controller": "did:agent:IVL40Zt5HSRFMkLhXy6rbLfP-ntqXtMAl5YOBpiB2xI",
-          "owner_controller": "did:agent:IVL40Zt5HSRFMkLhXy6rbLfP-ntqXtMAl5YOBpiB2xI",
           "grant_event_id": "ujuZKPUbteZLYbUdzHYDIzpIMamMK1Fu8-9c2_lBUgw",
           "event_id": "ujuZKPUbteZLYbUdzHYDIzpIMamMK1Fu8-9c2_lBUgw",
           "accepted_at": 250,
           "checked_at": 250
         },
-        "expected": "not_owner_controller"
+        "expected": "ok"
       },
       {
-        "name": "restricted successor revokes its predecessor's credential",
+        "name": "restricted controller revokes another key's credential within its ceiling",
         "mode": "live",
         "envelope": {
           "hash": "_cwSk-V_IMQ_5SB6NyfZVtlNlm78C_AUKO2gsQfCzlw",
@@ -1479,13 +1322,52 @@
           "expires_at": 1900,
           "status": "active",
           "controller": "did:agent:Y1VpHBeKj_kQB6dHivuVXvc1LGPnslcDmEz3iybiGlY",
-          "owner_controller": "did:agent:Y1VpHBeKj_kQB6dHivuVXvc1LGPnslcDmEz3iybiGlY",
           "grant_event_id": "-NL9zBVKGWgRpGEEP2ZRfNk410iWZcTdJ5DWBp9E2NA",
           "event_id": "-NL9zBVKGWgRpGEEP2ZRfNk410iWZcTdJ5DWBp9E2NA",
           "accepted_at": 250,
           "checked_at": 250
         },
         "expected": "ok"
+      },
+      {
+        "name": "restricted controller revokes a credential outside its ceiling",
+        "mode": "live",
+        "envelope": {
+          "hash": "P42YqRNqornlVb2awR3TpTC2vaFMOKGdqae7H8N9fNs",
+          "event": {
+            "protocol": "agent-delegation/1.0",
+            "type": "delegation.revoke",
+            "actor": "did:agent:cN-eInmtvsbRK_KSEYTJIi6yTthSAFv2QBOfUuWc2a4",
+            "created_at": 300,
+            "nonce": 1,
+            "payload": {
+              "id": "del_o",
+              "principal_id": "https://example.com/p"
+            }
+          },
+          "signature": "7bM2wLLkupsMXM4Y0EsnZ-8abjQ8H9w__FuPmZ2A4K3imXUn0hvEDHMui7cj7GQM9_qFRiSBa4SuxZsQqFBtCw"
+        },
+        "accepted_at": 300,
+        "previous": {
+          "id": "del_o",
+          "protocol": "agent-delegation/1.0",
+          "principal_id": "https://example.com/p",
+          "subject": "did:agent:1O7Bhp-xuKToF1Fq1akxVXy1aAXD6xbo86gD1kffeGk",
+          "scopes": [
+            "message.draft"
+          ],
+          "audiences": [
+            "https://dmsg.net"
+          ],
+          "expires_at": 1900,
+          "status": "active",
+          "controller": "did:agent:Y1VpHBeKj_kQB6dHivuVXvc1LGPnslcDmEz3iybiGlY",
+          "grant_event_id": "-NL9zBVKGWgRpGEEP2ZRfNk410iWZcTdJ5DWBp9E2NA",
+          "event_id": "-NL9zBVKGWgRpGEEP2ZRfNk410iWZcTdJ5DWBp9E2NA",
+          "accepted_at": 250,
+          "checked_at": 250
+        },
+        "expected": "delegation_ceiling_exceeded"
       },
       {
         "name": "unrestricted controller revokes another key's credential",
@@ -1520,7 +1402,6 @@
           "expires_at": 1900,
           "status": "active",
           "controller": "did:agent:25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83_MH50",
-          "owner_controller": "did:agent:25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83_MH50",
           "grant_event_id": "wGKRpvoWvKOkg_clrzX0KcGv0lm0712Mbo8sFhNkuEU",
           "event_id": "wGKRpvoWvKOkg_clrzX0KcGv0lm0712Mbo8sFhNkuEU",
           "accepted_at": 250,
@@ -1569,7 +1450,6 @@
           "expires_at": 1900,
           "status": "active",
           "controller": "did:agent:25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83_MH50",
-          "owner_controller": "did:agent:25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83_MH50",
           "grant_event_id": "wGKRpvoWvKOkg_clrzX0KcGv0lm0712Mbo8sFhNkuEU",
           "event_id": "wGKRpvoWvKOkg_clrzX0KcGv0lm0712Mbo8sFhNkuEU",
           "accepted_at": 250,
@@ -1924,7 +1804,7 @@
         }
       },
       {
-        "name": "scoped successor challenge request",
+        "name": "scoped challenge request",
         "definition": "controllerChallengeRequest",
         "valid": true,
         "value": {
@@ -1938,10 +1818,7 @@
             "audiences": [
               "https://dmsg.net"
             ]
-          },
-          "supersedes": [
-            "did:agent:-VxqXf8DH6x7GmpUtmEMrrg7Offopmvhb_X6pKUR7S0"
-          ]
+          }
         }
       },
       {

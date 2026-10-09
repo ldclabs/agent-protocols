@@ -6,7 +6,7 @@ Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Agent 
 
 - `agent_protocols.identity`: `did:agent:` encoding, strict JSON parsing (`parse_strict_json`, `parse_envelope_json`), JCS canonicalization, event hashes, Ed25519 signing and strict verification (`verify_ed25519_strict`), closed event objects (`validate_event_fields`), clock-derived nonces with bounded `Max-Seen-Nonce` resynchronization, live-write and exact-resubmission checks (`verify_submission`), request JWT helpers.
 - `agent_protocols.profile`: `profile.update` payload helpers, delegation discovery hints, validation, succession checks, materialization.
-- `agent_protocols.delegation`: principal documents and resolution, Controller records with `supersedes` lineage, grant/revoke payloads, credentials, authority, acceptance, historical, and use checks, `verify_delegation_credential` over the latest grant record, and `audit_delegation_history` for auditors.
+- `agent_protocols.delegation`: principal documents and resolution, Controller records, grant/revoke payloads, credentials, authority, acceptance, historical, and use checks, `verify_delegation_credential` over the latest grant record, and `audit_delegation_history` for auditors.
 - `agent_protocols.discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
 - `agent_protocols.knowledge`: signed research contributions, known-set lifecycle views, evidence and profile bindings, in-memory storage, exact queries with checkpoint-bound pagination, single-page ranked search, discovery, and response validation.
 - `agent_protocols.mail` and `agent_protocols.mail_state`: signed mailbox cards, sender-signed PyHPKE packets, historical key retention, card pins, inbox deduplication, and synchronized relay state with snapshots.
@@ -36,11 +36,11 @@ ADP room writes carry a signed `base_seq` / `base_hash`. Message and control wri
 
 ## Delegation
 
-Controllers are records shared by `controllers` and `retired_controllers`: `id` is the Agent ID, `source` is an HTTPS origin or `local`, and `valid_from` starts the binding. Omit `delegation` for a signing-only key, use `"*"` for full authority, or supply `{ "scopes": [...], "audiences": [...] }` for restricted authority. `supersedes` lets a successor key manage its predecessors' credentials. Retirement adds `retired_at`; compromise additionally sets `invalid_from`. A principal that grants delegations publishes `delegation_query_url`.
+Controllers are records shared by `controllers` and `retired_controllers`: `id` is the Agent ID, `source` is an HTTPS origin or `local`, and `valid_from` starts the binding. Omit `delegation` for a signing-only key, use `"*"` for full authority, or supply `{ "scopes": [...], "audiences": [...] }` for restricted authority. A restricted key manages (replaces, revokes, enumerates) only credentials whose scopes and audiences fall within its own ceiling. Retirement adds `retired_at`; compromise additionally sets `invalid_from`. A principal that grants delegations publishes its `delegation_service` origin.
 
 Controller registration (Section 4.3) proves key possession with a fixed-shape challenge: `signer.sign_controller_challenge(challenge)` signs its exact UTF-8 bytes and refuses any other string, and `verify_controller_challenge(agent_id, challenge, signature)` applies the strict Ed25519 rules. Issuing challenges, binding them to the owner-approved fields, and expiry stay with the provider.
 
-Grants name the canonical `principal_id`. Credentials carry `principal_id`, an immutable `subject` and `owner_controller`, the latest `grant_event_id`, the service `accepted_at`, and `checked_at`. Materialization requires an explicit acceptance time and trusted previous state; it never derives acceptance time from `created_at`.
+Grants name the canonical `principal_id`. Credentials carry `principal_id`, an immutable `subject`, the latest `grant_event_id`, the service `accepted_at`, and `checked_at`. Materialization requires an explicit acceptance time and trusted previous state; it never derives acceptance time from `created_at`.
 
 The validation layers have different responsibilities:
 
@@ -80,7 +80,7 @@ The suite includes both `unittest.TestCase` classes and pytest functions. Runnin
 `agent_protocols.knowledge` implements Agent Knowledge 1.0: signed publications,
 assessments and retractions; strict payload and dependency validation; deterministic
 known-set lifecycle views; evidence byte verification; and exact query, batch,
-ranked-search and discovery contracts. The JSON Schema ships inside the installed
+ranked-search (with portable lexical matching) and discovery contracts. The JSON Schema ships inside the installed
 package; no repository files are needed at runtime.
 
 ```python

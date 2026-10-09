@@ -367,6 +367,11 @@ export class DelegationClient {
     this.queryUrl = endpoints?.query ?? `${this.delegationsUrl}/query`;
   }
 
+  /** The query endpoint this client uses: discovered, or the RECOMMENDED default. */
+  get queryEndpoint(): string {
+    return this.queryUrl;
+  }
+
   /**
    * Builds a client for the service at `origin` from its discovery document,
    * falling back to the default paths when the service publishes none.
@@ -456,10 +461,10 @@ export class DelegationClient {
   }
 
   /**
-   * Queries the endpoint a principal document names in its
-   * `delegation_query_url`. That is how a relying party reaches the
-   * authoritative service for a principal without trusting a URL supplied by
-   * whoever presented the credential.
+   * Queries an explicit endpoint, such as the `query` endpoint discovered at
+   * a principal's `delegation_service` origin. A relying party reaches a
+   * principal's authoritative service through that origin, never through a
+   * URL supplied by whoever presented the credential.
    */
   async queryDelegationsAt(
     queryUrl: string,

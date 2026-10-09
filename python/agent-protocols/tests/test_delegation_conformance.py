@@ -74,7 +74,7 @@ ORIGIN = "https://dmsg.net"
 
 
 def document():
-    return {"protocol": d.DELEGATION_PROTOCOL, "id": ID, "updated_at": 2000, "delegation_query_url": f"{ID}/query", "controllers": [
+    return {"protocol": d.DELEGATION_PROTOCOL, "id": ID, "updated_at": 2000, "delegation_service": "https://example.com", "controllers": [
         {"id": SIGNER.agent_id(), "source": ORIGIN, "valid_from": 100, "delegation": {"scopes": ["draft"], "audiences": [ORIGIN]}},
         {"id": ROOT.agent_id(), "source": "local", "valid_from": 100, "delegation": "*"},
     ]}
@@ -98,7 +98,6 @@ def test_authority_ownership_and_materialization():
     assert credential["accepted_at"] == 250
     assert credential["checked_at"] == 250
     assert credential["principal_id"] == ID
-    assert credential["owner_controller"] == SIGNER.agent_id()
     assert credential["grant_event_id"] == envelope["hash"]
     d.validate_delegation_use(credential, ORIGIN, 300)
     with pytest.raises(AgentProtocolError):
@@ -120,18 +119,21 @@ def test_authority_ownership_and_materialization():
     with pytest.raises(AgentProtocolError) as not_permitted:
         d.validate_delegation_acceptance(envelope, only, ID, 250)
     assert not_permitted.value.code == "delegation_not_permitted"
+    # A restricted key manages another key's credential only within its ceiling.
     root_credential = d.materialize_delegation_credential(grant(ROOT), accepted_at=250)
-    with pytest.raises(AgentProtocolError) as not_owner:
-        d.validate_delegation_acceptance(envelope, doc, ID, 300, root_credential)
-    assert not_owner.value.code == "not_owner_controller"
+    d.validate_delegation_acceptance(envelope, doc, ID, 300, root_credential)
+    wide = d.materialize_delegation_credential(grant(ROOT, 2, scopes=["draft", "admin"]), accepted_at=250)
+    with pytest.raises(AgentProtocolError) as outside:
+        d.validate_delegation_acceptance(envelope, doc, ID, 300, wide)
+    assert outside.value.code == "delegation_ceiling_exceeded"
     with pytest.raises(AgentProtocolError):
-        d.validate_controller_enumeration(doc, SIGNER.agent_id(), 300, ROOT.agent_id())
-    d.validate_controller_enumeration(doc, ROOT.agent_id(), 300, SIGNER.agent_id())
+        d.validate_controller_enumeration(doc, SIGNER.agent_id(), 300, wide)
+    d.validate_controller_enumeration(doc, SIGNER.agent_id(), 300, credential)
+    d.validate_controller_enumeration(doc, ROOT.agent_id(), 300, wide)
     revocation = revoke()
     d.validate_delegation_acceptance(revocation, doc, ID, 450, credential)
     revoked = d.materialize_delegation_credential(revocation, accepted_at=450, previous=credential)
     assert revoked["status"] == "revoked"
-    assert revoked["owner_controller"] == SIGNER.agent_id()
     assert revoked["controller"] == ROOT.agent_id()
     assert revoked["grant_event_id"] == envelope["hash"]
     assert revoked["audiences"] == credential["audiences"]
@@ -140,7 +142,7 @@ def test_authority_ownership_and_materialization():
     assert missing.value.code == "credential_not_found"
     replacement = grant(ROOT, 3)
     d.validate_delegation_acceptance(replacement, doc, ID, 500, revoked)
-    assert d.materialize_delegation_credential(replacement, accepted_at=500, previous=revoked)["owner_controller"] == SIGNER.agent_id()
+    assert d.materialize_delegation_credential(replacement, accepted_at=500, previous=revoked)["controller"] == ROOT.agent_id()
 
 
 def test_a_replacement_cannot_move_a_credential_to_another_subject():
@@ -172,32 +174,34 @@ def test_retired_history_needs_accepted_records_and_the_original_ceiling():
         d.validate_historical_delegation({"envelope": grant(nonce=2, scopes=["admin"]), "accepted_at": 250}, doc, ID)
 
 
-def test_a_restricted_successor_manages_its_predecessors_credentials():
+def test_a_restricted_controller_manages_credentials_within_its_ceiling():
     doc = document()
     retired = doc["controllers"].pop(0)
     retired["retired_at"] = 600
     doc["retired_controllers"] = [retired]
     doc["controllers"].append({
         "id": SUCCESSOR.agent_id(), "source": ORIGIN, "valid_from": 600,
-        "delegation": {"scopes": ["draft", "inbox"], "audiences": [ORIGIN]}, "supersedes": [SIGNER.agent_id()],
+        "delegation": {"scopes": ["draft", "inbox"], "audiences": [ORIGIN]},
     })
     d.validate_principal_document(doc)
-    assert d.controller_lineage(doc, SUCCESSOR.agent_id()) == {SIGNER.agent_id(), SUCCESSOR.agent_id()}
     credential = d.materialize_delegation_credential(grant(), accepted_at=250)
+    assert d.controller_covers_credential(doc["controllers"][1], credential)
     revocation = revoke(SUCCESSOR, 700, 1)
     d.validate_delegation_acceptance(revocation, doc, ID, 700, credential)
-    d.validate_controller_enumeration(doc, SUCCESSOR.agent_id(), 700, SIGNER.agent_id())
+    d.validate_controller_enumeration(doc, SUCCESSOR.agent_id(), 700, credential)
     widened = SUCCESSOR.sign_event(d.delegation_grant_event(SUCCESSOR.agent_id(), 700, 2, {
         "id": "del", "principal_id": ID, "subject": ROOT.agent_id(), "scopes": ["draft", "inbox"],
         "audiences": [ORIGIN], "expires_at": 1900,
     }))
     d.validate_delegation_acceptance(widened, doc, ID, 700, credential)
-    assert d.materialize_delegation_credential(widened, accepted_at=700, previous=credential)["owner_controller"] == SIGNER.agent_id()
-    # Without the supersedes link the successor owns nothing.
-    unlinked = deepcopy(doc)
-    del unlinked["controllers"][1]["supersedes"]
-    with pytest.raises(AgentProtocolError, match="own"):
-        d.validate_delegation_acceptance(revocation, unlinked, ID, 700, credential)
+    assert d.materialize_delegation_credential(widened, accepted_at=700, previous=credential)["controller"] == SUCCESSOR.agent_id()
+    # A credential outside the ceiling cannot be revoked, replaced, or enumerated by the restricted key.
+    wide = d.materialize_delegation_credential(grant(ROOT, 3, scopes=["draft", "admin"]), accepted_at=250)
+    assert not d.controller_covers_credential(doc["controllers"][1], wide)
+    with pytest.raises(AgentProtocolError, match="ceiling"):
+        d.validate_delegation_acceptance(revocation, doc, ID, 700, wide)
+    with pytest.raises(AgentProtocolError, match="ceiling"):
+        d.validate_controller_enumeration(doc, SUCCESSOR.agent_id(), 700, wide)
 
 
 def test_verify_delegation_credential_checks_the_latest_grant():

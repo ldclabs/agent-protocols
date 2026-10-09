@@ -78,7 +78,7 @@ class DelegationTests(unittest.TestCase):
                 "id": "https://profiles.example.com/org/acme",
                 "protocol": DELEGATION_PROTOCOL, "updated_at": 1000, "controllers": [{"id": controller.agent_id(), "source": "local", "valid_from": 0}],
                 "aliases": ["https://profiles.example.com/acme"],
-                "delegation_query_url": "https://profiles.example.com/v1/delegations/query",
+                "delegation_service": "https://profiles.example.com",
             }
         )
         with self.assertRaises(Exception):

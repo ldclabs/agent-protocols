@@ -297,10 +297,10 @@ class DelegationClient:
         request: dict[str, Any],
         jwt: str | None = None,
     ) -> dict[str, Any]:
-        """Queries the endpoint a principal document names in its
-        `delegation_query_url`. That is how a relying party reaches the
-        authoritative service for a principal without trusting a URL supplied
-        by whoever presented the credential."""
+        """Queries an explicit endpoint, such as the `query` endpoint discovered
+        at a principal's `delegation_service` origin. A relying party reaches a
+        principal's authoritative service through that origin, never through a
+        URL supplied by whoever presented the credential."""
         validate_delegation_query_request(request, allow_enumeration=jwt is not None)
         return _read_json(self.session.post(query_url, json=request, headers=_auth_headers(jwt)))
 

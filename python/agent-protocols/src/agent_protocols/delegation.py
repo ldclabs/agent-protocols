@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, TypedDict, Literal
+from typing import Any, Mapping, TypedDict, Literal
 from copy import deepcopy
 from urllib.parse import urlparse
 import re
@@ -34,7 +34,6 @@ DELEGATION_ERROR_CODES = (
     "controller_not_current",
     "delegation_not_permitted",
     "delegation_ceiling_exceeded",
-    "not_owner_controller",
     "credential_not_found",
     "credential_identity_mismatch",
     "grant_expired",
@@ -59,8 +58,6 @@ class _ControllerBinding(TypedDict):
 class Controller(_ControllerBinding, total=False):
     name: str
     delegation: Literal["*"] | DelegationPolicy
-    # Earlier controllers of this principal whose credentials this key may manage.
-    supersedes: list[AgentId]
     retired_at: int
     invalid_from: int
 
@@ -122,10 +119,6 @@ def validate_controller(controller: Controller, retired: bool = False) -> None:
         _strings(policy["audiences"], "audiences")
         for audience in policy["audiences"]:
             validate_audience(audience)
-    if "supersedes" in controller:
-        _strings(controller["supersedes"], "supersedes")
-        for agent_id in controller["supersedes"]:
-            validate_agent_id(agent_id)
     if retired:
         _timestamp(controller.get("retired_at"), "retired_at")
         if controller["retired_at"] < controller["valid_from"]:
@@ -158,22 +151,16 @@ def validate_principal_document(document: PrincipalDocument) -> None:
             delegates = delegates or "delegation" in record
             if record["valid_from"] > document["updated_at"] or record.get("retired_at", 0) > document["updated_at"]:
                 _fail("controller timestamp exceeds document update")
-    # Succession (Section 5.1): each entry names another, earlier record.
-    for record in records.values():
-        for agent_id in record.get("supersedes", []):
-            predecessor = records.get(agent_id)
-            if predecessor is None or agent_id == record["id"] or predecessor["valid_from"] >= record["valid_from"]:
-                _fail("invalid supersedes entry")
     if "aliases" in document:
         _strings(document["aliases"], "aliases", empty=True)
         for alias in document["aliases"]:
             _validate_https_url(alias, "alias")
     if "avatar_url" in document:
         _validate_https_url(document["avatar_url"], "avatar_url")
-    if "delegation_query_url" in document:
-        _validate_https_url(document["delegation_query_url"], "delegation_query_url")
+    if "delegation_service" in document:
+        validate_origin(document["delegation_service"])
     elif delegates:
-        _fail("delegation_query_url is required when a controller carries delegation")
+        _fail("delegation_service is required when a controller carries delegation")
 
 
 def validate_principal_resolution(document: PrincipalDocument, resolved_url: str) -> None:
@@ -196,23 +183,17 @@ def is_principal_alias(document: PrincipalDocument, url: str) -> bool:
     return isinstance(aliases, list) and url in aliases
 
 
-def controller_lineage(document: PrincipalDocument, controller_id: AgentId) -> set[AgentId]:
-    """The lineage of a controller (Section 5.1): its own ID plus, transitively,
-    every record it supersedes. A restricted controller owns a credential whose
-    `owner_controller` is in its lineage."""
-    records = {
-        record["id"]: record
-        for record in [*document.get("controllers", []), *document.get("retired_controllers", [])]
-    }
-    lineage: set[AgentId] = set()
-    pending = [controller_id]
-    while pending:
-        agent_id = pending.pop()
-        if agent_id in lineage:
-            continue
-        lineage.add(agent_id)
-        pending.extend(records.get(agent_id, {}).get("supersedes", []))
-    return lineage
+def controller_covers_credential(controller: Controller, credential: Mapping[str, Any]) -> bool:
+    """The Section 5 management rule: a restricted controller may replace, revoke,
+    or enumerate a credential only when every scope and audience of its latest
+    grant is within the controller's ceiling; an unrestricted controller covers
+    every credential of the principal."""
+    policy = controller.get("delegation")
+    if policy is None:
+        return False
+    if policy == "*":
+        return True
+    return set(credential["scopes"]) <= set(policy["scopes"]) and set(credential["audiences"]) <= set(policy["audiences"])
 
 
 def validate_delegation_grant_payload(
@@ -352,7 +333,6 @@ def materialize_delegation_credential(
         **deepcopy(payload),
         "protocol": DELEGATION_PROTOCOL,
         "controller": event["actor"],
-        "owner_controller": previous["owner_controller"] if previous else event["actor"],
         "status": status,
         "event_id": envelope["hash"],
         "grant_event_id": envelope["hash"],
@@ -386,18 +366,20 @@ def validate_historical_delegation(record: DelegationRecord, document: Principal
     _authority(record["envelope"]["event"], document, record.get("accepted_at"), previous, True)
 
 
-def validate_controller_enumeration(document: PrincipalDocument, actor: AgentId, now: int, owner: AgentId) -> None:
+def validate_controller_enumeration(document: PrincipalDocument, actor: AgentId, now: int,
+                                    credential: Mapping[str, Any]) -> None:
     """Per-result authorization; caller authenticates actor and resolves document."""
     validate_principal_document(document)
     _timestamp(now, "now")
-    validate_agent_id(owner)
+    _strings(credential.get("scopes"), "scopes")
+    _strings(credential.get("audiences"), "audiences")
     controller = next((c for c in document["controllers"] if c["id"] == actor), None)
     if not controller or now < controller["valid_from"]:
         raise AgentProtocolError("controller_not_current", "controller cannot enumerate")
     if "delegation" not in controller:
         raise AgentProtocolError("delegation_not_permitted", "controller cannot enumerate")
-    if controller["delegation"] != "*" and owner not in controller_lineage(document, actor):
-        raise AgentProtocolError("not_owner_controller", "controller does not own credential")
+    if not controller_covers_credential(controller, credential):
+        raise AgentProtocolError("delegation_ceiling_exceeded", "credential is outside the controller's ceiling")
 
 
 def validate_delegation_use(credential: DelegationCredential, audience: str, now: int) -> None:
@@ -425,8 +407,8 @@ def verify_delegation_credential(
     service-trusting evidence policy: checks the accepted record of its latest
     grant — signature, Controller binding, ceiling, and authority interval —
     confirms that the grant matches the credential, and then checks use for
-    `audience` at `now`. Ownership and `supersedes` lineage govern management,
-    which the service enforced at acceptance; auditors replay them with
+    `audience` at `now`. The Section 5 management rule governs management,
+    which the service enforced at acceptance; auditors replay it with
     :func:`audit_delegation_history`. Relying parties still enforce scopes and
     constraints and authenticate the subject."""
     reasons: list[str] = []
@@ -473,7 +455,8 @@ def _previous(event: Event, previous: DelegationCredential | None) -> None:
         if event["type"] == DELEGATION_REVOKE:
             raise AgentProtocolError("credential_not_found", "revocation requires previous credential")
         return
-    validate_agent_id(previous.get("owner_controller"))
+    _strings(previous.get("scopes"), "previous.scopes")
+    _strings(previous.get("audiences"), "previous.audiences")
     _timestamp(previous.get("accepted_at"), "previous.accepted_at")
     delegation_id, principal_id = _event_identity(event)
     same_subject = event["type"] != DELEGATION_GRANT or event["payload"]["subject"] == previous.get("subject")
@@ -515,9 +498,8 @@ def _authority(event: Event, document: PrincipalDocument, accepted_at: int,
     _previous(event, previous)
     if previous and accepted_at < previous["accepted_at"]:
         _fail("acceptance order reversed")
-    if (previous and controller["delegation"] != "*"
-            and previous["owner_controller"] not in controller_lineage(document, event["actor"])):
-        raise AgentProtocolError("not_owner_controller", "controller does not own credential")
+    if previous and not controller_covers_credential(controller, previous):
+        raise AgentProtocolError("delegation_ceiling_exceeded", "credential is outside the controller's ceiling")
     if grant:
         if "expires_at" in payload and payload["expires_at"] <= accepted_at:
             raise AgentProtocolError("grant_expired", "grant expired at acceptance")
@@ -542,7 +524,7 @@ def audit_delegation_history(
 ) -> None:
     """Auditor check (Section 8): replays every accepted record of a credential
     against the authoritative principal document — signatures, controller
-    intervals, ceilings, and ownership lineage — and confirms that the replay
+    intervals, and ceilings — and confirms that the replay
     matches the credential. Relying parties use :func:`verify_delegation_credential`."""
     if not records:
         _fail("no accepted records")
@@ -554,7 +536,7 @@ def audit_delegation_history(
         )
     assert replayed is not None
     # Only status and the service's check time may differ from event replay.
-    fields = (*_GRANT_FIELDS, "protocol", "event_id", "grant_event_id", "owner_controller", "controller", "accepted_at")
+    fields = (*_GRANT_FIELDS, "protocol", "event_id", "grant_event_id", "controller", "accepted_at")
     expected = {field: replayed[field] for field in fields if field in replayed}
     actual = {field: credential[field] for field in fields if field in credential}
     if rfc8785.dumps(expected) != rfc8785.dumps(actual) or (

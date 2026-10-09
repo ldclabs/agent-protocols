@@ -579,10 +579,15 @@ impl DelegationClient {
             .await
     }
 
-    /// Queries the endpoint a principal document names in its
-    /// `delegation_query_url`. That is how a relying party reaches the
-    /// authoritative service for a principal without trusting a URL supplied
-    /// by whoever presented the credential.
+    /// The query endpoint this client uses: discovered, or the RECOMMENDED default.
+    pub fn query_url(&self) -> &str {
+        &self.query_url
+    }
+
+    /// Queries an explicit endpoint, such as the `query` endpoint discovered at
+    /// a principal's `delegation_service` origin. A relying party reaches a
+    /// principal's authoritative service through that origin, never through a
+    /// URL supplied by whoever presented the credential.
     pub async fn query_delegations_at(
         &self,
         query_url: &str,

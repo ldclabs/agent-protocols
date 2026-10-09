@@ -886,13 +886,12 @@ export class LocalConnector {
     };
   }
 
-  /** The principal's authoritative delegation service, located from its `delegation_query_url`. */
+  /** The principal's authoritative delegation service, located from its `delegation_service` origin. */
   private async principalDelegationService(document: PrincipalDocument): Promise<DelegationClient> {
-    const queryUrl = document.delegation_query_url;
-    if (queryUrl === undefined) {
-      throw invalidPayload(`principal ${document.id} publishes no delegation_query_url`);
+    const origin = document.delegation_service;
+    if (origin === undefined) {
+      throw invalidPayload(`principal ${document.id} publishes no delegation_service`);
     }
-    const origin = serviceOrigin(queryUrl);
     this.requireAllowedHost(origin);
     return DelegationClient.discover(origin, this.fetchImpl);
   }
@@ -933,8 +932,8 @@ export class LocalConnector {
     // The authoritative service is the one the principal names, never one
     // supplied by whoever presented a credential.
     const service = await this.principalDelegationService(document);
-    const queryUrl = document.delegation_query_url!;
-    const response = await service.queryDelegationsAt(queryUrl, {
+    const queryUrl = service.queryEndpoint;
+    const response = await service.queryDelegations({
       subject: input.subject ?? this.agentId(),
       principal_id: document.id,
       id: input.id,

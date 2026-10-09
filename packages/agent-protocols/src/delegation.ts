@@ -29,7 +29,6 @@ export const DELEGATION_ERROR_CODES: readonly string[] = [
   "controller_not_current",
   "delegation_not_permitted",
   "delegation_ceiling_exceeded",
-  "not_owner_controller",
   "credential_not_found",
   "credential_identity_mismatch",
   "grant_expired",
@@ -65,8 +64,6 @@ export interface Controller {
   valid_from: number;
   name?: string;
   delegation?: "*" | { scopes: string[]; audiences: string[] };
-  /** Earlier controllers of this principal whose credentials this key may manage. */
-  supersedes?: AgentId[];
   retired_at?: number;
   invalid_from?: number;
 }
@@ -80,8 +77,8 @@ export interface PrincipalDocument extends PrincipalDescriptor {
   protocol: typeof DELEGATION_PROTOCOL;
   controllers: Controller[];
   retired_controllers?: Controller[];
-  /** Delegation query endpoint; required when any controller carries `delegation`. */
-  delegation_query_url?: string;
+  /** Origin of the authoritative delegation service; required when any controller carries `delegation`. */
+  delegation_service?: string;
   updated_at: number;
   extra?: Record<string, unknown>;
 }
@@ -121,7 +118,6 @@ export interface DelegationCredential {
   expires_at?: number;
   status: DelegationStatus;
   controller: AgentId;
-  owner_controller: AgentId;
   grant_event_id: string;
   event_id: string;
   accepted_at: number;
@@ -213,10 +209,6 @@ export function validateController(controller: Controller, retired = false): voi
     stringList(policy.audiences, "audiences");
     for (const audience of policy.audiences) validateAudience(audience);
   }
-  if (controller.supersedes !== undefined) {
-    stringList(controller.supersedes, "supersedes");
-    for (const id of controller.supersedes) validateAgentId(id);
-  }
   if (retired) {
     timestamp(controller.retired_at, "retired_at");
     if (controller.retired_at! < controller.valid_from) fail("retired_at precedes valid_from");
@@ -244,20 +236,13 @@ export function validatePrincipalDocument(document: PrincipalDocument): void {
       if (record.valid_from > document.updated_at || (record.retired_at !== undefined && record.retired_at > document.updated_at)) fail("controller timestamp exceeds document update");
     }
   }
-  // Succession (Section 5.1): each entry names another, earlier record.
-  for (const record of records.values()) {
-    for (const id of record.supersedes ?? []) {
-      const predecessor = records.get(id);
-      if (!predecessor || id === record.id || predecessor.valid_from >= record.valid_from) fail("invalid supersedes entry");
-    }
-  }
   if (document.aliases !== undefined) {
     stringList(document.aliases, "aliases", true);
     for (const alias of document.aliases) validateHttpsUrl(alias, "alias");
   }
   if (document.avatar_url !== undefined) validateHttpsUrl(document.avatar_url, "avatar_url");
-  if (document.delegation_query_url !== undefined) validateHttpsUrl(document.delegation_query_url, "delegation_query_url");
-  else if (delegates) fail("delegation_query_url is required when a controller carries delegation");
+  if (document.delegation_service !== undefined) validateOrigin(document.delegation_service);
+  else if (delegates) fail("delegation_service is required when a controller carries delegation");
 }
 
 /**
@@ -291,22 +276,20 @@ export function isPrincipalAlias(
 }
 
 /**
- * The lineage of a controller (Section 5.1): its own ID plus, transitively,
- * every record it supersedes. A restricted controller owns a credential whose
- * `owner_controller` is in its lineage.
+ * The Section 5 management rule: a restricted controller may replace, revoke,
+ * or enumerate a credential only when every scope and audience of its latest
+ * grant is within the controller's ceiling; an unrestricted controller covers
+ * every credential of the principal.
  */
-export function controllerLineage(document: PrincipalDocument, controllerId: AgentId): Set<AgentId> {
-  const records = new Map<string, Controller>();
-  for (const record of [...document.controllers, ...document.retired_controllers ?? []]) records.set(record.id, record);
-  const lineage = new Set<AgentId>();
-  const pending = [controllerId];
-  while (pending.length > 0) {
-    const id = pending.pop()!;
-    if (lineage.has(id)) continue;
-    lineage.add(id);
-    pending.push(...(records.get(id)?.supersedes ?? []));
-  }
-  return lineage;
+export function controllerCoversCredential(
+  controller: Controller,
+  credential: Pick<DelegationCredential, "scopes" | "audiences">,
+): boolean {
+  if (controller.delegation === undefined) return false;
+  if (controller.delegation === "*") return true;
+  const policy = controller.delegation;
+  return credential.scopes.every((x) => policy.scopes.includes(x)) &&
+    credential.audiences.every((x) => policy.audiences.includes(x));
 }
 
 export function validateDelegationGrantPayload(
@@ -454,8 +437,7 @@ export function materializeDelegationCredential(
   }
   const status = options.status ?? "active";
   if (!["active", "suspended", "expired", "revoked"].includes(status)) fail("invalid status");
-  return { ...structuredClone(payload), protocol: DELEGATION_PROTOCOL, controller: event.actor,
-    owner_controller: previous?.owner_controller ?? event.actor, status,
+  return { ...structuredClone(payload), protocol: DELEGATION_PROTOCOL, controller: event.actor, status,
     event_id: envelope.hash, grant_event_id: envelope.hash, accepted_at: options.acceptedAt, checked_at: checkedAt };
 }
 
@@ -485,13 +467,19 @@ export function validateHistoricalDelegation(record: DelegationRecord,
 }
 
 /** Per-result enumeration check; the caller authenticates actor and resolves the document. */
-export function validateControllerEnumeration(document: PrincipalDocument, actor: AgentId, now: number, owner: AgentId): void {
-  validatePrincipalDocument(document); timestamp(now, "now"); validateAgentId(owner);
+export function validateControllerEnumeration(
+  document: PrincipalDocument,
+  actor: AgentId,
+  now: number,
+  credential: Pick<DelegationCredential, "scopes" | "audiences">,
+): void {
+  validatePrincipalDocument(document); timestamp(now, "now");
+  stringList(credential.scopes, "scopes"); stringList(credential.audiences, "audiences");
   const controller = document.controllers.find(c => c.id === actor);
   if (!controller || now < controller.valid_from) throw protocolError("controller_not_current", "controller cannot enumerate");
   if (controller.delegation === undefined) throw protocolError("delegation_not_permitted", "controller cannot enumerate");
-  if (controller.delegation !== "*" && !controllerLineage(document, actor).has(owner)) {
-    throw protocolError("not_owner_controller", "controller does not own credential");
+  if (!controllerCoversCredential(controller, credential)) {
+    throw protocolError("delegation_ceiling_exceeded", "credential is outside the controller's ceiling");
   }
 }
 
@@ -516,8 +504,8 @@ const GRANT_FIELDS = [
  * service-trusting evidence policy: checks the accepted record of its latest
  * grant — signature, Controller binding, ceiling, and authority interval —
  * confirms that the grant matches the credential, and then checks use for
- * `audience` at `now`. Ownership and `supersedes` lineage govern management,
- * which the service enforced at acceptance; auditors replay them with
+ * `audience` at `now`. The Section 5 management rule governs management,
+ * which the service enforced at acceptance; auditors replay it with
  * {@link auditDelegationHistory}. Relying parties still enforce scopes and
  * constraints and authenticate the subject.
  */
@@ -562,7 +550,7 @@ export function verifyDelegationCredential(
 /**
  * Auditor check (Section 8): replays every accepted record of a credential
  * against the authoritative principal document — signatures, controller
- * intervals, ceilings, and ownership lineage — and confirms that the replay
+ * intervals, and ceilings — and confirms that the replay
  * matches the credential. Relying parties use {@link verifyDelegationCredential}.
  */
 export function auditDelegationHistory(
@@ -580,7 +568,7 @@ export function auditDelegationHistory(
   const r = replayed!;
   // Only status and the service's check time may differ from event replay.
   const fields = [
-    ...GRANT_FIELDS, "protocol", "event_id", "grant_event_id", "owner_controller", "controller", "accepted_at",
+    ...GRANT_FIELDS, "protocol", "event_id", "grant_event_id", "controller", "accepted_at",
   ] as const;
   if (fields.some((field) => canonicalize(r[field]) !== canonicalize(credential[field])) ||
       (r.status === "revoked") !== (credential.status === "revoked")) {
@@ -607,7 +595,8 @@ function checkPrevious(event: Event<DelegationPayload>, previous?: DelegationCre
     if (event.type === DELEGATION_REVOKE) throw protocolError("credential_not_found", "revocation requires previous credential");
     return;
   }
-  validateAgentId(previous.owner_controller); timestamp(previous.accepted_at, "previous.accepted_at");
+  stringList(previous.scopes, "previous.scopes"); stringList(previous.audiences, "previous.audiences");
+  timestamp(previous.accepted_at, "previous.accepted_at");
   const { id, principalId } = eventIdentity(event);
   const sameSubject = event.type !== DELEGATION_GRANT || (event.payload as DelegationGrantPayload).subject === previous.subject;
   if (previous.id !== id || previous.principal_id !== principalId || previous.protocol !== DELEGATION_PROTOCOL || !sameSubject) {
@@ -635,8 +624,8 @@ function checkAuthority(event: Event<DelegationPayload>, document: PrincipalDocu
   }
   checkPrevious(event, previous);
   if (previous && acceptedAt < previous.accepted_at) fail("acceptance order reversed");
-  if (previous && controller.delegation !== "*" && !controllerLineage(document, event.actor).has(previous.owner_controller)) {
-    throw protocolError("not_owner_controller", "controller does not own credential");
+  if (previous && !controllerCoversCredential(controller, previous)) {
+    throw protocolError("delegation_ceiling_exceeded", "credential is outside the controller's ceiling");
   }
   if (grant) {
     const payload = event.payload as DelegationGrantPayload;

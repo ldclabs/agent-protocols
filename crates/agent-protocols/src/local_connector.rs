@@ -819,20 +819,21 @@ impl LocalConnector {
     }
 
     /// The principal's authoritative delegation service, located from its
-    /// `delegation_query_url`.
+    /// `delegation_service` origin.
     async fn principal_delegation_service(
         &self,
         document: &PrincipalDocument,
     ) -> Result<(DelegationClient, String)> {
-        let query_url = document.delegation_query_url.clone().ok_or_else(|| {
+        let origin = document.delegation_service.clone().ok_or_else(|| {
             SdkError::InvalidPayload(format!(
-                "principal {} publishes no delegation_query_url",
+                "principal {} publishes no delegation_service",
                 document.id
             ))
         })?;
-        let origin = service_origin(&query_url)?;
         self.require_allowed_host(&origin)?;
-        Ok((DelegationClient::discover(&origin).await, query_url))
+        let service = DelegationClient::discover(&origin).await;
+        let query_url = service.query_url().to_owned();
+        Ok((service, query_url))
     }
 
     /// Resolves the principal and refuses when the active Agent ID is not one
@@ -875,9 +876,7 @@ impl LocalConnector {
             id: input.id,
             ..DelegationQueryRequest::default()
         };
-        let response = service
-            .query_delegations_at(&query_url, &request, None)
-            .await?;
+        let response = service.query_delegations(&request, None).await?;
         let now = unix_ms();
         let mut delegations = Vec::new();
         for credential in response.result {
