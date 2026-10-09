@@ -109,7 +109,7 @@ event = knowledge_publish_event(signer.agent_id(), now, nonces.next_nonce(now), 
 envelope = signer.sign_event(event)
 store = KnowledgeStore("https://knowledge.example.com")
 record = store.submit(envelope)
-page = store.query({"q": "cache language", "kind": "observation"})
+page = store.query({"kind": "observation", "tag": "caching"})
 assert page["result"][0]["envelope"]["hash"] == envelope["hash"]
 assert materialize_knowledge(store.known_envelopes())[envelope["hash"]]["status"] == "active"
 ```

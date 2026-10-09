@@ -446,14 +446,16 @@ pub fn controller_covers_credential(
     controller: &Controller,
     credential: &DelegationCredential,
 ) -> bool {
+    within_ceiling(controller, &credential.scopes, &credential.audiences)
+}
+
+/// The Section 5 ceiling shared by issuance and management.
+fn within_ceiling(controller: &Controller, scopes: &[String], audiences: &[String]) -> bool {
     match &controller.delegation {
         None => false,
         Some(DelegationAuthority::Restricted(policy)) => {
-            credential.scopes.iter().all(|x| policy.scopes.contains(x))
-                && credential
-                    .audiences
-                    .iter()
-                    .all(|x| policy.audiences.contains(x))
+            scopes.iter().all(|x| policy.scopes.contains(x))
+                && audiences.iter().all(|x| policy.audiences.contains(x))
         }
         Some(_) => unrestricted(controller),
     }
@@ -990,18 +992,11 @@ fn check_authority(
                 "grant expired at acceptance",
             ));
         }
-        if let Some(DelegationAuthority::Restricted(policy)) = &c.delegation {
-            if payload.scopes.iter().any(|x| !policy.scopes.contains(x))
-                || payload
-                    .audiences
-                    .iter()
-                    .any(|x| !policy.audiences.contains(x))
-            {
-                return Err(SdkError::protocol(
-                    "delegation_ceiling_exceeded",
-                    "grant exceeds controller delegation policy",
-                ));
-            }
+        if !within_ceiling(c, &payload.scopes, &payload.audiences) {
+            return Err(SdkError::protocol(
+                "delegation_ceiling_exceeded",
+                "grant exceeds controller delegation policy",
+            ));
         }
     }
     Ok(())

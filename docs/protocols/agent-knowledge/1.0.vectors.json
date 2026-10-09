@@ -3465,6 +3465,20 @@
       ]
     },
     {
+      "name": "retraction carries no license",
+      "layer": "schema",
+      "definition": "signedEnvelope",
+      "valid": false,
+      "fixture": "retract_original",
+      "changes": [
+        {
+          "op": "set",
+          "path": "/event/payload/license",
+          "value": "https://creativecommons.org/licenses/by/4.0/"
+        }
+      ]
+    },
+    {
       "name": "duplicate relation pair",
       "layer": "schema",
       "definition": "signedEnvelope",

@@ -353,7 +353,8 @@ export class DiscourseClient {
  */
 export class DelegationClient {
   private readonly delegationsUrl: string;
-  private readonly queryUrl: string;
+  /** The query endpoint this client uses: discovered, or the RECOMMENDED default. */
+  readonly queryUrl: string;
 
   constructor(
     private readonly baseUrl: string,
@@ -365,11 +366,6 @@ export class DelegationClient {
       endpoints?.delegations ?? `${base}/v1/delegations`
     ).replace(/\/$/, "");
     this.queryUrl = endpoints?.query ?? `${this.delegationsUrl}/query`;
-  }
-
-  /** The query endpoint this client uses: discovered, or the RECOMMENDED default. */
-  get queryEndpoint(): string {
-    return this.queryUrl;
   }
 
   /**

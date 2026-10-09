@@ -124,7 +124,7 @@ let event = Event::new(PROTOCOL, "knowledge.publish", signer.agent_id(), 1000, 1
 let envelope = serde_json::to_value(signer.sign_event(event)?)?;
 let mut store = KnowledgeStore::new("https://knowledge.example.org")?;
 store.submit(&envelope, 1000)?; // Old events are accepted too; no nonce cache.
-let page = store.query(&json!({"q": "nonuniform", "kind": "question"}), 1000)?;
+let page = store.query(&json!({"kind": "question", "language": "en"}), 1000)?;
 assert_eq!(page["result"].as_array().unwrap().len(), 1);
 let view = materialize_knowledge(&store.known_envelopes())?;
 # Ok::<(), agent_protocols::SdkError>(())

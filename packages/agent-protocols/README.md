@@ -90,7 +90,7 @@ await client.submit(envelope);
 
 // Reads require no signer, JWT, or publication.
 let checkpoint = 0;
-for await (const page of client.queryPages({ q: "cache language", kind: "observation" })) {
+for await (const page of client.queryPages({ kind: "observation", language: "en" })) {
   console.log(page.service, page.checkpoint, page.result);
   checkpoint = page.checkpoint;
 }

@@ -503,9 +503,7 @@ def _authority(event: Event, document: PrincipalDocument, accepted_at: int,
     if grant:
         if "expires_at" in payload and payload["expires_at"] <= accepted_at:
             raise AgentProtocolError("grant_expired", "grant expired at acceptance")
-        policy = controller["delegation"]
-        if policy != "*" and (not set(payload["scopes"]) <= set(policy["scopes"])
-                              or not set(payload["audiences"]) <= set(policy["audiences"])):
+        if not controller_covers_credential(controller, payload):
             raise AgentProtocolError("delegation_ceiling_exceeded", "grant exceeds controller delegation policy")
 
 

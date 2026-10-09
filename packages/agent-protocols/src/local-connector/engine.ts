@@ -932,7 +932,6 @@ export class LocalConnector {
     // The authoritative service is the one the principal names, never one
     // supplied by whoever presented a credential.
     const service = await this.principalDelegationService(document);
-    const queryUrl = service.queryEndpoint;
     const response = await service.queryDelegations({
       subject: input.subject ?? this.agentId(),
       principal_id: document.id,
@@ -950,7 +949,7 @@ export class LocalConnector {
       }
       delegations.push(verifyDelegationCredential(credential, records, document, document.id, input.audience, now));
     }
-    return { canonical_id: document.id, query_url: queryUrl, delegations };
+    return { canonical_id: document.id, query_url: service.queryUrl, delegations };
   }
 
   private async delegationsList(input: DelegationsListInput): Promise<unknown> {

@@ -630,11 +630,8 @@ function checkAuthority(event: Event<DelegationPayload>, document: PrincipalDocu
   if (grant) {
     const payload = event.payload as DelegationGrantPayload;
     if (payload.expires_at !== undefined && payload.expires_at <= acceptedAt) throw protocolError("grant_expired", "grant expired at acceptance");
-    if (controller.delegation !== "*") {
-      const policy = controller.delegation;
-      if (payload.scopes.some(x => !policy.scopes.includes(x)) || payload.audiences.some(x => !policy.audiences.includes(x))) {
-        throw protocolError("delegation_ceiling_exceeded", "grant exceeds controller delegation policy");
-      }
+    if (!controllerCoversCredential(controller, payload)) {
+      throw protocolError("delegation_ceiling_exceeded", "grant exceeds controller delegation policy");
     }
   }
 }

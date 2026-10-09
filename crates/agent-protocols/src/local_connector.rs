@@ -823,7 +823,7 @@ impl LocalConnector {
     async fn principal_delegation_service(
         &self,
         document: &PrincipalDocument,
-    ) -> Result<(DelegationClient, String)> {
+    ) -> Result<DelegationClient> {
         let origin = document.delegation_service.clone().ok_or_else(|| {
             SdkError::InvalidPayload(format!(
                 "principal {} publishes no delegation_service",
@@ -831,9 +831,7 @@ impl LocalConnector {
             ))
         })?;
         self.require_allowed_host(&origin)?;
-        let service = DelegationClient::discover(&origin).await;
-        let query_url = service.query_url().to_owned();
-        Ok((service, query_url))
+        Ok(DelegationClient::discover(&origin).await)
     }
 
     /// Resolves the principal and refuses when the active Agent ID is not one
@@ -869,7 +867,7 @@ impl LocalConnector {
         let (document, _) = self.resolve_principal(&input.principal_id).await?;
         // The authoritative service is the one the principal names, never one
         // supplied by whoever presented a credential.
-        let (service, query_url) = self.principal_delegation_service(&document).await?;
+        let service = self.principal_delegation_service(&document).await?;
         let request = DelegationQueryRequest {
             subject: Some(input.subject.unwrap_or_else(|| self.agent_id())),
             principal_id: Some(document.id.clone()),
@@ -900,7 +898,7 @@ impl LocalConnector {
         }
         Ok(json!({
             "canonical_id": document.id,
-            "query_url": query_url,
+            "query_url": service.query_url(),
             "delegations": delegations,
         }))
     }
@@ -938,7 +936,7 @@ impl LocalConnector {
 
     async fn delegation_grant(&mut self, input: DelegationGrantInput) -> Result<Value> {
         let principal = self.controller_principal(&input.principal_id).await?;
-        let (service, _) = self.principal_delegation_service(&principal).await?;
+        let service = self.principal_delegation_service(&principal).await?;
         let previous = Self::delegation_previous(&service, &input.id).await?;
         let mut payload = DelegationGrantPayload::new(
             input.id,
@@ -965,7 +963,7 @@ impl LocalConnector {
 
     async fn delegation_revoke(&mut self, input: DelegationRevokeInput) -> Result<Value> {
         let principal = self.controller_principal(&input.principal_id).await?;
-        let (service, _) = self.principal_delegation_service(&principal).await?;
+        let service = self.principal_delegation_service(&principal).await?;
         let previous = Self::delegation_previous(&service, &input.id).await?;
         let payload = DelegationRevokePayload {
             id: input.id,
