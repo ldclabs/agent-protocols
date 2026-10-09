@@ -1,7 +1,7 @@
 import json
 from base64 import urlsafe_b64encode
 from copy import deepcopy
-from hashlib import sha256, sha3_256
+from hashlib import sha3_256
 from pathlib import Path
 
 import pytest
@@ -240,10 +240,8 @@ def test_direct_join_follows_invites_and_open_roles():
     assert not d.can_join_directly("private", None, stranger, "observer")
     assert d.effective_open_roles("public", None) == ["observer"]
     assert d.effective_open_roles("restricted", None) == []
-    assert d.effective_open_roles("public", {"observer_allowed": False}) == []
     for bad in (
         {"open_roles": ["moderator"]},
-        {"observer_allowed": False, "open_roles": ["observer"]},
         {"moderator_agent_ids": []},
         {"invites": {invited: "owner"}},
         {"max_speakers": 0},
@@ -314,11 +312,12 @@ def test_registry_imports_packs_and_rejects_conflicts():
 
 def test_verifies_pack_digests():
     data = b"pack document bytes"
-    for algorithm, digest in (("sha256", sha256(data).digest()), ("sha3-256", sha3_256(data).digest())):
-        value = f"{algorithm}:" + urlsafe_b64encode(digest).rstrip(b"=").decode()
-        d.verify_pack_digest(data, value)
-        with pytest.raises(AgentProtocolError):
-            d.verify_pack_digest(b"tampered", value)
+    value = urlsafe_b64encode(sha3_256(data).digest()).rstrip(b"=").decode()
+    d.verify_pack_digest(data, value)
+    with pytest.raises(AgentProtocolError):
+        d.verify_pack_digest(b"tampered", value)
+    with pytest.raises(AgentProtocolError):
+        d.verify_pack_digest(data, f"sha3-256:{value}")
     with pytest.raises(AgentProtocolError):
         d.verify_pack_digest(data, "md5:abc")
 

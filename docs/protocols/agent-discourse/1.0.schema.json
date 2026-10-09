@@ -11,7 +11,7 @@
     },
     "contentDigest": {
       "type": "string",
-      "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
+      "pattern": "^[A-Za-z0-9_-]{43}$"
     },
     "eventHash": {
       "type": "string",
@@ -651,9 +651,6 @@
         "max_speakers": {
           "type": "integer",
           "minimum": 1
-        },
-        "observer_allowed": {
-          "type": "boolean"
         },
         "extra": {
           "$ref": "#/$defs/extra"

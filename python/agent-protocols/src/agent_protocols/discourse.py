@@ -89,7 +89,6 @@ DISCOURSE_ERROR_CODES = (
     "join_request_not_found",
     "join_request_not_pending",
     "member_banned",
-    "role_not_allowed",
     "max_speakers_exceeded",
     "membership_required",
     "room_head_mismatch",
@@ -109,8 +108,8 @@ MAX_MENTIONS = 32
 # Room IDs are host-assigned and URL-safe (Section 6.1).
 ROOM_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
-# `<algorithm>:<base64url-digest>` content digests (Section 12.5).
-CONTENT_DIGEST_PATTERN = re.compile(r"(sha256|sha3-256):[A-Za-z0-9_-]{43}")
+# Content digests (Section 12.5): the SHA3-256 of the bytes, encoded like an event hash.
+CONTENT_DIGEST_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}")
 
 # Custom event types must not use these prefixes.
 RESERVED_TYPE_PREFIXES = ("room.", "type.", "message.")
@@ -457,7 +456,7 @@ def validate_pack_import(declaration: dict[str, Any]) -> None:
             raise AgentProtocolError("invalid_event", "external pack must be an HTTPS URL")
         if not isinstance(declaration["digest"], str) or not CONTENT_DIGEST_PATTERN.fullmatch(declaration["digest"]):
             raise AgentProtocolError(
-                "invalid_event", "external pack digest must be <sha256|sha3-256>:<base64url-digest>"
+                "invalid_event", "external pack digest must be the base64url SHA3-256 of the pack bytes"
             )
     else:
         raise AgentProtocolError("invalid_event", "pack import requires either use, or pack with digest")
@@ -658,7 +657,7 @@ def _strip_annotations(schema: dict[str, Any]) -> dict[str, Any]:
     return stripped
 
 
-_ROOM_POLICY_FIELDS = frozenset({"invites", "open_roles", "max_speakers", "observer_allowed", "extra"})
+_ROOM_POLICY_FIELDS = frozenset({"invites", "open_roles", "max_speakers", "extra"})
 
 
 def validate_room_policy(policy: dict[str, Any] | None) -> None:
@@ -673,7 +672,6 @@ def validate_room_policy(policy: dict[str, Any] | None) -> None:
     max_speakers = policy.get("max_speakers")
     if max_speakers is not None and (type(max_speakers) is not int or max_speakers < 1):
         raise AgentProtocolError("invalid_event", "max_speakers must be a positive integer")
-    observer_allowed = policy.get("observer_allowed", True)
     invites = policy.get("invites")
     if invites is not None:
         if not isinstance(invites, dict):
@@ -682,8 +680,6 @@ def validate_room_policy(policy: dict[str, Any] | None) -> None:
             validate_agent_id(agent_id)
             if role not in ROLES:
                 raise AgentProtocolError("invalid_event", f"invalid invited role: {role}")
-            if role == "observer" and not observer_allowed:
-                raise AgentProtocolError("role_not_allowed", "observers are not allowed")
     open_roles = policy.get("open_roles")
     if open_roles is not None:
         if not isinstance(open_roles, list) or len(set(open_roles)) != len(open_roles):
@@ -691,8 +687,6 @@ def validate_room_policy(policy: dict[str, Any] | None) -> None:
         for role in open_roles:
             if role not in ("speaker", "observer"):
                 raise AgentProtocolError("invalid_event", f"open_roles cannot contain {role}")
-            if role == "observer" and not observer_allowed:
-                raise AgentProtocolError("role_not_allowed", "observers are not allowed")
 
 
 def validate_room_visibility_policy(visibility: Visibility, policy: dict[str, Any] | None) -> None:
@@ -705,11 +699,11 @@ def validate_room_visibility_policy(visibility: Visibility, policy: dict[str, An
 
 def effective_open_roles(visibility: Visibility, policy: dict[str, Any] | None) -> list[Role]:
     """The roles any agent may take by direct `room.join` (Section 8.3): the
-    explicit `open_roles`, or by default `observer` in a public room when
-    observers are allowed, and none otherwise."""
+    explicit `open_roles`, or by default `observer` in a public room and none
+    otherwise."""
     if policy is not None and policy.get("open_roles") is not None:
         return list(policy["open_roles"])
-    if visibility == "public" and (policy is None or policy.get("observer_allowed") is not False):
+    if visibility == "public":
         return ["observer"]
     return []
 
@@ -953,14 +947,11 @@ def _compile_schema(schema: dict[str, Any]) -> Draft202012Validator:
 
 
 def verify_pack_digest(data: bytes, digest: str) -> None:
-    """Verifies a `<algorithm>:<base64url-digest>` content digest over raw
-    bytes. Supports `sha256` and `sha3-256`."""
+    """Verifies a content digest (the base64url SHA3-256 of the bytes) over raw bytes."""
     if not isinstance(digest, str) or not CONTENT_DIGEST_PATTERN.fullmatch(digest):
         raise AgentProtocolError("pack_unavailable", f"invalid digest format: {digest}")
-    algorithm, _, expected = digest.partition(":")
-    raw = hashlib.sha256(data).digest() if algorithm == "sha256" else hashlib.sha3_256(data).digest()
-    actual = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-    if actual != expected:
+    actual = base64.urlsafe_b64encode(hashlib.sha3_256(data).digest()).rstrip(b"=").decode()
+    if actual != digest:
         raise AgentProtocolError("pack_unavailable", "pack digest mismatch")
 
 

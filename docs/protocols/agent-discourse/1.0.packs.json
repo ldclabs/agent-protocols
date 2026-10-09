@@ -324,7 +324,7 @@
               },
               "content_digest": {
                 "type": "string",
-                "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
+                "pattern": "^[A-Za-z0-9_-]{43}$"
               },
               "excerpt": {
                 "type": "string"
@@ -344,7 +344,7 @@
             },
             "additionalProperties": false
           },
-          "instructions": "Add one resource per event and cite it from later events by its envelope hash. content_digest uses the <algorithm>:<base64url-digest> form, where algorithm is sha256 or sha3-256."
+          "instructions": "Add one resource per event and cite it from later events by its envelope hash. content_digest is the SHA3-256 of the resource bytes, encoded like an event hash."
         },
         {
           "type": "graph.update",
@@ -606,7 +606,7 @@
               },
               "content_digest": {
                 "type": "string",
-                "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
+                "pattern": "^[A-Za-z0-9_-]{43}$"
               },
               "resource_event_ids": {
                 "type": "array",
@@ -941,7 +941,7 @@
                     },
                     "content_digest": {
                       "type": "string",
-                      "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
+                      "pattern": "^[A-Za-z0-9_-]{43}$"
                     },
                     "extra": {
                       "type": "object",
@@ -1055,7 +1055,7 @@
                     },
                     "content_digest": {
                       "type": "string",
-                      "pattern": "^(sha256|sha3-256):[A-Za-z0-9_-]{43}$"
+                      "pattern": "^[A-Za-z0-9_-]{43}$"
                     },
                     "extra": {
                       "type": "object",

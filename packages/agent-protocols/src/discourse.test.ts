@@ -179,9 +179,7 @@ test("direct join follows invites and open roles", () => {
   assert.equal(canJoinDirectly("private", undefined, stranger, "observer"), false);
   assert.deepEqual(effectiveOpenRoles("public", undefined), ["observer"]);
   assert.deepEqual(effectiveOpenRoles("restricted", undefined), []);
-  assert.deepEqual(effectiveOpenRoles("public", { observer_allowed: false }), []);
   assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { open_roles: ["moderator"] } })), /open_roles/);
-  assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { observer_allowed: false, open_roles: ["observer"] } })), /observers/);
   assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { invites: { [invited]: "owner" as never } } })), /invited role/);
   assert.throws(() => validateRoomCreatePayload(roomPayload({ policy: { moderator_agent_ids: [invited] } as never })), /unknown policy field/);
 });
@@ -247,10 +245,10 @@ test("rejects bad pack imports and declaration conflicts", () => {
     validatePackImport({
       use: packId.REACTIONS,
       pack: "https://example.com/p.json",
-      digest: "sha256:abc",
+      digest: "abc",
     }),
   );
-  assert.throws(() => validatePackImport({ pack: "http://example.com/p.json", digest: `sha256:${"A".repeat(43)}` }), /HTTPS/);
+  assert.throws(() => validatePackImport({ pack: "http://example.com/p.json", digest: "A".repeat(43) }), /HTTPS/);
   assert.throws(() => validatePackImport({ pack: "https://example.com/p.json", digest: "sha256:abc" }), /digest/);
   // room.create declarations may not name a type twice.
   assert.throws(
@@ -480,10 +478,9 @@ test("signs and validates type.define envelopes", () => {
 
 test("verifies pack digests", () => {
   const bytes = new TextEncoder().encode("pack document bytes");
-  const expected = `sha256:${createHash("sha256").update(bytes).digest("base64url")}`;
+  const expected = createHash("sha3-256").update(bytes).digest("base64url");
   assert.doesNotThrow(() => verifyPackDigest(bytes, expected));
-  const sha3 = `sha3-256:${createHash("sha3-256").update(bytes).digest("base64url")}`;
-  assert.doesNotThrow(() => verifyPackDigest(bytes, sha3));
+  assert.throws(() => verifyPackDigest(bytes, `sha3-256:${expected}`), /digest/);
   assert.throws(
     () => verifyPackDigest(new TextEncoder().encode("tampered"), expected),
     /digest/,
@@ -575,7 +572,7 @@ test("kernel defines twelve built-in types with membership events as signals", (
   assert.equal(eventAdvancesRoomHead("reaction.create", registry), false);
   assert.equal(eventAdvancesRoomHead("unknown.type", registry), true);
 
-  for (const code of ["member_banned", "role_not_allowed", "max_speakers_exceeded", "host_mismatch", "type_conflict", "invalid_type_schema", "join_request_not_pending"]) {
+  for (const code of ["member_banned", "max_speakers_exceeded", "host_mismatch", "type_conflict", "invalid_type_schema", "join_request_not_pending"]) {
     assert.ok(discourse.DISCOURSE_ERROR_CODES.includes(code), code);
   }
 });

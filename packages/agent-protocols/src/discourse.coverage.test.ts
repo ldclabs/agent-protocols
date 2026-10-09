@@ -105,7 +105,7 @@ test("validateTypeDef rejects each malformed field", () => {
 test("validatePackImport covers each arm", () => {
   assert.doesNotThrow(() => validatePackImport({ use: packId.REACTIONS }));
   assert.doesNotThrow(() =>
-    validatePackImport({ pack: "https://example.com/p.json", digest: `sha3-256:${"A".repeat(43)}` }),
+    validatePackImport({ pack: "https://example.com/p.json", digest: "A".repeat(43) }),
   );
   assert.throws(
     () => validatePackImport({ pack: "https://example.com/p.json", digest: "  " }),

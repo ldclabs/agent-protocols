@@ -12,7 +12,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::Sha256;
 use sha3::{Digest, Sha3_256};
 
 use crate::error::{Result, SdkError};
@@ -76,7 +75,7 @@ pub const CONTRACT_EVENT_TYPES: [&str; 4] = [
 ];
 
 /// ADP-specific error codes (Section 19); shared codes come from Agent Identity.
-pub const DISCOURSE_ERROR_CODES: [&str; 19] = [
+pub const DISCOURSE_ERROR_CODES: [&str; 18] = [
     "room_not_found",
     "room_not_active",
     "host_mismatch",
@@ -84,7 +83,6 @@ pub const DISCOURSE_ERROR_CODES: [&str; 19] = [
     "join_request_not_found",
     "join_request_not_pending",
     "member_banned",
-    "role_not_allowed",
     "max_speakers_exceeded",
     "membership_required",
     "room_head_mismatch",
@@ -349,8 +347,6 @@ pub struct RoomPolicy {
     pub open_roles: Option<Vec<Role>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_speakers: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observer_allowed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<BTreeMap<String, Value>>,
 }
@@ -1159,20 +1155,18 @@ pub fn validate_type_def(def: &TypeDef) -> Result<()> {
     Ok(())
 }
 
-/// `<algorithm>:<base64url-digest>` content digests (Section 12.5).
+/// Content digests (Section 12.5): the SHA3-256 of the bytes, encoded like an
+/// event hash.
 pub fn validate_content_digest(digest: &str) -> Result<()> {
-    let valid = digest.split_once(':').is_some_and(|(algorithm, value)| {
-        matches!(algorithm, "sha256" | "sha3-256")
-            && value.len() == 43
-            && value
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    });
+    let valid = digest.len() == 43
+        && digest
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
     if valid {
         Ok(())
     } else {
         Err(invalid_event(
-            "external pack digest must be <sha256|sha3-256>:<base64url-digest>",
+            "external pack digest must be the base64url SHA3-256 of the pack bytes",
         ))
     }
 }
@@ -1472,32 +1466,12 @@ pub fn validate_room_policy(policy: Option<&RoomPolicy>) -> Result<()> {
     if matches!(policy.max_speakers, Some(0)) {
         return Err(invalid_event("max_speakers must be a positive integer"));
     }
-    let observer_allowed = policy.observer_allowed.unwrap_or(true);
-    for role in policy.invites.iter().flat_map(|invites| invites.values()) {
-        if *role == Role::Observer && !observer_allowed {
-            return Err(SdkError::protocol(
-                "role_not_allowed",
-                "observers are not allowed",
-            ));
-        }
-    }
     if let Some(open_roles) = &policy.open_roles {
         if open_roles.iter().collect::<BTreeSet<_>>().len() != open_roles.len() {
             return Err(invalid_event("open_roles must be a list of unique roles"));
         }
-        for role in open_roles {
-            match role {
-                Role::Moderator => {
-                    return Err(invalid_event("open_roles cannot contain moderator"))
-                }
-                Role::Observer if !observer_allowed => {
-                    return Err(SdkError::protocol(
-                        "role_not_allowed",
-                        "observers are not allowed",
-                    ))
-                }
-                _ => {}
-            }
+        if open_roles.contains(&Role::Moderator) {
+            return Err(invalid_event("open_roles cannot contain moderator"));
         }
     }
     Ok(())
@@ -1520,13 +1494,13 @@ pub fn validate_room_visibility_policy(
 }
 
 /// The roles any agent may take by direct `room.join` (Section 8.3): the
-/// explicit `open_roles`, or by default `observer` in a public room when
-/// observers are allowed, and none otherwise.
+/// explicit `open_roles`, or by default `observer` in a public room and none
+/// otherwise.
 pub fn effective_open_roles(visibility: Visibility, policy: Option<&RoomPolicy>) -> Vec<Role> {
     if let Some(open_roles) = policy.and_then(|p| p.open_roles.clone()) {
         return open_roles;
     }
-    if visibility == Visibility::Public && policy.and_then(|p| p.observer_allowed) != Some(false) {
+    if visibility == Visibility::Public {
         vec![Role::Observer]
     } else {
         Vec::new()
@@ -1858,17 +1832,12 @@ fn compile_schema(schema: &Value) -> Result<jsonschema::Validator> {
         .map_err(|err| invalid_schema(format!("invalid type schema: {err}")))
 }
 
-/// Verifies a `<algorithm>:<base64url-digest>` content digest over raw bytes.
-/// Supports `sha256` and `sha3-256`.
+/// Verifies a content digest (the base64url SHA3-256 of the bytes) over raw
+/// bytes.
 pub fn verify_pack_digest(bytes: &[u8], digest: &str) -> Result<()> {
     validate_content_digest(digest)
         .map_err(|_| SdkError::PackUnavailable(format!("invalid digest format: {digest}")))?;
-    let (algorithm, expected) = digest.split_once(':').expect("validated digest");
-    let actual = match algorithm {
-        "sha256" => URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)),
-        _ => URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes)),
-    };
-    if actual == expected {
+    if URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes)) == digest {
         Ok(())
     } else {
         Err(SdkError::PackUnavailable("pack digest mismatch".to_owned()))
@@ -2711,22 +2680,11 @@ mod tests {
             &stranger,
             Role::Observer
         ));
-        let no_observers = RoomPolicy {
-            observer_allowed: Some(false),
-            ..RoomPolicy::default()
-        };
-        assert!(effective_open_roles(Visibility::Public, Some(&no_observers)).is_empty());
         let bad = RoomPolicy {
             open_roles: Some(vec![Role::Moderator]),
             ..RoomPolicy::default()
         };
         assert!(validate_room_policy(Some(&bad)).is_err());
-        let conflicting = RoomPolicy {
-            observer_allowed: Some(false),
-            open_roles: Some(vec![Role::Observer]),
-            ..RoomPolicy::default()
-        };
-        assert!(validate_room_policy(Some(&conflicting)).is_err());
         assert!(
             serde_json::from_value::<RoomPolicy>(json!({ "moderator_agent_ids": [] })).is_err()
         );
@@ -2842,7 +2800,7 @@ mod tests {
         );
         let external = PackImport {
             pack: Some("http://example.com/p.json".into()),
-            digest: Some(format!("sha256:{}", "A".repeat(43))),
+            digest: Some("A".repeat(43)),
             ..PackImport::default()
         };
         assert!(validate_pack_import(&external).is_err());
@@ -2857,14 +2815,10 @@ mod tests {
     #[test]
     fn verifies_pack_digests() {
         let bytes = b"pack document bytes";
-        let sha256 = format!("sha256:{}", URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)));
-        let sha3 = format!(
-            "sha3-256:{}",
-            URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes))
-        );
-        verify_pack_digest(bytes, &sha256).unwrap();
+        let sha3 = URL_SAFE_NO_PAD.encode(Sha3_256::digest(bytes));
         verify_pack_digest(bytes, &sha3).unwrap();
-        assert!(verify_pack_digest(b"tampered", &sha256).is_err());
+        assert!(verify_pack_digest(b"tampered", &sha3).is_err());
+        assert!(verify_pack_digest(bytes, &format!("sha3-256:{sha3}")).is_err());
         assert!(verify_pack_digest(bytes, "md5:abc").is_err());
     }
 

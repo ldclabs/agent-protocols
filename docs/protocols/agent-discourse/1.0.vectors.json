@@ -476,14 +476,6 @@
         ]
       },
       {
-        "name": "public without observers",
-        "visibility": "public",
-        "policy": {
-          "observer_allowed": false
-        },
-        "expected": []
-      },
-      {
         "name": "public with open speaking",
         "visibility": "public",
         "policy": {
@@ -536,16 +528,6 @@
         "policy": {
           "open_roles": [
             "moderator"
-          ]
-        }
-      },
-      {
-        "name": "open observer role while observers are disallowed",
-        "visibility": "restricted",
-        "policy": {
-          "observer_allowed": false,
-          "open_roles": [
-            "observer"
           ]
         }
       }

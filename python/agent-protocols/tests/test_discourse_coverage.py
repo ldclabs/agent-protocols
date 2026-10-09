@@ -90,11 +90,11 @@ class ValidationTests(unittest.TestCase):
 
     def test_validate_pack_import_covers_each_arm(self):
         validate_pack_import({"use": PACK_REACTIONS})
-        validate_pack_import({"pack": "https://example.com/p.json", "digest": "sha256:" + "A" * 43})
+        validate_pack_import({"pack": "https://example.com/p.json", "digest": "A" * 43})
         with self.assertRaises(AgentProtocolError):
             validate_pack_import({"pack": "https://example.com/p.json", "digest": "sha256:abc"})
         with self.assertRaises(AgentProtocolError):
-            validate_pack_import({"pack": "http://example.com/p.json", "digest": "sha256:" + "A" * 43})
+            validate_pack_import({"pack": "http://example.com/p.json", "digest": "A" * 43})
         with self.assertRaises(AgentProtocolError):
             validate_pack_import({"pack": "https://example.com/p.json", "digest": "  "})
         with self.assertRaises(AgentProtocolError):
@@ -117,9 +117,9 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(AgentProtocolError):
             validate_message_create_payload({"content_type": " ", "content": "hi"})
 
-    def test_verify_pack_digest_supports_sha3_256(self):
+    def test_verify_pack_digest_is_sha3_256(self):
         data = b"pack document bytes"
-        digest = "sha3-256:" + urlsafe_b64encode(sha3_256(data).digest()).rstrip(b"=").decode()
+        digest = urlsafe_b64encode(sha3_256(data).digest()).rstrip(b"=").decode()
         verify_pack_digest(data, digest)
         with self.assertRaises(AgentProtocolError):
             verify_pack_digest(b"tampered", digest)

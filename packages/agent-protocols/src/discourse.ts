@@ -8,7 +8,6 @@
  * never need to understand application semantics.
  */
 import { Validator, type Schema } from "@cfworker/json-schema";
-import { sha256 } from "@noble/hashes/sha2.js";
 import { sha3_256 } from "@noble/hashes/sha3.js";
 import canonicalize from "canonicalize";
 
@@ -195,7 +194,6 @@ export const DISCOURSE_ERROR_CODES: readonly string[] = [
   "join_request_not_found",
   "join_request_not_pending",
   "member_banned",
-  "role_not_allowed",
   "max_speakers_exceeded",
   "membership_required",
   "room_head_mismatch",
@@ -215,8 +213,8 @@ export const MAX_MENTIONS = 32;
 /** Room IDs are host-assigned and URL-safe (Section 6.1). */
 export const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
-/** `<algorithm>:<base64url-digest>` content digests (Section 12.5). */
-export const CONTENT_DIGEST_PATTERN = /^(sha256|sha3-256):[A-Za-z0-9_-]{43}$/;
+/** Content digests (Section 12.5): the SHA3-256 of the bytes, encoded like an event hash. */
+export const CONTENT_DIGEST_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 /** Custom event types must not use these prefixes. */
 export const RESERVED_TYPE_PREFIXES = ["room.", "type.", "message."] as const;
@@ -267,7 +265,6 @@ export interface RoomPolicy {
   /** Roles anyone may take by direct `room.join`; see {@link effectiveOpenRoles}. */
   open_roles?: Role[];
   max_speakers?: number;
-  observer_allowed?: boolean;
   extra?: Record<string, unknown>;
 }
 
@@ -881,7 +878,7 @@ export function validatePackImport(declaration: PackImport): void {
     if (!CONTENT_DIGEST_PATTERN.test(declaration.digest as string)) {
       throw protocolError(
         "invalid_event",
-        "external pack digest must be <sha256|sha3-256>:<base64url-digest>",
+        "external pack digest must be the base64url SHA3-256 of the pack bytes",
       );
     }
   } else {
@@ -1084,7 +1081,7 @@ function stripAnnotations(schema: unknown): unknown {
   return copy;
 }
 
-const ROOM_POLICY_FIELDS = ["invites", "open_roles", "max_speakers", "observer_allowed", "extra"];
+const ROOM_POLICY_FIELDS = ["invites", "open_roles", "max_speakers", "extra"];
 
 /** Section 8.3 rules for a room policy. */
 export function validateRoomPolicy(policy: RoomPolicy | undefined): void {
@@ -1105,7 +1102,6 @@ export function validateRoomPolicy(policy: RoomPolicy | undefined): void {
       "max_speakers must be a positive integer",
     );
   }
-  const observerAllowed = policy.observer_allowed ?? true;
   if (policy.invites !== undefined) {
     if (typeof policy.invites !== "object" || policy.invites === null || Array.isArray(policy.invites)) {
       throw protocolError("invalid_event", "invites must be an object");
@@ -1113,7 +1109,6 @@ export function validateRoomPolicy(policy: RoomPolicy | undefined): void {
     for (const [agentId, role] of Object.entries(policy.invites)) {
       validateAgentId(agentId);
       if (!includes(ROLES, role)) throw protocolError("invalid_event", `invalid invited role: ${role}`);
-      if (role === "observer" && !observerAllowed) throw protocolError("role_not_allowed", "observers are not allowed");
     }
   }
   if (policy.open_roles !== undefined) {
@@ -1122,7 +1117,6 @@ export function validateRoomPolicy(policy: RoomPolicy | undefined): void {
     }
     for (const role of policy.open_roles) {
       if (role !== "speaker" && role !== "observer") throw protocolError("invalid_event", `open_roles cannot contain ${role}`);
-      if (role === "observer" && !observerAllowed) throw protocolError("role_not_allowed", "observers are not allowed");
     }
   }
 }
@@ -1139,12 +1133,12 @@ export function validateRoomVisibilityPolicy(visibility: Visibility, policy: Roo
 
 /**
  * The roles any agent may take by direct `room.join` (Section 8.3): the
- * explicit `open_roles`, or by default `observer` in a public room when
- * observers are allowed, and none otherwise.
+ * explicit `open_roles`, or by default `observer` in a public room and none
+ * otherwise.
  */
 export function effectiveOpenRoles(visibility: Visibility, policy: RoomPolicy | undefined): Role[] {
   if (policy?.open_roles !== undefined) return [...policy.open_roles];
-  return visibility === "public" && policy?.observer_allowed !== false ? ["observer"] : [];
+  return visibility === "public" ? ["observer"] : [];
 }
 
 /**
@@ -1469,21 +1463,12 @@ function compileSchema(schema: Record<string, unknown>): Validator {
   }
 }
 
-/**
- * Verifies a `<algorithm>:<base64url-digest>` content digest over raw bytes.
- * Supports `sha256` and `sha3-256`.
- */
+/** Verifies a content digest (the base64url SHA3-256 of the bytes) over raw bytes. */
 export function verifyPackDigest(bytes: Uint8Array, digest: string): void {
   if (!CONTENT_DIGEST_PATTERN.test(digest)) {
     throw protocolError("pack_unavailable", `invalid digest format: ${digest}`);
   }
-  const separator = digest.indexOf(":");
-  const algorithm = digest.slice(0, separator);
-  const expected = digest.slice(separator + 1);
-  const actual = base64UrlEncode(
-    algorithm === "sha256" ? sha256(bytes) : sha3_256(bytes),
-  );
-  if (actual !== expected) {
+  if (base64UrlEncode(sha3_256(bytes)) !== digest) {
     throw protocolError("pack_unavailable", "pack digest mismatch");
   }
 }
