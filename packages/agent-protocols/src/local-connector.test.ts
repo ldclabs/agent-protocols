@@ -43,6 +43,7 @@ import {
   TOOL_ROOM_STATE,
   TOOL_ROOM_SUBMIT_EVENT,
   TOOL_ROOM_TIMELINE,
+  TOOL_ROOMS_LIST,
   TimelineItem,
   roomSummaryFromResponse,
   standardToolDefinitions,
@@ -705,4 +706,33 @@ test("profile_update posts to the discovered profiles endpoint and allowlists it
     /permission denied/,
   );
   assert.deepEqual(calls, [`GET ${service}/.well-known/agent-profile`]);
+});
+
+test("discourse calls use the host's discovered rooms endpoint, discovered once and allowlisted", async () => {
+  const calls: string[] = [];
+  const discovered = (rooms: string) => (async (url: string | URL | Request) => {
+    calls.push(String(url));
+    if (String(url) === `${HOST}/.well-known/agent-discourse`) {
+      return Response.json({ protocol: "agent-discourse/1.0", service: HOST, endpoints: { rooms } });
+    }
+    return Response.json({ result: [] });
+  }) as typeof fetch;
+  const connectorAt = (rooms: string) => {
+    const connector = new LocalConnector(signer(1), { fetchImpl: discovered(rooms) });
+    connector.addHost({ host: HOST, allowed: true, features: [] });
+    return connector;
+  };
+
+  const connector = connectorAt(`${HOST}/adp/rooms`);
+  await connector.callTool(TOOL_ROOMS_LIST, { scope: "public", host: HOST });
+  await connector.callTool(TOOL_ROOMS_LIST, { scope: "public", host: HOST, limit: 5 });
+  assert.deepEqual(calls, [`${HOST}/.well-known/agent-discourse`, `${HOST}/adp/rooms`, `${HOST}/adp/rooms?limit=5`]);
+
+  // A discovery document cannot move signed requests to a host the operator never allowed.
+  calls.length = 0;
+  await assert.rejects(
+    connectorAt("https://elsewhere.example/rooms").callTool(TOOL_ROOMS_LIST, { scope: "public", host: HOST }),
+    /permission denied/,
+  );
+  assert.deepEqual(calls, [`${HOST}/.well-known/agent-discourse`]);
 });

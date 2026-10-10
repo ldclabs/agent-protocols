@@ -324,6 +324,8 @@ export class LocalConnector {
   readonly state: LocalConnectorState;
   private readonly nonces = new ClientNonceManager();
   private readonly fetchImpl: FetchLike;
+  /** Discourse clients built from each host's discovery document, once per session. */
+  private readonly discourseClients = new Map<string, DiscourseClient>();
 
   constructor(
     private readonly signer: AgentSigner,
@@ -513,7 +515,7 @@ export class LocalConnector {
   private async publicRooms(input: RoomsListInput): Promise<unknown> {
     const host = normalizeHost(input.host!);
     this.requireAllowedHost(host);
-    const response = await this.discourse(host).publicRooms({
+    const response = await (await this.discourse(host)).publicRooms({
       status: input.status,
       tag: input.tag,
       keyword: input.keyword,
@@ -559,7 +561,7 @@ export class LocalConnector {
 
   /** Reads the room resource and every record after the local tip, then verifies and applies them. */
   private async syncRoom(key: RoomKey): Promise<void> {
-    const client = this.discourse(key.host);
+    const client = await this.discourse(key.host);
     const jwt = this.requestJwt(key.host);
     const room = await client.room(key.roomId, jwt);
     this.observeRoom(key.host, room);
@@ -653,7 +655,7 @@ export class LocalConnector {
       const host = this.allowedRoomHost(key);
       let status: AgentStatus;
       try {
-        status = await this.discourse(host).agentStatus(input.room_id, input.agent_id, this.requestJwt(host));
+        status = await (await this.discourse(host)).agentStatus(input.room_id, input.agent_id, this.requestJwt(host));
       } catch (error) {
         if (isHttpError(error, "agent_status_not_found")) return { statuses: [], sync: this.syncState(key) };
         throw error;
@@ -665,7 +667,7 @@ export class LocalConnector {
       return { statuses: sortedAgentStatuses(cached), sync: this.syncState(key) };
     }
     const host = this.allowedRoomHost(key);
-    const response = await this.discourse(host).agentStatuses(input.room_id, this.requestJwt(host));
+    const response = await (await this.discourse(host)).agentStatuses(input.room_id, this.requestJwt(host));
     const statuses = new Map<AgentId, AgentStatus>();
     for (const status of response.result) statuses.set(status.agent_id, status);
     this.state.agentStatuses.set(keyStr, statuses);
@@ -687,7 +689,7 @@ export class LocalConnector {
       expires_at: input.expires_at,
       extra: input.extra,
     };
-    const status = await this.discourse(host).setAgentStatus(
+    const status = await (await this.discourse(host)).setAgentStatus(
       input.room_id,
       this.requestJwt(host),
       request,
@@ -1074,7 +1076,7 @@ export class LocalConnector {
     for (const field of ["agenda", "guidance", "tags", "language", "policy", "types", "extra"] as const) {
       if (payload[field] === undefined) delete payload[field];
     }
-    const client = this.discourse(host);
+    const client = await this.discourse(host);
     let envelope = this.signRoomCreate(payload);
     let room: RoomResponse;
     try {
@@ -1110,7 +1112,7 @@ export class LocalConnector {
     // A stored request decides the outcome until it resolves.
     const own = this.state.ownJoinRequests.get(keyStr);
     if (own && own.status === "pending") {
-      const current = await this.discourse(host).joinRequest(roomId, own.id, this.requestJwt(host));
+      const current = await (await this.discourse(host)).joinRequest(roomId, own.id, this.requestJwt(host));
       this.state.ownJoinRequests.set(keyStr, current);
       if (current.status === "pending") return { status: "approval_required", join_request: current, sync: this.maybeSync(key) };
       if (current.status === "rejected") return { status: "rejected", join_request: current, sync: this.maybeSync(key) };
@@ -1126,7 +1128,7 @@ export class LocalConnector {
     // Read the room when possible: invitees and public rooms are readable.
     if (!this.state.rooms.has(keyStr)) {
       try {
-        const room = await this.discourse(host).room(roomId, this.requestJwt(host));
+        const room = await (await this.discourse(host)).room(roomId, this.requestJwt(host));
         this.acceptRoomResponse(host, room);
       } catch (error) {
         if (!(error instanceof HttpResponseError)) throw error;
@@ -1146,7 +1148,7 @@ export class LocalConnector {
       try {
         record = await this.submitSigned(
           () => this.signRoomEvent(eventType.ROOM_JOIN, key, undefined, undefined, [], payload),
-          (envelope) => this.discourse(host).joinRoom(roomId, envelope),
+          async (envelope) => (await this.discourse(host)).joinRoom(roomId, envelope),
         );
       } catch (error) {
         // A ban may have arrived since the local snapshot; request review below.
@@ -1166,7 +1168,7 @@ export class LocalConnector {
     if (input.extra !== undefined) requestPayload.extra = input.extra;
     const request = await this.submitSigned(
       () => this.signJoinRequest(roomId, requestPayload),
-      (envelope) => this.discourse(host).requestJoin(roomId, envelope),
+      async (envelope) => (await this.discourse(host)).requestJoin(roomId, envelope),
     );
     this.state.ownJoinRequests.set(keyStr, request);
     return { status: "approval_required", join_request: request, sync: this.maybeSync(key) };
@@ -1219,7 +1221,7 @@ export class LocalConnector {
       try {
         const record = await this.submitSigned(
           () => this.signWrite(request, key, base),
-          (envelope) => this.discourse(host).submitEvent(input.room_id, envelope),
+          async (envelope) => (await this.discourse(host)).submitEvent(input.room_id, envelope),
         );
         await this.applyOwnRecord(key, record as ServerRecord);
         const after = this.localRoom(key);
@@ -1309,7 +1311,7 @@ export class LocalConnector {
   ): Promise<unknown> {
     const key = this.resolveRoomKey(input.host, input.room_id);
     const host = this.allowedRoomHost(key);
-    const response = await this.discourse(host).joinRequests(input.room_id, this.requestJwt(host), {
+    const response = await (await this.discourse(host)).joinRequests(input.room_id, this.requestJwt(host), {
       status: input.status,
       limit: input.limit,
       cursor: input.cursor,
@@ -1328,7 +1330,7 @@ export class LocalConnector {
     if (input.decision === "approve" && input.role === undefined) {
       throw invalidPayload("approving a join request requires a role");
     }
-    const joinRequest = await this.discourse(host).joinRequest(
+    const joinRequest = await (await this.discourse(host)).joinRequest(
       input.room_id,
       input.request_id,
       this.requestJwt(host),
@@ -1341,7 +1343,7 @@ export class LocalConnector {
     if (input.reason !== undefined) payload.reason = input.reason;
     const record = await this.submitSigned(
       () => this.signRoomEvent(eventType.ROOM_JOIN_REVIEW, key, undefined, undefined, [], payload),
-      (envelope) => this.discourse(host).submitEvent(input.room_id, envelope),
+      async (envelope) => (await this.discourse(host)).submitEvent(input.room_id, envelope),
     );
     await this.applyOwnRecord(key, record as ServerRecord);
     return { record, sync: this.syncState(key) };
@@ -1699,8 +1701,20 @@ export class LocalConnector {
       .map(([, host]) => host);
   }
 
-  private discourse(host: string): DiscourseClient {
-    return new DiscourseClient(host, this.fetchImpl);
+  /**
+   * The host's client, built from its discovery document on first use. The
+   * allowlist covers the discovered `rooms` origin too, since the connector
+   * signs for it.
+   */
+  private async discourse(host: string): Promise<DiscourseClient> {
+    const key = normalizeHost(host);
+    let client = this.discourseClients.get(key);
+    if (!client) {
+      client = await DiscourseClient.discover(key, this.fetchImpl);
+      this.requireAllowedHost(serviceOrigin(client.roomsUrl));
+      this.discourseClients.set(key, client);
+    }
+    return client;
   }
 
   /**

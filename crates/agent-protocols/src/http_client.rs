@@ -346,11 +346,7 @@ impl DiscourseClient {
     }
 
     pub async fn room(&self, room_id: &str, jwt: Option<&str>) -> Result<RoomResponse> {
-        send_json(with_jwt(
-            self.inner.get(format!("{}", self.room_url(room_id))),
-            jwt,
-        ))
-        .await
+        send_json(with_jwt(self.inner.get(self.room_url(room_id)), jwt)).await
     }
 
     /// Public room discovery (ADP Section 17): `GET /v1/rooms` lists the
@@ -409,12 +405,7 @@ impl DiscourseClient {
         P: Serialize,
         R: DeserializeOwned,
     {
-        send_json(
-            self.inner
-                .post(format!("{}", self.room_url(room_id)))
-                .json(envelope),
-        )
-        .await
+        send_json(self.inner.post(self.room_url(room_id)).json(envelope)).await
     }
 
     pub async fn events(&self, room_id: &str) -> Result<RoomEventsResponse> {

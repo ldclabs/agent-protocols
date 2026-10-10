@@ -95,6 +95,8 @@ pub struct LocalConnector {
     nonce_manager: ClientNonceManager,
     state: LocalConnectorState,
     http: reqwest::Client,
+    /// Discourse clients built from each host's discovery document, once per session.
+    discourse_clients: std::sync::Mutex<BTreeMap<String, DiscourseClient>>,
 }
 
 impl LocalConnector {
@@ -108,12 +110,14 @@ impl LocalConnector {
             nonce_manager: ClientNonceManager::new(),
             state,
             http: reqwest::Client::new(),
+            discourse_clients: Default::default(),
         }
     }
 
     /// Uses `client` for Agent Discourse and Agent Profile requests.
     pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
         self.http = client;
+        self.discourse_clients = Default::default();
         self
     }
 
@@ -317,6 +321,7 @@ impl LocalConnector {
         self.require_allowed_host(&host)?;
         let response = self
             .discourse(&host)
+            .await?
             .public_rooms(&PublicRoomsOptions {
                 status: input.status,
                 tag: input.tag,
@@ -372,7 +377,7 @@ impl LocalConnector {
     /// Reads the room resource and every record after the local tip, then
     /// verifies and applies them.
     async fn sync_room(&mut self, key: &RoomKey) -> Result<()> {
-        let client = self.discourse(&key.0);
+        let client = self.discourse(&key.0).await?;
         let jwt = self.request_jwt(&key.0)?;
         let room = client.room(&key.1, Some(&jwt)).await?;
         self.observe_room(&key.0, room);
@@ -501,6 +506,7 @@ impl LocalConnector {
             let jwt = self.request_jwt(&host)?;
             let status = match self
                 .discourse(&host)
+                .await?
                 .agent_status(&input.room_id, agent_id, Some(&jwt))
                 .await
             {
@@ -529,6 +535,7 @@ impl LocalConnector {
         let jwt = self.request_jwt(&host)?;
         let response = self
             .discourse(&host)
+            .await?
             .agent_statuses(&input.room_id, Some(&jwt))
             .await?;
         let statuses = response
@@ -564,6 +571,7 @@ impl LocalConnector {
         request.extra = input.extra;
         let status = self
             .discourse(&host)
+            .await?
             .set_agent_status(&input.room_id, &jwt, &request)
             .await?;
         let statuses = self.state.agent_statuses.entry(key.clone()).or_default();
@@ -1060,7 +1068,7 @@ impl LocalConnector {
         payload.policy = input.policy;
         payload.types = input.types;
         payload.extra = input.extra;
-        let client = self.discourse(&host);
+        let client = self.discourse(&host).await?;
         let (mut room, envelope) =
             submit_signed!(self, self.sign_room_create(payload.clone()), |envelope| {
                 client.create_room(&envelope)
@@ -1090,7 +1098,7 @@ impl LocalConnector {
         let host = key.0.clone();
         self.require_allowed_host(&host)?;
         let agent_id = self.agent_id();
-        let client = self.discourse(&host);
+        let client = self.discourse(&host).await?;
 
         // A stored request decides the outcome until it resolves.
         let own = self.state.own_join_requests.get(&key).cloned();
@@ -1256,7 +1264,7 @@ impl LocalConnector {
             ));
         }
         let mut base = self.write_base(&key, base_seq, base_hash)?;
-        let client = self.discourse(&host);
+        let client = self.discourse(&host).await?;
         let mut attempts = 0;
         loop {
             if head_bound {
@@ -1391,6 +1399,7 @@ impl LocalConnector {
         let jwt = self.request_jwt(&host)?;
         let response = self
             .discourse(&host)
+            .await?
             .join_requests(
                 &input.room_id,
                 &jwt,
@@ -1419,7 +1428,7 @@ impl LocalConnector {
             ));
         }
         let jwt = self.request_jwt(&host)?;
-        let client = self.discourse(&host);
+        let client = self.discourse(&host).await?;
         let join_request = client
             .join_request(&input.room_id, &input.request_id, &jwt)
             .await?;
@@ -1877,8 +1886,25 @@ impl LocalConnector {
             .count()
     }
 
-    fn discourse(&self, host: &str) -> DiscourseClient {
-        DiscourseClient::with_client(host, self.http.clone())
+    /// The host's client, built from its discovery document on first use. The
+    /// allowlist covers the discovered `rooms` origin too, since the connector
+    /// signs for it.
+    async fn discourse(&self, host: &str) -> Result<DiscourseClient> {
+        let host = normalize_host(host);
+        let cached = self.discourse_cache().get(&host).cloned();
+        if let Some(client) = cached {
+            return Ok(client);
+        }
+        let client = DiscourseClient::discover_with_client(&host, self.http.clone()).await;
+        self.require_allowed_host(&service_origin(client.rooms_url())?)?;
+        self.discourse_cache().insert(host, client.clone());
+        Ok(client)
+    }
+
+    fn discourse_cache(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, DiscourseClient>> {
+        self.discourse_clients
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

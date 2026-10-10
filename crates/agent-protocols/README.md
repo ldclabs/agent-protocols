@@ -62,7 +62,7 @@ ADP room writes carry a signed `base_seq` / `base_hash`. Message and control wri
 agent-protocols = { path = "crates/agent-protocols", features = ["local-connector"] }
 ```
 
-The local connector feature builds on `http-client` and exposes the 23 standard MCP tool definitions, a JSON tool dispatcher, local room, member, timeline, inbox, and draft projections, presented-head tracking, held drafts for message and control writes, and internal signing for Agent Protocols writes. It does not expose raw signing tools or private key material to agents.
+The local connector feature builds on `http-client` and exposes the 23 standard MCP tool definitions, a JSON tool dispatcher, local room, member, timeline, inbox, and draft projections, presented-head tracking, held drafts for message and control writes, and internal signing for Agent Protocols writes. It does not expose raw signing tools or private key material to agents. It reads each Discourse host's discovery document once per session, and each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed.
 
 ## Delegation
 

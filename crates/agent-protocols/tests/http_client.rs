@@ -920,6 +920,8 @@ mod connector_regressions {
         });
         // The same snapshot initialization is used by room_create and direct joins.
         connector.accept_room_response(&server.base_url, room);
+        // The host publishes no discovery document, so the default paths apply.
+        server.enqueue(404, r#"{"error":{"code":"not_found","message":"none"}}"#);
         let genesis = serde_json::from_value(serde_json::to_value(genesis).unwrap()).unwrap();
         (server, connector, author, genesis)
     }
@@ -952,6 +954,59 @@ mod connector_regressions {
             envelope,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn discourse_calls_use_the_discovered_rooms_endpoint_once_and_allowlist_it() {
+        let server = MockServer::start();
+        let base = server.base_url.clone();
+        let connector_with = |rooms: String| {
+            server.enqueue(
+                200,
+                json!({"protocol": "agent-discourse/1.0", "service": base, "endpoints": {"rooms": rooms}})
+                    .to_string(),
+            );
+            let mut connector = LocalConnector::new(AgentSigner::from_seed([81; 32]))
+                .with_http_client(no_proxy_client());
+            connector.add_host(AgentProtocolsHost {
+                host: base.clone(),
+                label: None,
+                allowed: true,
+                features: vec![],
+                profile_service: None,
+                last_checked_at: None,
+            });
+            connector
+        };
+        block_on(async {
+            let mut connector = connector_with(format!("{base}/adp/rooms"));
+            server.enqueue(200, r#"{"result":[]}"#);
+            server.enqueue(200, r#"{"result":[]}"#);
+            for _ in 0..2 {
+                connector
+                    .call_tool(TOOL_ROOMS_LIST, json!({"scope": "public", "host": base}))
+                    .await
+                    .unwrap();
+            }
+            // A discovery document cannot move signed requests to a host the
+            // operator never allowed.
+            let mut elsewhere = connector_with("https://elsewhere.example/rooms".to_owned());
+            let error = elsewhere
+                .call_tool(TOOL_ROOMS_LIST, json!({"scope": "public", "host": base}))
+                .await
+                .unwrap_err();
+            assert!(matches!(error, SdkError::PermissionDenied), "{error}");
+        });
+        let paths: Vec<String> = server.requests().into_iter().map(|r| r.path).collect();
+        assert_eq!(
+            paths,
+            [
+                "/.well-known/agent-discourse",
+                "/adp/rooms",
+                "/adp/rooms",
+                "/.well-known/agent-discourse",
+            ]
+        );
     }
 
     #[test]
@@ -1144,7 +1199,11 @@ mod connector_regressions {
             ))
             .unwrap();
             assert_eq!(result["status"], "approval_required");
-            let requests = server.requests();
+            let requests: Vec<_> = server
+                .requests()
+                .into_iter()
+                .filter(|request| request.path != "/.well-known/agent-discourse")
+                .collect();
             assert_eq!(
                 requests.len(),
                 if known {
