@@ -370,7 +370,7 @@ fn applies_room_records_into_members_timeline_and_inbox() {
     // A claim is a lease that expires.
     let entry = connector.state.inbox.values().next().unwrap();
     match entry.state {
-        InboxEntryState::Claimed(until) => {
+        InboxEntryState::Claimed { until } => {
             assert!(until > unix_ms() + INBOX_CLAIM_LEASE_MS - 5_000);
             assert!(inbox_entry_ready(entry, until));
         }

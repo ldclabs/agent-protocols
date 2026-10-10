@@ -1,6 +1,7 @@
-// In-memory store the connector projects records into. The public
-// LocalConnectorState is the durable snapshot a host persists and restores; the
-// room, inbox, and draft entries are the working set the handlers mutate.
+// In-memory store the connector projects records into. LocalConnectorState
+// holds the room, inbox, and draft entries the handlers mutate;
+// LocalConnectorSnapshot is its durable form, which LocalConnector.snapshot
+// writes with the next nonce.
 
 import {
   AgentStatus,
@@ -65,9 +66,9 @@ export interface HeldDraftEntry {
 }
 
 /**
- * Durable working set the connector projects records into. `hosts` is operator
+ * Working set the connector projects records into. `hosts` is operator
  * configuration; the room, inbox, and draft maps are the materialized state a
- * host persists and restores through {@link LocalConnector} `state`.
+ * host persists through {@link LocalConnector.snapshot}.
  */
 export class LocalConnectorState {
   hosts = new Map<string, AgentProtocolsHost>();
@@ -80,4 +81,95 @@ export class LocalConnectorState {
   agentStatuses = new Map<string, Map<AgentId, AgentStatus>>();
   inbox = new Map<string, InboxEntry>();
   drafts = new Map<string, HeldDraftEntry>();
+}
+
+/** Version of the document {@link LocalConnector.snapshot} produces. */
+export const LOCAL_CONNECTOR_SNAPSHOT_VERSION = 1;
+
+/** Persisted form of a {@link LocalRoomState}, with snake_case fields. */
+export interface LocalRoomSnapshot {
+  host: string;
+  room: RoomResponse;
+  head_seq: number;
+  head_hash?: string;
+  presented_seq?: number;
+  presented_hash?: string;
+  synced_seq: number;
+  synced_hash?: string;
+  subscribed: boolean;
+  members: Record<AgentId, RoomMemberView>;
+  timeline: TimelineItem[];
+  records: ArchiveRecord[];
+  read_seq: number;
+  active_turn?: ActiveTurn;
+}
+
+/**
+ * Persisted form of a connector: its Agent ID, next nonce, and every map of
+ * {@link LocalConnectorState}. Maps keyed by host and room ID become lists whose
+ * entries carry both; the other maps keep their string keys. The Rust SDK's
+ * `LocalConnector::snapshot` uses the same layout.
+ */
+export interface LocalConnectorSnapshot {
+  version: number;
+  agent_id: AgentId;
+  next_nonce: number;
+  hosts: Record<string, AgentProtocolsHost>;
+  rooms: LocalRoomSnapshot[];
+  profiles: Record<AgentId, AgentProfile>;
+  join_requests: {
+    host: string;
+    room_id: string;
+    requests: RoomJoinRequest[];
+  }[];
+  own_join_requests: {
+    host: string;
+    room_id: string;
+    request: RoomJoinRequest;
+  }[];
+  agent_statuses: {
+    host: string;
+    room_id: string;
+    statuses: Record<AgentId, AgentStatus>;
+  }[];
+  inbox: Record<string, InboxEntry>;
+  drafts: Record<string, HeldDraftEntry>;
+}
+
+export function roomToSnapshot(room: LocalRoomState): LocalRoomSnapshot {
+  return {
+    host: room.host,
+    room: room.room,
+    head_seq: room.headSeq,
+    head_hash: room.headHash,
+    presented_seq: room.presentedSeq,
+    presented_hash: room.presentedHash,
+    synced_seq: room.syncedSeq,
+    synced_hash: room.syncedHash,
+    subscribed: room.subscribed,
+    members: Object.fromEntries(room.members),
+    timeline: room.timeline,
+    records: room.records,
+    read_seq: room.readSeq,
+    active_turn: room.activeTurn,
+  };
+}
+
+export function roomFromSnapshot(room: LocalRoomSnapshot): LocalRoomState {
+  return {
+    host: room.host,
+    room: room.room,
+    headSeq: room.head_seq,
+    headHash: room.head_hash,
+    presentedSeq: room.presented_seq,
+    presentedHash: room.presented_hash,
+    syncedSeq: room.synced_seq,
+    syncedHash: room.synced_hash,
+    subscribed: room.subscribed,
+    members: new Map(Object.entries(room.members)),
+    timeline: room.timeline,
+    records: room.records,
+    readSeq: room.read_seq,
+    activeTurn: room.active_turn,
+  };
 }

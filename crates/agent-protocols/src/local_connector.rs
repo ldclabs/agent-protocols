@@ -30,12 +30,15 @@ mod views;
 mod tests;
 
 pub use catalog::*;
-pub use state::{LocalConnectorState, RoomKey};
+pub use state::{LocalConnectorState, RoomKey, LOCAL_CONNECTOR_SNAPSHOT_VERSION};
 pub use views::*;
 
 use inputs::*;
 use projection::*;
-use state::{HeldDraftEntry, HeldDraftRequest, InboxEntry, InboxEntryState, LocalRoomState};
+use state::{
+    ConnectorSnapshot, HeldDraftEntry, HeldDraftRequest, InboxEntry, InboxEntryState,
+    LocalRoomState,
+};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -112,6 +115,42 @@ impl LocalConnector {
             http: reqwest::Client::new(),
             discourse_clients: Default::default(),
         }
+    }
+
+    /// Restores a connector from [`LocalConnector::snapshot`]. The snapshot
+    /// is trusted local state, so only its version, Agent ID, and shape are
+    /// checked; it must belong to `signer`'s Agent ID.
+    pub fn from_snapshot(signer: AgentSigner, snapshot: &Value) -> Result<Self> {
+        let snapshot: ConnectorSnapshot = serde_json::from_value(snapshot.clone())?;
+        if snapshot.version != LOCAL_CONNECTOR_SNAPSHOT_VERSION {
+            return Err(SdkError::protocol(
+                "invalid_request",
+                "unsupported local connector snapshot version",
+            ));
+        }
+        if snapshot.agent_id != signer.agent_id() {
+            return Err(SdkError::protocol(
+                "invalid_request",
+                "local connector snapshot belongs to another Agent ID",
+            ));
+        }
+        let nonce_manager = ClientNonceManager::with_next(snapshot.next_nonce)?;
+        let mut connector = Self::with_state(signer, snapshot.into_state());
+        connector.nonce_manager = nonce_manager;
+        Ok(connector)
+    }
+
+    /// The durable state local connector Section 4.1 requires a host to
+    /// persist: the next nonce, hosts, rooms with their records, members,
+    /// timeline, read and presented heads, join requests, agent statuses,
+    /// profiles, the inbox with its leases, and held drafts. Save it after
+    /// every tool call and restore it with [`LocalConnector::from_snapshot`].
+    pub fn snapshot(&self) -> Result<Value> {
+        Ok(serde_json::to_value(ConnectorSnapshot::new(
+            self.agent_id(),
+            self.nonce_manager.peek(),
+            &self.state,
+        ))?)
     }
 
     /// Uses `client` for Agent Discourse and Agent Profile requests.
@@ -675,7 +714,9 @@ impl LocalConnector {
                 items.push(entry.item.clone());
                 // A claim is a lease, so a crashed session cannot hold the item forever.
                 if input.claim {
-                    entry.state = InboxEntryState::Claimed(now + INBOX_CLAIM_LEASE_MS);
+                    entry.state = InboxEntryState::Claimed {
+                        until: now + INBOX_CLAIM_LEASE_MS,
+                    };
                 }
             }
         }
@@ -693,9 +734,9 @@ impl LocalConnector {
                     InboxAckAction::Handled | InboxAckAction::Dismissed => {
                         InboxEntryState::Acknowledged
                     }
-                    InboxAckAction::Defer => {
-                        InboxEntryState::Deferred(input.defer_until.unwrap_or_else(unix_ms))
-                    }
+                    InboxAckAction::Defer => InboxEntryState::Deferred {
+                        until: input.defer_until.unwrap_or_else(unix_ms),
+                    },
                 };
                 acknowledged.push(id.clone());
             }

@@ -490,7 +490,7 @@ fn inbox_from_item(
 pub(crate) fn inbox_entry_ready(entry: &InboxEntry, now_ms: i64) -> bool {
     match entry.state {
         InboxEntryState::Pending => true,
-        InboxEntryState::Deferred(until) | InboxEntryState::Claimed(until) => until <= now_ms,
+        InboxEntryState::Deferred { until } | InboxEntryState::Claimed { until } => until <= now_ms,
         InboxEntryState::Acknowledged => false,
     }
 }

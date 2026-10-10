@@ -1076,6 +1076,74 @@ mod connector_regressions {
     }
 
     #[test]
+    fn snapshots_restore_an_equivalent_connector() {
+        let (server, mut connector, creator, genesis) = fixture();
+        let active = || AgentSigner::from_seed([81; 32]);
+        block_on(async {
+            connector
+                .call_tool(TOOL_ROOM_STATE, json!({"room_id": "room1"}))
+                .await
+                .unwrap();
+            // A contract revision queues an inbox item and moves the head past
+            // the presented one, so the next message is held as a draft.
+            let update = next_record(
+                &creator,
+                event_type::ROOM_UPDATE,
+                json!({"topic": "Updated"}),
+                &genesis,
+                &genesis,
+            );
+            connector
+                .apply_host_record(&server.base_url, update)
+                .unwrap();
+            let claimed = connector
+                .call_tool(TOOL_INBOX_NEXT, json!({"claim": true}))
+                .await
+                .unwrap();
+            assert_eq!(claimed["items"].as_array().unwrap().len(), 1);
+            let held = connector
+                .call_tool(
+                    TOOL_ROOM_SEND_MESSAGE,
+                    json!({"room_id": "room1", "content": "draft"}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(held["status"], "held");
+
+            let snapshot = connector.snapshot().unwrap();
+            assert_eq!(snapshot["version"], LOCAL_CONNECTOR_SNAPSHOT_VERSION);
+            let persisted: Value = serde_json::from_str(&snapshot.to_string()).unwrap();
+            let mut restored = LocalConnector::from_snapshot(active(), &persisted)
+                .unwrap()
+                .with_http_client(no_proxy_client());
+            assert_eq!(restored.snapshot().unwrap(), snapshot);
+            for (tool, input) in [
+                (TOOL_ROOMS_LIST, json!({})),
+                (TOOL_ROOM_STATE, json!({"room_id": "room1"})),
+                (TOOL_ROOM_MEMBERS_LIST, json!({"room_id": "room1"})),
+                (TOOL_ROOM_TIMELINE, json!({"room_id": "room1"})),
+                (TOOL_DRAFTS_LIST, json!({})),
+                (TOOL_INBOX_NEXT, json!({})),
+            ] {
+                assert_eq!(
+                    restored.call_tool(tool, input.clone()).await.unwrap(),
+                    connector.call_tool(tool, input).await.unwrap(),
+                    "{tool}"
+                );
+            }
+
+            // A snapshot belongs to one Agent ID and one format version.
+            assert!(
+                LocalConnector::from_snapshot(AgentSigner::from_seed([82; 32]), &persisted)
+                    .is_err()
+            );
+            let mut future = persisted.clone();
+            future["version"] = json!(2);
+            assert!(LocalConnector::from_snapshot(active(), &future).is_err());
+        });
+    }
+
+    #[test]
     fn failed_and_rejected_draft_commits_preserve_the_draft() {
         let (server, mut connector, other, genesis) = fixture_with_control_type();
         block_on(async {

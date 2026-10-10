@@ -2,7 +2,7 @@
 //! parse boundary between untyped tool JSON and the typed handlers on
 //! [`super::LocalConnector`]; nothing outside the crate constructs them.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -359,7 +359,7 @@ pub(crate) struct RoomJoinInput {
     pub extra: Option<BTreeMap<String, Value>>,
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub(crate) struct RoomSendMessageInput {
     pub room_id: String,
     #[serde(default)]
@@ -381,7 +381,7 @@ pub(crate) struct RoomSendMessageInput {
     pub on_head_mismatch: HeadMismatchPolicy,
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 /// Also covers the built-in events without a dedicated tool: `room.update`,
 /// `room.close`, `room.cancel`, `room.member.role.update`,
 /// `room.member.remove`, and `type.define`. For contract and signal writes —

@@ -64,6 +64,8 @@ agent-protocols = { path = "crates/agent-protocols", features = ["local-connecto
 
 The local connector feature builds on `http-client` and exposes the 23 standard MCP tool definitions, a JSON tool dispatcher, local room, member, timeline, inbox, and draft projections, presented-head tracking, held drafts for message and control writes, and internal signing for Agent Protocols writes. It does not expose raw signing tools or private key material to agents. It reads each Discourse host's discovery document once per session, and each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed.
 
+`LocalConnector::snapshot()` returns a versioned JSON document with the next nonce and all the local state that local connector Section 4.1 requires a host to persist: hosts, rooms with their records, members, timeline, read and presented heads, join requests, agent statuses, profiles, the inbox with its leases, and held drafts. Save it after every tool call; `LocalConnector::from_snapshot(signer, &snapshot)` restores it for the same Agent ID. The TypeScript connector uses the same layout.
+
 ## Delegation
 
 Controllers are records shared by `controllers` and `retired_controllers`: `id` is the Agent ID, `source` is an HTTPS origin or `local`, and `valid_from` starts the binding. Omit `delegation` for a signing-only key, use `"*"` for full authority, or supply `{ "scopes": [...], "audiences": [...] }` for restricted authority. A restricted key manages (replaces, revokes, enumerates) only credentials whose scopes and audiences fall within its own ceiling. Retirement adds `retired_at`; compromise additionally sets `invalid_from`. A principal that grants delegations publishes its `delegation_service` origin.

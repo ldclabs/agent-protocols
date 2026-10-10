@@ -19,6 +19,8 @@ import { AgentSigner, Envelope, withMention } from "./identity.js";
 import {
   HeldDraft,
   InboxItem,
+  LOCAL_CONNECTOR_SNAPSHOT_VERSION,
+  LocalConnectorSnapshot,
   InboxKind,
   LocalConnector,
   RoomMemberStatus,
@@ -735,4 +737,42 @@ test("discourse calls use the host's discovered rooms endpoint, discovered once 
     /permission denied/,
   );
   assert.deepEqual(calls, [`${HOST}/.well-known/agent-discourse`]);
+});
+
+test("snapshots restore an equivalent connector", async () => {
+  const creator = signer(5), active = signer(1);
+  const host = new MockHost("room1", creator);
+  const connector = connectorFor(active, host);
+  await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1", host: HOST });
+  // A contract revision queues an inbox item and moves the head past the
+  // presented one, so the next message is held as a draft.
+  const head = host.head();
+  const update = creator.signEvent(discourseEvent(eventType.ROOM_UPDATE, creator.agentId(), 120, 2, "room1", head.seq, head.hash, { topic: "Updated" }));
+  connector.applyHostRecord(HOST, host.append(update));
+  const claimed = (await connector.callTool(TOOL_INBOX_NEXT, { claim: true })) as { items: InboxItem[] };
+  assert.equal(claimed.items.length, 1);
+  const held = (await connector.callTool(TOOL_ROOM_SEND_MESSAGE, { room_id: "room1", content: "draft" })) as RoomWriteResult;
+  assert.equal(held.status, "held");
+
+  const snapshot = connector.snapshot();
+  assert.equal(snapshot.version, LOCAL_CONNECTOR_SNAPSHOT_VERSION);
+  const persisted = JSON.parse(JSON.stringify(snapshot)) as LocalConnectorSnapshot;
+  const restored = LocalConnector.fromSnapshot(active, persisted, { fetchImpl: host.fetch });
+  assert.deepEqual(restored.snapshot(), snapshot);
+  for (const [tool, input] of [
+    [TOOL_ROOMS_LIST, {}],
+    [TOOL_ROOM_STATE, { room_id: "room1" }],
+    [TOOL_ROOM_MEMBERS_LIST, { room_id: "room1" }],
+    [TOOL_ROOM_TIMELINE, { room_id: "room1" }],
+    [TOOL_DRAFTS_LIST, {}],
+    [TOOL_INBOX_NEXT, {}],
+  ] as const) {
+    // Tool results are JSON, so compare their JSON forms.
+    const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as unknown;
+    assert.deepEqual(json(await restored.callTool(tool, input)), json(await connector.callTool(tool, input)), tool);
+  }
+
+  // A snapshot belongs to one Agent ID and one format version.
+  assert.throws(() => LocalConnector.fromSnapshot(signer(2), persisted), /another Agent ID/);
+  assert.throws(() => LocalConnector.fromSnapshot(active, { ...persisted, version: 2 }), /version/);
 });

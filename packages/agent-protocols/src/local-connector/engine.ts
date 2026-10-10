@@ -141,11 +141,16 @@ import {
   validateNextRecord,
   validateRecordBasePrecondition,
 } from "./projection.js";
+import { protocolError } from "../errors.js";
 import {
   HeldDraftRequest,
+  LOCAL_CONNECTOR_SNAPSHOT_VERSION,
+  LocalConnectorSnapshot,
   LocalConnectorState,
   LocalRoomState,
   RoomKey,
+  roomFromSnapshot,
+  roomToSnapshot,
 } from "./state.js";
 import {
   AgentProtocolsHost,
@@ -170,6 +175,11 @@ export const INBOX_CLAIM_LEASE_MS = 60_000;
 
 function roomKeyString(key: RoomKey): string {
   return `${key.host} ${key.roomId}`;
+}
+
+function roomKeyFromString(key: string): { host: string; room_id: string } {
+  const space = key.indexOf(" ");
+  return { host: key.slice(0, space), room_id: key.slice(space + 1) };
 }
 
 function newLocalRoomState(host: string, room: RoomResponse): LocalRoomState {
@@ -322,7 +332,7 @@ export interface LocalConnectorOptions {
 
 export class LocalConnector {
   readonly state: LocalConnectorState;
-  private readonly nonces = new ClientNonceManager();
+  private nonces = new ClientNonceManager();
   private readonly fetchImpl: FetchLike;
   /** Discourse clients built from each host's discovery document, once per session. */
   private readonly discourseClients = new Map<string, DiscourseClient>();
@@ -333,6 +343,81 @@ export class LocalConnector {
   ) {
     this.state = options.state ?? new LocalConnectorState();
     this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  /**
+   * Restores a connector from {@link LocalConnector.snapshot}. The snapshot is
+   * trusted local state, so only its version, Agent ID, and shape are checked;
+   * it must belong to `signer`'s Agent ID.
+   */
+  static fromSnapshot(
+    signer: AgentSigner,
+    snapshot: LocalConnectorSnapshot,
+    options: Omit<LocalConnectorOptions, "state"> = {},
+  ): LocalConnector {
+    const doc = JSON.parse(JSON.stringify(snapshot)) as LocalConnectorSnapshot;
+    if (!isRecord(doc) || doc.version !== LOCAL_CONNECTOR_SNAPSHOT_VERSION) {
+      throw protocolError("invalid_request", "unsupported local connector snapshot version");
+    }
+    if (doc.agent_id !== signer.agentId()) {
+      throw protocolError("invalid_request", "local connector snapshot belongs to another Agent ID");
+    }
+    const maps = [doc.hosts, doc.profiles, doc.inbox, doc.drafts];
+    const lists = [doc.rooms, doc.join_requests, doc.own_join_requests, doc.agent_statuses];
+    if (!maps.every(isRecord) || !lists.every(Array.isArray)) {
+      throw protocolError("invalid_request", "malformed local connector snapshot");
+    }
+    const nonces = new ClientNonceManager(doc.next_nonce);
+    const state = new LocalConnectorState();
+    state.hosts = new Map(Object.entries(doc.hosts));
+    for (const room of doc.rooms) {
+      state.rooms.set(roomKeyString({ host: room.host, roomId: room.room.id }), roomFromSnapshot(room));
+    }
+    state.profiles = new Map(Object.entries(doc.profiles));
+    for (const entry of doc.join_requests) {
+      state.joinRequests.set(roomKeyString({ host: entry.host, roomId: entry.room_id }), entry.requests);
+    }
+    for (const entry of doc.own_join_requests) {
+      state.ownJoinRequests.set(roomKeyString({ host: entry.host, roomId: entry.room_id }), entry.request);
+    }
+    for (const entry of doc.agent_statuses) {
+      state.agentStatuses.set(
+        roomKeyString({ host: entry.host, roomId: entry.room_id }),
+        new Map(Object.entries(entry.statuses)),
+      );
+    }
+    state.inbox = new Map(Object.entries(doc.inbox));
+    state.drafts = new Map(Object.entries(doc.drafts));
+    const connector = new LocalConnector(signer, { ...options, state });
+    connector.nonces = nonces;
+    return connector;
+  }
+
+  /**
+   * The durable state local connector Section 4.1 requires a host to persist:
+   * the next nonce, hosts, rooms with their records, members, timeline, read
+   * and presented heads, join requests, agent statuses, profiles, the inbox
+   * with its leases, and held drafts. Save it after every tool call and
+   * restore it with {@link LocalConnector.fromSnapshot}.
+   */
+  snapshot(): LocalConnectorSnapshot {
+    const doc: LocalConnectorSnapshot = {
+      version: LOCAL_CONNECTOR_SNAPSHOT_VERSION,
+      agent_id: this.agentId(),
+      next_nonce: this.nonces.peek(),
+      hosts: Object.fromEntries(this.state.hosts),
+      rooms: [...this.state.rooms.values()].map(roomToSnapshot),
+      profiles: Object.fromEntries(this.state.profiles),
+      join_requests: [...this.state.joinRequests].map(([key, requests]) => ({ ...roomKeyFromString(key), requests })),
+      own_join_requests: [...this.state.ownJoinRequests].map(([key, request]) => ({ ...roomKeyFromString(key), request })),
+      agent_statuses: [...this.state.agentStatuses].map(([key, statuses]) => ({
+        ...roomKeyFromString(key),
+        statuses: Object.fromEntries(statuses),
+      })),
+      inbox: Object.fromEntries(this.state.inbox),
+      drafts: Object.fromEntries(this.state.drafts),
+    };
+    return JSON.parse(JSON.stringify(doc)) as LocalConnectorSnapshot;
   }
 
   agentId(): AgentId {
