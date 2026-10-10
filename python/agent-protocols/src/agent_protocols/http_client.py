@@ -131,18 +131,40 @@ class ProfileClient:
 
 
 class DiscourseClient:
-    def __init__(self, base_url: str, session: Any | None = None):
+    """ADP host client. Without ``endpoints`` it uses the RECOMMENDED paths under
+    ``base_url``; ``DiscourseClient.discover`` reads the host's discovery document
+    instead, whose endpoints clients MUST prefer. ``rooms_url`` is the ``rooms``
+    endpoint: ``POST`` creates rooms, ``GET`` lists discoverable rooms, and each
+    room URL extends it with ``/{room_id}`` (ADP Section 15.1)."""
+
+    def __init__(self, base_url: str, session: Any | None = None, endpoints: dict[str, str] | None = None):
         self.base_url = base_url.rstrip("/")
         self.session = session or _requests_session()
+        endpoints = endpoints or {}
+        self.rooms_url = (endpoints.get("rooms") or f"{self.base_url}/v1/rooms").rstrip("/")
+        self.my_rooms_url = endpoints.get("my_rooms") or f"{self.base_url}/v1/me/rooms"
+
+    @classmethod
+    def discover(cls, origin: str, session: Any | None = None) -> "DiscourseClient":
+        """Builds a client for the host at ``origin`` from its discovery
+        document, falling back to the default paths when the host publishes none."""
+        session = session or _requests_session()
+        base = origin.rstrip("/")
+        try:
+            discovery = _read_json(session.get(f"{base}/.well-known/agent-discourse"))
+            endpoints = discovery.get("endpoints") if isinstance(discovery, dict) else None
+            return cls(base, session, endpoints if isinstance(endpoints, dict) else None)
+        except Exception:  # Discovery is optional; the default paths apply.
+            return cls(base, session)
 
     def protocol(self) -> dict[str, Any]:
-        return self._get("/.well-known/agent-discourse")
+        return self._get(f"{self.base_url}/.well-known/agent-discourse")
 
     def create_room(self, envelope: Envelope) -> dict[str, Any]:
-        return self._post("/v1/rooms", envelope)
+        return self._post(self.rooms_url, envelope)
 
     def room(self, room_id: str, jwt: str | None = None) -> dict[str, Any]:
-        return self._get(f"/v1/rooms/{room_id}", jwt=jwt)
+        return self._get(f"{self.rooms_url}/{room_id}", jwt=jwt)
 
     def public_rooms(
         self,
@@ -159,7 +181,7 @@ class DiscourseClient:
     ) -> dict[str, Any]:
         return self._get(
             _query(
-                "/v1/rooms",
+                self.rooms_url,
                 {
                     "status": status,
                     "tag": tag,
@@ -185,7 +207,7 @@ class DiscourseClient:
     ) -> dict[str, Any]:
         return self._get(
             _query(
-                "/v1/me/rooms",
+                self.my_rooms_url,
                 {"status": status, "membership": membership, "limit": limit, "cursor": cursor},
             ),
             jwt=jwt,
@@ -193,10 +215,10 @@ class DiscourseClient:
 
     def request_join(self, room_id: str, envelope: Envelope) -> dict[str, Any]:
         """Submits a signed `room.join.request`; the signature authenticates the applicant."""
-        return self._post(f"/v1/rooms/{room_id}/join-requests", envelope)
+        return self._post(f"{self.rooms_url}/{room_id}/join-requests", envelope)
 
     def join_request(self, room_id: str, request_id: str, jwt: str) -> dict[str, Any]:
-        return self._get(f"/v1/rooms/{room_id}/join-requests/{request_id}", jwt=jwt)
+        return self._get(f"{self.rooms_url}/{room_id}/join-requests/{request_id}", jwt=jwt)
 
     def join_requests(
         self,
@@ -208,18 +230,18 @@ class DiscourseClient:
         cursor: str | None = None,
     ) -> dict[str, Any]:
         return self._get(
-            _query(f"/v1/rooms/{room_id}/join-requests", {"status": status, "limit": limit, "cursor": cursor}),
+            _query(f"{self.rooms_url}/{room_id}/join-requests", {"status": status, "limit": limit, "cursor": cursor}),
             jwt=jwt,
         )
 
     def join_room(self, room_id: str, envelope: Envelope) -> dict[str, Any]:
-        return self._post(f"/v1/rooms/{room_id}", envelope)
+        return self._post(f"{self.rooms_url}/{room_id}", envelope)
 
     def leave_room(self, room_id: str, envelope: Envelope) -> dict[str, Any]:
-        return self._post(f"/v1/rooms/{room_id}", envelope)
+        return self._post(f"{self.rooms_url}/{room_id}", envelope)
 
     def submit_event(self, room_id: str, envelope: Envelope) -> dict[str, Any]:
-        return self._post(f"/v1/rooms/{room_id}", envelope)
+        return self._post(f"{self.rooms_url}/{room_id}", envelope)
 
     def events(
         self,
@@ -231,33 +253,33 @@ class DiscourseClient:
         jwt: str | None = None,
     ) -> dict[str, Any]:
         return self._get(
-            _query(f"/v1/rooms/{room_id}/events", {"after_seq": after_seq, "limit": limit, "cursor": cursor}),
+            _query(f"{self.rooms_url}/{room_id}/events", {"after_seq": after_seq, "limit": limit, "cursor": cursor}),
             jwt=jwt,
         )
 
     def agent_statuses(self, room_id: str, jwt: str | None = None) -> dict[str, Any]:
-        return self._get(f"/v1/rooms/{room_id}/agent-status", jwt=jwt)
+        return self._get(f"{self.rooms_url}/{room_id}/agent-status", jwt=jwt)
 
     def agent_status(self, room_id: str, agent_id: AgentId, jwt: str | None = None) -> dict[str, Any]:
-        return self._get(f"/v1/rooms/{room_id}/agent-status/{agent_id}", jwt=jwt)
+        return self._get(f"{self.rooms_url}/{room_id}/agent-status/{agent_id}", jwt=jwt)
 
     def set_agent_status(self, room_id: str, jwt: str, status: dict[str, Any]) -> dict[str, Any]:
-        return self._put(f"/v1/rooms/{room_id}/agent-status", status, jwt=jwt)
+        return self._put(f"{self.rooms_url}/{room_id}/agent-status", status, jwt=jwt)
 
     def sse_events_url(self, room_id: str) -> str:
-        return sse_events_url(self.base_url, room_id)
+        return f"{self.rooms_url}/{quote(room_id, safe='')}/events/live"
 
     def archive(self, room_id: str) -> dict[str, Any]:
-        return self._get(f"/v1/rooms/{room_id}/archive")
+        return self._get(f"{self.rooms_url}/{room_id}/archive")
 
-    def _get(self, path: str, jwt: str | None = None) -> Any:
-        return _read_json(self.session.get(self.base_url + path, headers=_auth_headers(jwt)))
+    def _get(self, url: str, jwt: str | None = None) -> Any:
+        return _read_json(self.session.get(url, headers=_auth_headers(jwt)))
 
-    def _post(self, path: str, body: Any, jwt: str | None = None) -> Any:
-        return _read_json(self.session.post(self.base_url + path, json=body, headers=_auth_headers(jwt)))
+    def _post(self, url: str, body: Any, jwt: str | None = None) -> Any:
+        return _read_json(self.session.post(url, json=body, headers=_auth_headers(jwt)))
 
-    def _put(self, path: str, body: Any, jwt: str | None = None) -> Any:
-        return _read_json(self.session.put(self.base_url + path, json=body, headers=_auth_headers(jwt)))
+    def _put(self, url: str, body: Any, jwt: str | None = None) -> Any:
+        return _read_json(self.session.put(url, json=body, headers=_auth_headers(jwt)))
 
 
 class DelegationClient:

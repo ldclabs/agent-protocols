@@ -177,6 +177,46 @@ test("DiscourseClient calls every endpoint and forwards bearer tokens", async ()
   assert.equal(calls[11].url, "https://api.example.com/v1/rooms/room1/archive");
 });
 
+test("DiscourseClient.discover uses the discovered rooms and my_rooms endpoints", async () => {
+  const { fetchImpl, calls } = makeFetch([
+    { body: { protocol: "agent-discourse/1.0", service: "https://api.example.com", endpoints: { rooms: "https://api.example.com/adp/rooms/", my_rooms: "https://api.example.com/adp/me" } } },
+    { body: {} },
+    { body: { result: [] } },
+    { body: { result: [] } },
+    { body: {} },
+    { body: {} },
+    { body: { result: [] } },
+    { body: {} },
+  ]);
+  const client = await DiscourseClient.discover("https://api.example.com/", fetchImpl);
+  assert.equal(client.roomsUrl, "https://api.example.com/adp/rooms");
+  await client.createRoom({} as never);
+  await client.publicRooms({ limit: 5 });
+  await client.myRooms("jwt");
+  await client.room("r1");
+  await client.submitEvent("r1", {} as never);
+  await client.events("r1", { afterSeq: 2 });
+  await client.archive("r1");
+  assert.equal(client.sseEventsUrl("r1"), "https://api.example.com/adp/rooms/r1/events/live");
+  assert.deepEqual(
+    calls.map((call) => `${call.init?.method ?? "GET"} ${call.url}`),
+    [
+      "GET https://api.example.com/.well-known/agent-discourse",
+      "POST https://api.example.com/adp/rooms",
+      "GET https://api.example.com/adp/rooms?limit=5",
+      "GET https://api.example.com/adp/me",
+      "GET https://api.example.com/adp/rooms/r1",
+      "POST https://api.example.com/adp/rooms/r1",
+      "GET https://api.example.com/adp/rooms/r1/events?after_seq=2",
+      "GET https://api.example.com/adp/rooms/r1/archive",
+    ],
+  );
+
+  // Without a discovery document the default paths apply.
+  const missing = makeFetch([{ ok: false, status: 404, body: {} }]);
+  assert.equal((await DiscourseClient.discover("https://api.example.com", missing.fetchImpl)).roomsUrl, "https://api.example.com/v1/rooms");
+});
+
 test("DiscourseClient.sseEventsUrl matches the helper", () => {
   const { fetchImpl } = makeFetch();
   const client = new DiscourseClient("https://api.example.com", fetchImpl);

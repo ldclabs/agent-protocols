@@ -196,30 +196,67 @@ export class ProfileClient {
 }
 
 export class DiscourseClient {
+  /**
+   * The `rooms` endpoint: `POST` creates rooms, `GET` lists discoverable rooms,
+   * and each room URL extends it with `/{room_id}` (ADP Section 15.1).
+   */
+  readonly roomsUrl: string;
+  private readonly baseUrl: string;
+  private readonly myRoomsUrl: string;
+
   constructor(
-    private readonly baseUrl: string,
+    baseUrl: string,
     private readonly fetchImpl: FetchLike = fetch,
-  ) {}
+    endpoints?: Partial<Record<"rooms" | "my_rooms", string>>,
+  ) {
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.roomsUrl = (endpoints?.rooms ?? `${this.baseUrl}/v1/rooms`).replace(
+      /\/$/,
+      "",
+    );
+    this.myRoomsUrl = endpoints?.my_rooms ?? `${this.baseUrl}/v1/me/rooms`;
+  }
+
+  /**
+   * Builds a client for the host at `origin` from its discovery document,
+   * falling back to the default paths when the host publishes none.
+   */
+  static async discover(
+    origin: string,
+    fetchImpl: FetchLike = fetch,
+  ): Promise<DiscourseClient> {
+    const base = origin.replace(/\/$/, "");
+    try {
+      const response = await fetchImpl(`${base}/.well-known/agent-discourse`);
+      if (response.ok) {
+        const discovery = (await response.json()) as DiscourseProtocolDiscovery;
+        return new DiscourseClient(base, fetchImpl, discovery.endpoints);
+      }
+    } catch {
+      // Discovery is optional; the default paths apply.
+    }
+    return new DiscourseClient(base, fetchImpl);
+  }
 
   async protocol(): Promise<DiscourseProtocolDiscovery> {
-    return this.getJson("/.well-known/agent-discourse");
+    return this.getJson(`${this.baseUrl}/.well-known/agent-discourse`);
   }
 
   async createRoom(
     envelope: Envelope<RoomCreatePayload>,
   ): Promise<RoomResponse> {
-    return this.postJson("/v1/rooms", envelope);
+    return this.postJson(this.roomsUrl, envelope);
   }
 
   async room(roomId: string, jwt?: string): Promise<RoomResponse> {
-    return this.getJson(`/v1/rooms/${roomId}`, jwt);
+    return this.getJson(`${this.roomUrl(roomId)}`, jwt);
   }
 
   async publicRooms(
     options: PublicRoomsOptions = {},
   ): Promise<ListResponse<RoomResponse>> {
     return this.getJson(
-      addQuery("/v1/rooms", {
+      addQuery(this.roomsUrl, {
         status: options.status,
         tag: options.tag,
         keyword: options.keyword,
@@ -238,7 +275,7 @@ export class DiscourseClient {
     options: MyRoomsOptions = {},
   ): Promise<ListResponse<RoomResponse>> {
     return this.getJson(
-      addQuery("/v1/me/rooms", {
+      addQuery(this.myRoomsUrl, {
         status: options.status,
         membership: options.membership,
         limit: options.limit,
@@ -253,7 +290,7 @@ export class DiscourseClient {
     roomId: string,
     envelope: Envelope<RoomJoinRequestPayload>,
   ): Promise<RoomJoinRequest> {
-    return this.postJson(`/v1/rooms/${roomId}/join-requests`, envelope);
+    return this.postJson(`${this.roomUrl(roomId)}/join-requests`, envelope);
   }
 
   async joinRequest(
@@ -261,7 +298,10 @@ export class DiscourseClient {
     requestId: string,
     jwt: string,
   ): Promise<RoomJoinRequest> {
-    return this.getJson(`/v1/rooms/${roomId}/join-requests/${requestId}`, jwt);
+    return this.getJson(
+      `${this.roomUrl(roomId)}/join-requests/${requestId}`,
+      jwt,
+    );
   }
 
   async joinRequests(
@@ -270,7 +310,7 @@ export class DiscourseClient {
     options: JoinRequestsOptions = {},
   ): Promise<ListResponse<RoomJoinRequest>> {
     return this.getJson(
-      addQuery(`/v1/rooms/${roomId}/join-requests`, {
+      addQuery(`${this.roomUrl(roomId)}/join-requests`, {
         status: options.status,
         limit: options.limit,
         cursor: options.cursor,
@@ -283,21 +323,21 @@ export class DiscourseClient {
     roomId: string,
     envelope: Envelope<RoomJoinPayload>,
   ): Promise<ServerRecord<RoomJoinPayload>> {
-    return this.postJson(`/v1/rooms/${roomId}`, envelope);
+    return this.postJson(`${this.roomUrl(roomId)}`, envelope);
   }
 
   async leaveRoom(
     roomId: string,
     envelope: Envelope<RoomLeavePayload>,
   ): Promise<ServerRecord<RoomLeavePayload>> {
-    return this.postJson(`/v1/rooms/${roomId}`, envelope);
+    return this.postJson(`${this.roomUrl(roomId)}`, envelope);
   }
 
   async submitEvent<P>(
     roomId: string,
     envelope: Envelope<P>,
   ): Promise<ServerRecord<P>> {
-    return this.postJson(`/v1/rooms/${roomId}`, envelope);
+    return this.postJson(`${this.roomUrl(roomId)}`, envelope);
   }
 
   async events(
@@ -305,7 +345,7 @@ export class DiscourseClient {
     options: RoomEventsOptions = {},
   ): Promise<RoomEventsResponse> {
     return this.getJson(
-      addQuery(`/v1/rooms/${roomId}/events`, {
+      addQuery(`${this.roomUrl(roomId)}/events`, {
         after_seq: options.afterSeq,
         limit: options.limit,
         cursor: options.cursor,
@@ -318,7 +358,7 @@ export class DiscourseClient {
     roomId: string,
     jwt?: string,
   ): Promise<AgentStatusListResponse> {
-    return this.getJson(`/v1/rooms/${roomId}/agent-status`, jwt);
+    return this.getJson(`${this.roomUrl(roomId)}/agent-status`, jwt);
   }
 
   async agentStatus(
@@ -326,7 +366,7 @@ export class DiscourseClient {
     agentId: AgentId,
     jwt?: string,
   ): Promise<AgentStatus> {
-    return this.getJson(`/v1/rooms/${roomId}/agent-status/${agentId}`, jwt);
+    return this.getJson(`${this.roomUrl(roomId)}/agent-status/${agentId}`, jwt);
   }
 
   async setAgentStatus(
@@ -334,30 +374,30 @@ export class DiscourseClient {
     jwt: string,
     status: AgentStatusInput,
   ): Promise<AgentStatus> {
-    return this.putJson(`/v1/rooms/${roomId}/agent-status`, status, jwt);
+    return this.putJson(`${this.roomUrl(roomId)}/agent-status`, status, jwt);
   }
 
   sseEventsUrl(roomId: string): string {
-    return sseEventsUrl(this.baseUrl, roomId);
+    return `${this.roomsUrl}/${encodeURIComponent(roomId)}/events/live`;
   }
 
   async archive(roomId: string): Promise<unknown> {
-    return this.getJson(`/v1/rooms/${roomId}/archive`);
+    return this.getJson(`${this.roomUrl(roomId)}/archive`);
   }
 
-  private async getJson<T>(path: string, jwt?: string): Promise<T> {
-    const response = await this.fetchImpl(this.url(path), {
+  private async getJson<T>(url: string, jwt?: string): Promise<T> {
+    const response = await this.fetchImpl(url, {
       headers: jwt ? { authorization: `Bearer ${jwt}` } : undefined,
     });
     return readJson<T>(response);
   }
 
   private async postJson<T>(
-    path: string,
+    url: string,
     body: unknown,
     jwt?: string,
   ): Promise<T> {
-    const response = await this.fetchImpl(this.url(path), {
+    const response = await this.fetchImpl(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -369,11 +409,11 @@ export class DiscourseClient {
   }
 
   private async putJson<T>(
-    path: string,
+    url: string,
     body: unknown,
     jwt?: string,
   ): Promise<T> {
-    const response = await this.fetchImpl(this.url(path), {
+    const response = await this.fetchImpl(url, {
       method: "PUT",
       headers: {
         "content-type": "application/json",
@@ -384,8 +424,8 @@ export class DiscourseClient {
     return readJson<T>(response);
   }
 
-  private url(path: string): string {
-    return `${this.baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
+  private roomUrl(roomId: string): string {
+    return `${this.roomsUrl}/${roomId}`;
   }
 }
 

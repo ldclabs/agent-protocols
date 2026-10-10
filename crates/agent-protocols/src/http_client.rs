@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -216,9 +217,14 @@ impl ProfileClient {
     }
 }
 
+/// ADP host client. Without endpoints it uses the RECOMMENDED paths under
+/// `base_url`; [`DiscourseClient::discover`] reads the host's discovery
+/// document instead, whose endpoints clients MUST prefer.
 #[derive(Clone, Debug)]
 pub struct DiscourseClient {
     base_url: String,
+    rooms_url: String,
+    my_rooms_url: String,
     inner: reqwest::Client,
 }
 
@@ -228,21 +234,71 @@ impl DiscourseClient {
     }
 
     pub fn with_client(base_url: impl Into<String>, inner: reqwest::Client) -> Self {
+        Self::with_endpoints(base_url, inner, &BTreeMap::new())
+    }
+
+    /// Uses the `rooms` and `my_rooms` endpoints of a discovery document,
+    /// falling back to the RECOMMENDED paths for the ones it omits.
+    pub fn with_endpoints(
+        base_url: impl Into<String>,
+        inner: reqwest::Client,
+        endpoints: &BTreeMap<String, String>,
+    ) -> Self {
+        let base_url = base_url.into().trim_end_matches('/').to_owned();
+        let rooms_url = endpoints
+            .get("rooms")
+            .cloned()
+            .unwrap_or_else(|| format!("{base_url}/v1/rooms"))
+            .trim_end_matches('/')
+            .to_owned();
+        let my_rooms_url = endpoints
+            .get("my_rooms")
+            .cloned()
+            .unwrap_or_else(|| format!("{base_url}/v1/me/rooms"));
         Self {
-            base_url: base_url.into(),
+            base_url,
+            rooms_url,
+            my_rooms_url,
             inner,
         }
     }
 
+    /// Builds a client for the host at `origin` from its discovery document,
+    /// falling back to the default paths when the host publishes none.
+    pub async fn discover(origin: &str) -> Self {
+        Self::discover_with_client(origin, reqwest::Client::new()).await
+    }
+
+    pub async fn discover_with_client(origin: &str, inner: reqwest::Client) -> Self {
+        let base = origin.trim_end_matches('/');
+        let discovered: Result<DiscourseProtocolDiscovery> =
+            send_json(inner.get(format!("{base}/.well-known/agent-discourse"))).await;
+        match discovered {
+            Ok(discovery) => Self::with_endpoints(base, inner, &discovery.endpoints),
+            // Discovery is optional; the default paths apply.
+            Err(_) => Self::with_client(base, inner),
+        }
+    }
+
+    /// The `rooms` endpoint: `POST` creates rooms, `GET` lists discoverable
+    /// rooms, and each room URL extends it with `/{room_id}` (ADP Section 15.1).
+    pub fn rooms_url(&self) -> &str {
+        &self.rooms_url
+    }
+
     pub async fn protocol(&self) -> Result<DiscourseProtocolDiscovery> {
-        send_json(self.inner.get(self.url("/.well-known/agent-discourse"))).await
+        send_json(
+            self.inner
+                .get(format!("{}/.well-known/agent-discourse", self.base_url)),
+        )
+        .await
     }
 
     pub async fn create_room(
         &self,
         envelope: &Envelope<RoomCreatePayload>,
     ) -> Result<RoomResponse> {
-        send_json(self.inner.post(self.url("/v1/rooms")).json(envelope)).await
+        send_json(self.inner.post(&self.rooms_url).json(envelope)).await
     }
 
     /// Submits a signed `room.join.request`; the signature authenticates the applicant.
@@ -253,7 +309,7 @@ impl DiscourseClient {
     ) -> Result<RoomJoinRequest> {
         send_json(
             self.inner
-                .post(self.url(&format!("/v1/rooms/{room_id}/join-requests")))
+                .post(format!("{}/join-requests", self.room_url(room_id)))
                 .json(envelope),
         )
         .await
@@ -267,7 +323,10 @@ impl DiscourseClient {
     ) -> Result<RoomJoinRequest> {
         send_json(
             self.inner
-                .get(self.url(&format!("/v1/rooms/{room_id}/join-requests/{request_id}")))
+                .get(format!(
+                    "{}/join-requests/{request_id}",
+                    self.room_url(room_id)
+                ))
                 .bearer_auth(jwt),
         )
         .await
@@ -280,15 +339,15 @@ impl DiscourseClient {
         options: &JoinRequestsOptions,
     ) -> Result<ListResponse<RoomJoinRequest>> {
         let path = with_query(
-            format!("/v1/rooms/{room_id}/join-requests"),
+            format!("{}/join-requests", self.room_url(room_id)),
             &options.pairs(),
         );
-        send_json(self.inner.get(self.url(&path)).bearer_auth(jwt)).await
+        send_json(self.inner.get(path).bearer_auth(jwt)).await
     }
 
     pub async fn room(&self, room_id: &str, jwt: Option<&str>) -> Result<RoomResponse> {
         send_json(with_jwt(
-            self.inner.get(self.url(&format!("/v1/rooms/{room_id}"))),
+            self.inner.get(format!("{}", self.room_url(room_id))),
             jwt,
         ))
         .await
@@ -300,8 +359,8 @@ impl DiscourseClient {
         &self,
         options: &PublicRoomsOptions,
     ) -> Result<ListResponse<RoomResponse>> {
-        let path = with_query("/v1/rooms".to_owned(), &options.pairs());
-        send_json(self.inner.get(self.url(&path))).await
+        let path = with_query(self.rooms_url.clone(), &options.pairs());
+        send_json(self.inner.get(path)).await
     }
 
     pub async fn my_rooms(&self, jwt: &str) -> Result<ListResponse<RoomResponse>> {
@@ -314,8 +373,8 @@ impl DiscourseClient {
         jwt: &str,
         options: &MyRoomsOptions,
     ) -> Result<ListResponse<RoomResponse>> {
-        let path = with_query("/v1/me/rooms".to_owned(), &options.pairs());
-        send_json(self.inner.get(self.url(&path)).bearer_auth(jwt)).await
+        let path = with_query(self.my_rooms_url.clone(), &options.pairs());
+        send_json(self.inner.get(path).bearer_auth(jwt)).await
     }
 
     pub async fn join_room(
@@ -352,7 +411,7 @@ impl DiscourseClient {
     {
         send_json(
             self.inner
-                .post(self.url(&format!("/v1/rooms/{room_id}")))
+                .post(format!("{}", self.room_url(room_id)))
                 .json(envelope),
         )
         .await
@@ -368,12 +427,11 @@ impl DiscourseClient {
         room_id: &str,
         options: &RoomEventsOptions,
     ) -> Result<RoomEventsResponse> {
-        let path = with_query(format!("/v1/rooms/{room_id}/events"), &options.pairs());
-        send_json(with_jwt(
-            self.inner.get(self.url(&path)),
-            options.jwt.as_deref(),
-        ))
-        .await
+        let path = with_query(
+            format!("{}/events", self.room_url(room_id)),
+            &options.pairs(),
+        );
+        send_json(with_jwt(self.inner.get(path), options.jwt.as_deref())).await
     }
 
     pub async fn agent_statuses(
@@ -383,7 +441,7 @@ impl DiscourseClient {
     ) -> Result<AgentStatusListResponse> {
         send_json(with_jwt(
             self.inner
-                .get(self.url(&format!("/v1/rooms/{room_id}/agent-status"))),
+                .get(format!("{}/agent-status", self.room_url(room_id))),
             jwt,
         ))
         .await
@@ -396,8 +454,10 @@ impl DiscourseClient {
         jwt: Option<&str>,
     ) -> Result<AgentStatus> {
         send_json(with_jwt(
-            self.inner
-                .get(self.url(&format!("/v1/rooms/{room_id}/agent-status/{agent_id}"))),
+            self.inner.get(format!(
+                "{}/agent-status/{agent_id}",
+                self.room_url(room_id)
+            )),
             jwt,
         ))
         .await
@@ -411,7 +471,7 @@ impl DiscourseClient {
     ) -> Result<AgentStatus> {
         send_json(
             self.inner
-                .put(self.url(&format!("/v1/rooms/{room_id}/agent-status")))
+                .put(format!("{}/agent-status", self.room_url(room_id)))
                 .bearer_auth(jwt)
                 .json(status),
         )
@@ -419,19 +479,23 @@ impl DiscourseClient {
     }
 
     pub fn sse_events_url(&self, room_id: &str) -> String {
-        sse_events_url(&self.base_url, room_id)
+        format!(
+            "{}/{}/events/live",
+            self.rooms_url,
+            encode_query_component(room_id)
+        )
     }
 
     pub async fn archive(&self, room_id: &str) -> Result<Value> {
         send_json(
             self.inner
-                .get(self.url(&format!("/v1/rooms/{room_id}/archive"))),
+                .get(format!("{}/archive", self.room_url(room_id))),
         )
         .await
     }
 
-    fn url(&self, path: &str) -> String {
-        join_url(&self.base_url, path)
+    fn room_url(&self, room_id: &str) -> String {
+        format!("{}/{room_id}", self.rooms_url)
     }
 }
 

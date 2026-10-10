@@ -16,7 +16,7 @@ The crate is intentionally framework-neutral:
 - `discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records (`ArchiveRecord`), server records, and archive verification.
 - `knowledge`: signed contributions, evidence/profile checks, dependency graph views, discovery, portable queries, checkpoint-bound pagination, and the in-memory Knowledge store.
 - `mail`: signed mailbox cards, sender-signed HPKE packets, card pins, key retention, inbox deduplication, and an in-memory relay with snapshot persistence boundaries.
-- `http_client`: optional `reqwest` clients behind the `http-client` feature. Lists use `ListResponse`; non-2xx responses become `SdkError::HttpStatus` with the protocol `code`, `data`, and `Max-Seen-Nonce`. `ProfileClient::discover(origin)` and `DelegationClient::discover(origin)` use the endpoints in the service's discovery document, falling back to the RECOMMENDED paths.
+- `http_client`: optional `reqwest` clients behind the `http-client` feature. Lists use `ListResponse`; non-2xx responses become `SdkError::HttpStatus` with the protocol `code`, `data`, and `Max-Seen-Nonce`. `ProfileClient::discover(origin)`, `DelegationClient::discover(origin)`, and `DiscourseClient::discover(origin)` use the endpoints in the service's discovery document, falling back to the RECOMMENDED paths.
 - `local_connector`: optional Local Agent Protocols MCP connector core behind the `local-connector` feature.
 
 `SdkError::code()` returns the Agent Protocols error code an error corresponds to.

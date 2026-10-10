@@ -338,6 +338,73 @@ fn profile_events_without_limit_omits_query() {
 }
 
 #[test]
+fn discourse_client_discovers_rooms_and_my_rooms_endpoints() {
+    let server = MockServer::start();
+    let base = server.base_url.clone();
+    server.enqueue(
+        200,
+        format!(
+            r#"{{"protocol":"agent-discourse/1.0","service":"{base}","endpoints":{{"rooms":"{base}/adp/rooms/","my_rooms":"{base}/adp/me"}}}}"#
+        ),
+    );
+    server.enqueue(200, r#"{"result":[]}"#);
+    server.enqueue(200, r#"{"result":[]}"#);
+    server.enqueue(200, r#"{"result":[]}"#);
+    server.enqueue(200, "{}");
+    // Without a discovery document the default paths apply.
+    server.enqueue(404, r#"{"error":{"code":"not_found","message":"none"}}"#);
+
+    block_on(async {
+        let client =
+            DiscourseClient::discover_with_client(&format!("{base}/"), no_proxy_client()).await;
+        assert_eq!(client.rooms_url(), format!("{base}/adp/rooms"));
+        assert_eq!(
+            client.sse_events_url("r1"),
+            format!("{base}/adp/rooms/r1/events/live")
+        );
+        client
+            .public_rooms(&PublicRoomsOptions {
+                limit: Some(5),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        client.my_rooms("jwt").await.unwrap();
+        client
+            .events_with_options(
+                "r1",
+                &RoomEventsOptions {
+                    after_seq: Some(2),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        client.archive("r1").await.unwrap();
+
+        let missing = DiscourseClient::discover_with_client(&base, no_proxy_client()).await;
+        assert_eq!(missing.rooms_url(), format!("{base}/v1/rooms"));
+    });
+
+    let paths: Vec<String> = server
+        .requests()
+        .into_iter()
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "GET /.well-known/agent-discourse",
+            "GET /adp/rooms?limit=5",
+            "GET /adp/me",
+            "GET /adp/rooms/r1/events?after_seq=2",
+            "GET /adp/rooms/r1/archive",
+            "GET /.well-known/agent-discourse",
+        ]
+    );
+}
+
+#[test]
 fn discourse_client_round_trips_every_endpoint() {
     let server = MockServer::start();
     let record_body = server_record_body();

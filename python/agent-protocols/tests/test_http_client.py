@@ -343,6 +343,40 @@ class HelperTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+class DiscourseDiscoveryTests(unittest.TestCase):
+    def test_discover_uses_the_discovered_rooms_and_my_rooms_endpoints(self):
+        session = FakeSession([
+            FakeResponse({"protocol": "agent-discourse/1.0", "service": "https://api.example.com",
+                          "endpoints": {"rooms": "https://api.example.com/adp/rooms/", "my_rooms": "https://api.example.com/adp/me"}}),
+            FakeResponse({}), FakeResponse({"result": []}), FakeResponse({"result": []}), FakeResponse({}),
+            FakeResponse({}), FakeResponse({"result": []}), FakeResponse({}),
+        ])
+        client = DiscourseClient.discover("https://api.example.com/", session)
+        self.assertEqual(client.rooms_url, "https://api.example.com/adp/rooms")
+        client.create_room({})
+        client.public_rooms(limit=5)
+        client.my_rooms("jwt")
+        client.room("r1")
+        client.submit_event("r1", {})
+        client.events("r1", after_seq=2)
+        client.archive("r1")
+        self.assertEqual(client.sse_events_url("r1"), "https://api.example.com/adp/rooms/r1/events/live")
+        self.assertEqual([(call[0], call[1]) for call in session.calls], [
+            ("GET", "https://api.example.com/.well-known/agent-discourse"),
+            ("POST", "https://api.example.com/adp/rooms"),
+            ("GET", "https://api.example.com/adp/rooms?limit=5"),
+            ("GET", "https://api.example.com/adp/me"),
+            ("GET", "https://api.example.com/adp/rooms/r1"),
+            ("POST", "https://api.example.com/adp/rooms/r1"),
+            ("GET", "https://api.example.com/adp/rooms/r1/events?after_seq=2"),
+            ("GET", "https://api.example.com/adp/rooms/r1/archive"),
+        ])
+
+        # Without a discovery document the default paths apply.
+        missing = DiscourseClient.discover("https://api.example.com", FakeSession([FakeResponse({}, status=404)]))
+        self.assertEqual(missing.rooms_url, "https://api.example.com/v1/rooms")
+
+
 class ProfileDiscoveryTests(unittest.TestCase):
     def test_discover_uses_the_discovered_endpoints_and_falls_back_to_defaults(self):
         profile = {"id": AGENT_ID, "name": "A"}
