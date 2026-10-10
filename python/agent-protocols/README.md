@@ -60,6 +60,8 @@ credential = materialize_delegation_credential(
 verdict = verify_delegation_credential(credential, records, principal, principal["id"], "https://dmsg.net", now)
 ```
 
+`DelegationClient.principal()` follows at most five HTTPS redirects, gives each request 30 seconds, and rejects a document over 1 MiB with `payload_too_large`. Principal URLs come from signed events that anyone can submit, so a delegation service must also refuse loopback, private, and other non-public destinations (Agent Identity Section 10). The SDK cannot see the address a request connects to, so pass a `requests` session whose transport adapter or egress proxy enforces this.
+
 Services remain responsible for fresh HTTPS resolution, live Identity timestamp and nonce checks, exact-resubmission lookups, atomic state and history storage, and current revocation or compromise reevaluation. These are SDK building blocks, not a hosted delegation service.
 
 `DelegationClient.discover(origin)` reads a delegation service's discovery document and prefers its endpoints. Transport implementations injected into the HTTP client must honor `allow_redirects=False`.

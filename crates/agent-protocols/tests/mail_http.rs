@@ -1,6 +1,6 @@
 #![cfg(feature = "http-client")]
 use agent_protocols::{
-    http_client::MailClient,
+    http_client::{DelegationClient, MailClient},
     identity::{AgentSigner, RequestBinding, RequestJwtClaims},
     mail::*,
 };
@@ -111,8 +111,9 @@ impl Server {
                     .map(|s| format!("Location: {s}\r\n"))
                     .unwrap_or_default();
                 let response=format!("HTTP/1.1 {status} Test\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n{body}",body.len());
-                stream.write_all(response.as_bytes()).unwrap();
-                stream.flush().unwrap();
+                // A client may stop reading an oversized body early.
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
             }
         });
         Self {
@@ -465,5 +466,27 @@ fn card_reads_pin_closed_expired_and_conflicting_cards_across_clients() {
             .card_at(mailbox, &owner.agent_id(), later)
             .await
             .unwrap();
+    });
+}
+#[test]
+fn principal_reads_are_bounded() {
+    // Principal resolution requires HTTPS, so this reuses the TLS harness above.
+    run(async {
+        let server = Server::start();
+        server.raw(
+            200,
+            &json!({"pad": "x".repeat(1024 * 1024)}).to_string(),
+            None,
+        );
+        let client = reqwest::Client::builder()
+            .tls_certs_only(vec![reqwest::Certificate::from_der(CERT).unwrap()])
+            .no_proxy()
+            .build()
+            .unwrap();
+        let err = DelegationClient::with_client(&server.origin, client)
+            .principal(None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some("payload_too_large"));
     });
 }

@@ -453,3 +453,23 @@ test("principal resolution discards malformed copy authority and rejects HTTPS d
   await assert.rejects(() => new DelegationClient("https://al.ink/yan", loop).principal(), /redirect/);
   assert.equal(hops, 6);
 });
+
+test("principal reads are bounded in time and size", async () => {
+  const limit = 1024 * 1024;
+  let init: RequestInit | undefined;
+  const streamed = (async (_url: string | URL | Request, requestInit?: RequestInit) => {
+    init = requestInit;
+    return new Response(JSON.stringify({ id: PRINCIPAL_ID, pad: "x".repeat(limit) }));
+  }) as typeof fetch;
+  await assert.rejects(
+    () => new DelegationClient("https://al.ink/yan", streamed).principal(),
+    (error: unknown) => (error as { code?: string }).code === "payload_too_large",
+  );
+  assert.ok(init?.signal instanceof AbortSignal);
+  const declared = (async () =>
+    new Response("{}", { headers: { "content-length": String(limit + 1) } })) as typeof fetch;
+  await assert.rejects(
+    () => new DelegationClient("https://al.ink/yan", declared).principal(),
+    /exceeds/,
+  );
+});

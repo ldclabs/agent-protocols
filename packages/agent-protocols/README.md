@@ -60,6 +60,8 @@ const credential = materializeDelegationCredential(envelope, { acceptedAt, previ
 const verdict = verifyDelegationCredential(credential, records, principal, principal.id, "https://dmsg.net", Date.now());
 ```
 
+`DelegationClient.principal()` follows at most five HTTPS redirects, gives each request 30 seconds, and rejects a document over 1 MiB with `payload_too_large`. Principal URLs come from signed events that anyone can submit, so a delegation service must also refuse loopback, private, and other non-public destinations (Agent Identity Section 10). The SDK cannot see the address a request connects to, so pass a `fetch` whose egress policy enforces this.
+
 Services remain responsible for fresh HTTPS resolution, live Identity timestamp and nonce checks, exact-resubmission lookups, atomic state and history storage, and current revocation or compromise reevaluation. These are SDK building blocks, not a hosted delegation service.
 
 The local connector derives the delegation service from the principal's `delegation_service` origin and its discovery document, and checks policy and the controller's ceiling before signing a grant or revocation.

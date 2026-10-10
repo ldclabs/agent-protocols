@@ -9,6 +9,7 @@ from agent_protocols.http_client import (
     ProfileClient,
     sse_events_url,
 )
+from agent_protocols.errors import AgentProtocolError
 from agent_protocols.identity import AgentSigner
 
 AGENT_ID = AgentSigner.from_seed(bytes([1]) * 32).agent_id()
@@ -26,6 +27,12 @@ class FakeResponse:
 
     def json(self):
         return self._payload
+
+    def iter_content(self, chunk_size=1):
+        yield self.text.encode()
+
+    def close(self):
+        pass
 
 
 class FakeSession:
@@ -358,3 +365,15 @@ class DelegationResolutionRevisionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "redirect"):
             DelegationClient("https://al.ink/yan", session).principal()
         self.assertEqual(len(session.calls), 6)
+
+    def test_principal_reads_are_bounded_in_time_and_size(self):
+        class Recording(FakeSession):
+            def get(self, url, headers=None, **kwargs):
+                self.kwargs = kwargs
+                return super().get(url, headers)
+        session = Recording([FakeResponse({"id": PRINCIPAL_ID, "pad": "x" * (1024 * 1024)})])
+        with self.assertRaises(AgentProtocolError) as raised:
+            DelegationClient("https://al.ink/yan", session).principal()
+        self.assertEqual(raised.exception.code, "payload_too_large")
+        self.assertEqual(session.kwargs["timeout"], 30.0)
+        self.assertTrue(session.kwargs["stream"])

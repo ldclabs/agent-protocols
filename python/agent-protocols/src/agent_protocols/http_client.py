@@ -58,6 +58,31 @@ def _read_json(response: Any) -> Any:
     return response.json()
 
 
+# Principal URLs come from signed events that anyone can submit, so every
+# principal read is bounded in time and size (Agent Identity Section 10).
+_PRINCIPAL_TIMEOUT = 30.0
+_MAX_PRINCIPAL_DOCUMENT_BYTES = 1024 * 1024
+
+
+def _read_bounded_json(response: Any, limit: int) -> Any:
+    """Like ``_read_json``, but rejects a body over ``limit`` bytes."""
+    chunks, count = [], 0
+    try:
+        for chunk in response.iter_content(chunk_size=65536):
+            count += len(chunk)
+            if count > limit:
+                raise AgentProtocolError("payload_too_large", f"response exceeds {limit} bytes")
+            chunks.append(chunk)
+    finally:
+        response.close()
+    body = b"".join(chunks)
+    status = getattr(response, "status_code", 200)
+    if status >= 400:
+        headers = getattr(response, "headers", None) or {}
+        raise HttpResponseError(status, body.decode("utf-8", errors="replace"), headers.get(MAX_NONCE_HEADER))
+    return json.loads(body)
+
+
 def _query(path: str, params: dict[str, Any]) -> str:
     query = urlencode({key: value for key, value in params.items() if value is not None}, quote_via=quote)
     return f"{path}?{query}" if query else path
@@ -308,14 +333,16 @@ class DelegationClient:
         for redirects in range(6):
             if urlparse(url).scheme != "https":
                 raise ValueError("principal resolution requires HTTPS")
-            response = self.session.get(url, headers={"Accept": "application/json"}, allow_redirects=False)
+            response = self.session.get(url, headers={"Accept": "application/json"}, allow_redirects=False,
+                                        timeout=_PRINCIPAL_TIMEOUT, stream=True)
             if 300 <= getattr(response, "status_code", 200) < 400:
+                response.close()
                 location = response.headers.get("location")
                 if not location or redirects >= 5:
                     raise ValueError("invalid principal redirect chain")
                 url = urljoin(url, location)
                 continue
-            document = _read_json(response)
+            document = _read_bounded_json(response, _MAX_PRINCIPAL_DOCUMENT_BYTES)
             resolved = getattr(response, "url", None) or url
             if (not isinstance(document, dict) or not isinstance(document.get("id"), str)
                 or urlparse(document["id"]).scheme != "https" or not urlparse(document["id"]).hostname
@@ -329,6 +356,9 @@ class DelegationClient:
 
 
 def sse_events_url(base_url: str, room_id: str) -> str:
+    """URL of a room's SSE stream. Send the request JWT in the ``Authorization``
+    header, never in this URL; the host closes the stream by the JWT's ``exp``
+    (Agent Discourse Section 16.1)."""
     return f"{base_url.rstrip('/')}/v1/rooms/{quote(room_id, safe='')}/events/live"
 
 

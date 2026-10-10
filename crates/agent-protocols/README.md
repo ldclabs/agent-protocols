@@ -92,6 +92,8 @@ let verdict = verify_delegation_credential(
 );
 ```
 
+`DelegationClient::principal` follows at most five HTTPS redirects, gives each request 30 seconds, and rejects a document over 1 MiB with `payload_too_large`. Principal URLs come from signed events that anyone can submit, so a delegation service must also refuse loopback, private, and other non-public destinations (Agent Identity Section 10). The SDK cannot see the address a request connects to, so use `DelegationClient::with_client` with a `reqwest::Client` built with `https_only(true)` and a DNS resolver or egress proxy that enforces this.
+
 Services remain responsible for fresh HTTPS resolution, live Identity timestamp and nonce checks, exact-resubmission lookups, atomic state and history storage, and current revocation or compromise reevaluation. These are SDK building blocks, not a hosted delegation service.
 
 `DelegationPayload` wraps grant and revoke payloads for the shared validation and materialization APIs. The local connector derives the delegation service from the principal's `delegation_service` origin and checks policy and the controller's ceiling before signing. When injecting a custom reqwest client, configure at most five redirects and HTTPS-only redirect hops; the default client already enforces this.

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
@@ -21,6 +23,11 @@ use crate::profile::{
     ProfileUpdatePayload,
 };
 
+/// Principal URLs come from signed events that anyone can submit, so every
+/// principal read is bounded in time and size (Agent Identity Section 10).
+const PRINCIPAL_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_PRINCIPAL_DOCUMENT_BYTES: usize = 1024 * 1024;
+
 /// Reads a JSON body, turning a non-2xx response into [`SdkError::HttpStatus`]
 /// with the Agent Identity error code and `Max-Seen-Nonce` header when present.
 async fn read_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
@@ -28,23 +35,61 @@ async fn read_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T
     if status.is_success() {
         return Ok(response.json().await?);
     }
-    let max_seen_nonce = response
+    let max_seen_nonce = max_seen_nonce(&response);
+    let body = response.text().await.unwrap_or_default();
+    Err(http_status_error(status.as_u16(), max_seen_nonce, body))
+}
+
+/// Like [`read_json`], but rejects a body over `limit` bytes.
+async fn read_bounded_json<T: DeserializeOwned>(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<T> {
+    let too_large = || {
+        SdkError::protocol(
+            "payload_too_large",
+            format!("response exceeds {limit} bytes"),
+        )
+    };
+    if response.content_length().is_some_and(|n| n > limit as u64) {
+        return Err(too_large());
+    }
+    let status = response.status();
+    let max_seen_nonce = max_seen_nonce(&response);
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len().saturating_add(chunk.len()) > limit {
+            return Err(too_large());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if !status.is_success() {
+        let body = String::from_utf8_lossy(&bytes).into_owned();
+        return Err(http_status_error(status.as_u16(), max_seen_nonce, body));
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn max_seen_nonce(response: &reqwest::Response) -> Option<String> {
+    response
         .headers()
         .get(MAX_NONCE_HEADER)
         .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let body = response.text().await.unwrap_or_default();
+        .map(str::to_owned)
+}
+
+fn http_status_error(status: u16, max_seen_nonce: Option<String>, body: String) -> SdkError {
     let (code, data) = match serde_json::from_str::<ErrorResponse>(&body) {
         Ok(parsed) => (Some(parsed.error.code), parsed.error.data),
         Err(_) => (None, None),
     };
-    Err(SdkError::HttpStatus {
-        status: status.as_u16(),
+    SdkError::HttpStatus {
+        status,
         code,
         data,
         max_seen_nonce,
         body,
-    })
+    }
 }
 
 async fn send_json<T: DeserializeOwned>(request: reqwest::RequestBuilder) -> Result<T> {
@@ -502,6 +547,7 @@ impl DelegationClient {
             .inner
             .get(url)
             .header(reqwest::header::ACCEPT, "application/json")
+            .timeout(PRINCIPAL_TIMEOUT)
             .send()
             .await?;
         if response.url().scheme() != "https" {
@@ -511,7 +557,10 @@ impl DelegationClient {
         }
         let resolved = response.url().to_string();
         // A copy is parsed only for its canonical ID; its authority shape is irrelevant.
-        Ok((read_json(response).await?, resolved))
+        Ok((
+            read_bounded_json(response, MAX_PRINCIPAL_DOCUMENT_BYTES).await?,
+            resolved,
+        ))
     }
 
     pub async fn delegation(&self, delegation_id: &str) -> Result<DelegationCredential> {
@@ -668,6 +717,9 @@ impl PublicRoomsOptions {
     }
 }
 
+/// URL of a room's SSE stream. Send the request JWT in the `Authorization`
+/// header, never in this URL; the host closes the stream by the JWT's `exp`
+/// (Agent Discourse Section 16.1).
 pub fn sse_events_url(base_url: &str, room_id: &str) -> String {
     format!(
         "{}/v1/rooms/{}/events/live",

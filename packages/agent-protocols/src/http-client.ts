@@ -71,6 +71,13 @@ import {
 
 export type FetchLike = typeof fetch;
 
+/**
+ * Principal URLs come from signed events that anyone can submit, so every
+ * principal read is bounded in time and size (Agent Identity Section 10).
+ */
+const PRINCIPAL_TIMEOUT_MS = 30_000;
+const MAX_PRINCIPAL_DOCUMENT_BYTES = 1024 * 1024;
+
 export interface RoomEventsOptions {
   afterSeq?: number;
   limit?: number;
@@ -490,6 +497,7 @@ export class DelegationClient {
       const response = await this.fetchImpl(url, {
         headers: { accept: "application/json" },
         redirect: "manual",
+        signal: AbortSignal.timeout(PRINCIPAL_TIMEOUT_MS),
       });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
@@ -498,7 +506,10 @@ export class DelegationClient {
         url = new URL(location, url).href;
         continue;
       }
-      const document = await readJson<PrincipalDocument>(response);
+      const document = await readBoundedJson<PrincipalDocument>(
+        response,
+        MAX_PRINCIPAL_DOCUMENT_BYTES,
+      );
       const resolvedUrl = response.url || url;
       if (
         new URL(resolvedUrl).protocol !== "https:" ||
@@ -527,6 +538,11 @@ export class DelegationClient {
   }
 }
 
+/**
+ * URL of a room's SSE stream. Send the request JWT in the `Authorization`
+ * header, never in this URL; the host closes the stream by the JWT's `exp`
+ * (Agent Discourse Section 16.1).
+ */
 export function sseEventsUrl(baseUrl: string, roomId: string): string {
   return `${baseUrl.replace(/\/$/, "")}/v1/rooms/${encodeURIComponent(roomId)}/events/live`;
 }
@@ -557,6 +573,55 @@ async function readJson<T>(response: Response): Promise<T> {
     );
   }
   return response.json() as Promise<T>;
+}
+
+/** Like {@link readJson}, but rejects a body over `limit` bytes. */
+async function readBoundedJson<T>(
+  response: Response,
+  limit: number,
+): Promise<T> {
+  const tooLarge = () =>
+    protocolError("payload_too_large", `response exceeds ${limit} bytes`);
+  const declared = response.headers?.get?.("content-length");
+  if (declared != null && Number(declared) > limit) throw tooLarge();
+  let text: string;
+  const reader = response.body?.getReader();
+  if (reader) {
+    const chunks: Uint8Array[] = [];
+    let count = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        count += value.length;
+        if (count > limit) {
+          await reader.cancel();
+          throw tooLarge();
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(count);
+    let at = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, at);
+      at += chunk.length;
+    }
+    text = new TextDecoder().decode(bytes);
+  } else {
+    text = await response.text();
+    if (new TextEncoder().encode(text).length > limit) throw tooLarge();
+  }
+  if (!response.ok) {
+    throw new HttpResponseError(
+      response.status,
+      text,
+      response.headers?.get?.(MAX_NONCE_HEADER) ?? undefined,
+    );
+  }
+  return JSON.parse(text) as T;
 }
 
 /**
