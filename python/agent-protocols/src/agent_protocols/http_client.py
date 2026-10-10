@@ -89,29 +89,45 @@ def _query(path: str, params: dict[str, Any]) -> str:
 
 
 class ProfileClient:
-    def __init__(self, base_url: str, session: Any | None = None):
+    """Agent Profile client. Without ``endpoints`` it uses the RECOMMENDED paths
+    under ``base_url``; ``ProfileClient.discover`` reads the service's discovery
+    document instead, whose endpoints clients MUST prefer. ``profiles_url`` is
+    the base of profile reads, event history, and submission (Section 7.1)."""
+
+    def __init__(self, base_url: str, session: Any | None = None, endpoints: dict[str, str] | None = None):
         self.base_url = base_url.rstrip("/")
         self.session = session or _requests_session()
+        endpoints = endpoints or {}
+        self.profiles_url = (endpoints.get("profiles") or f"{self.base_url}/v1/profiles").rstrip("/")
+        self.batch_url = endpoints.get("profile_batch") or f"{self.profiles_url}/batch"
+
+    @classmethod
+    def discover(cls, origin: str, session: Any | None = None) -> "ProfileClient":
+        """Builds a client for the service at ``origin`` from its discovery
+        document, falling back to the default paths when the service publishes none."""
+        session = session or _requests_session()
+        base = origin.rstrip("/")
+        try:
+            discovery = _read_json(session.get(f"{base}/.well-known/agent-profile"))
+            endpoints = discovery.get("endpoints") if isinstance(discovery, dict) else None
+            return cls(base, session, endpoints if isinstance(endpoints, dict) else None)
+        except Exception:  # Discovery is optional; the default paths apply.
+            return cls(base, session)
 
     def get_profile(self, agent_id: AgentId) -> dict[str, Any]:
-        return self._get(f"/v1/profiles/{agent_id}")
+        return _read_json(self.session.get(f"{self.profiles_url}/{agent_id}"))
 
     def get_profiles(self, agent_ids: list[AgentId]) -> dict[str, Any]:
-        return self._post("/v1/profiles/batch", {"ids": agent_ids})
+        return _read_json(self.session.post(self.batch_url, json={"ids": agent_ids}))
 
     def profile_events(
         self, agent_id: AgentId, limit: int = 1, cursor: str | None = None
     ) -> dict[str, Any]:
-        return self._get(_query(f"/v1/profiles/{agent_id}/events", {"limit": limit, "cursor": cursor}))
+        url = _query(f"{self.profiles_url}/{agent_id}/events", {"limit": limit, "cursor": cursor})
+        return _read_json(self.session.get(url))
 
     def submit_profile_update(self, envelope: Envelope) -> dict[str, Any]:
-        return self._post("/v1/profiles", envelope)
-
-    def _get(self, path: str) -> Any:
-        return _read_json(self.session.get(self.base_url + path))
-
-    def _post(self, path: str, body: Any) -> Any:
-        return _read_json(self.session.post(self.base_url + path, json=body))
+        return _read_json(self.session.post(self.profiles_url, json=envelope))
 
 
 class DiscourseClient:

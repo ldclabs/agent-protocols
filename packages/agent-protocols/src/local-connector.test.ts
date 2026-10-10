@@ -35,6 +35,7 @@ import {
   TOOL_INBOX_NEXT,
   TOOL_JOIN_REQUEST_REVIEW,
   TOOL_PRINCIPAL_RESOLVE,
+  TOOL_PROFILE_UPDATE,
   TOOL_ROOM_JOIN,
   TOOL_ROOM_CREATE,
   TOOL_ROOM_MEMBERS_LIST,
@@ -674,4 +675,34 @@ test("delegation_check verifies each candidate for the requested audience", asyn
   const other = (await connector.callTool(TOOL_DELEGATION_CHECK, { principal_id: principalId, audience: "https://tokenlist.ing" })) as { delegations: delegation.DelegationVerdict[] };
   assert.deepEqual([other.delegations[0].verified, other.delegations[0].usable], [true, false]);
   await assert.rejects(() => connector.callTool(TOOL_DELEGATION_CHECK, { principal_id: principalId }), /audience is required/);
+});
+
+test("profile_update posts to the discovered profiles endpoint and allowlists its origin", async () => {
+  const active = signer(1);
+  const service = "https://profiles.example.test";
+  const calls: string[] = [];
+  const profileService = (profiles: string) => (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${String(url)}`);
+    if (String(url) === `${service}/.well-known/agent-profile`) {
+      return Response.json({ protocol: "agent-profile/1.0", service, endpoints: { profiles } });
+    }
+    const envelope = JSON.parse(String(init?.body)) as Envelope<unknown>;
+    return Response.json({ id: active.agentId(), name: "A", updated_at: envelope.event.created_at, event_id: envelope.hash });
+  }) as typeof fetch;
+  const connectorAt = (profiles: string) => {
+    const connector = new LocalConnector(active, { fetchImpl: profileService(profiles) });
+    connector.addHost({ host: HOST, allowed: true, features: [], profile_service: service });
+    return connector;
+  };
+
+  await connectorAt(`${service}/api/profiles`).callTool(TOOL_PROFILE_UPDATE, { profile_service: service, profile: { name: "A" } });
+  assert.deepEqual(calls, [`GET ${service}/.well-known/agent-profile`, `POST ${service}/api/profiles`]);
+
+  // A discovery document cannot move signed writes to an origin the operator never allowed.
+  calls.length = 0;
+  await assert.rejects(
+    connectorAt("https://elsewhere.example/profiles").callTool(TOOL_PROFILE_UPDATE, { profile_service: service, profile: { name: "A" } }),
+    /permission denied/,
+  );
+  assert.deepEqual(calls, [`GET ${service}/.well-known/agent-profile`]);
 });

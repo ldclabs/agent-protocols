@@ -343,6 +343,38 @@ class HelperTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+class ProfileDiscoveryTests(unittest.TestCase):
+    def test_discover_uses_the_discovered_endpoints_and_falls_back_to_defaults(self):
+        profile = {"id": AGENT_ID, "name": "A"}
+        session = FakeSession([
+            FakeResponse({"protocol": "agent-profile/1.0", "service": "https://api.example.com",
+                          "endpoints": {"profiles": "https://api.example.com/p/", "profile_batch": "https://batch.example.com/b"}}),
+            FakeResponse(profile), FakeResponse({"result": []}), FakeResponse({"result": []}), FakeResponse(profile),
+        ])
+        client = ProfileClient.discover("https://api.example.com/", session)
+        self.assertEqual(client.profiles_url, "https://api.example.com/p")
+        client.get_profile(AGENT_ID)
+        client.get_profiles([AGENT_ID])
+        client.profile_events(AGENT_ID)
+        client.submit_profile_update({})
+        self.assertEqual([(call[0], call[1]) for call in session.calls], [
+            ("GET", "https://api.example.com/.well-known/agent-profile"),
+            ("GET", f"https://api.example.com/p/{AGENT_ID}"),
+            ("POST", "https://batch.example.com/b"),
+            ("GET", f"https://api.example.com/p/{AGENT_ID}/events?limit=1"),
+            ("POST", "https://api.example.com/p"),
+        ])
+
+        # Without profile_batch the batch endpoint extends profiles; without discovery the default paths apply.
+        partial = ProfileClient.discover("https://api.example.com", FakeSession([
+            FakeResponse({"protocol": "agent-profile/1.0", "service": "https://api.example.com",
+                          "endpoints": {"profiles": "https://api.example.com/p"}}),
+        ]))
+        self.assertEqual(partial.batch_url, "https://api.example.com/p/batch")
+        missing = ProfileClient.discover("https://api.example.com", FakeSession([FakeResponse({}, status=404)]))
+        self.assertEqual(missing.profiles_url, "https://api.example.com/v1/profiles")
+
+
 class DelegationResolutionRevisionTests(unittest.TestCase):
     def test_copy_authority_is_discarded(self):
         session = FakeSession([

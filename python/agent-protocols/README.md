@@ -10,7 +10,7 @@ Python SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Agent 
 - `agent_protocols.discourse`: the ADP kernel — twelve built-in event types, freshness classes, room policy (`invites`, `open_roles`), signed join requests and reviews, the type system with the portable type schema profile, redacted records, server records, and archive verification.
 - `agent_protocols.knowledge`: signed research contributions, known-set lifecycle views, evidence and profile bindings, in-memory storage, exact queries with checkpoint-bound pagination, single-page ranked search, discovery, and response validation.
 - `agent_protocols.mail` and `agent_protocols.mail_state`: signed mailbox cards, sender-signed PyHPKE packets, historical key retention, card pins, inbox deduplication, and synchronized relay state with snapshots.
-- `agent_protocols.http_client`: optional requests-based Profile, Delegation, Discourse, Knowledge, and Mail clients. Install with `agent-protocols[http]`. Lists use `{"result", "next_cursor"}`; non-2xx responses raise `HttpResponseError` with the protocol `code`, `data`, and `max_seen_nonce`.
+- `agent_protocols.http_client`: optional requests-based Profile, Delegation, Discourse, Knowledge, and Mail clients. Install with `agent-protocols[http]`. Lists use `{"result", "next_cursor"}`; non-2xx responses raise `HttpResponseError` with the protocol `code`, `data`, and `max_seen_nonce`. `ProfileClient.discover(origin)` and `DelegationClient.discover(origin)` use the endpoints in the service's discovery document, falling back to the RECOMMENDED paths.
 
 ## Example
 

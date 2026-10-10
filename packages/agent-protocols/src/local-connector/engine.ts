@@ -1039,7 +1039,7 @@ export class LocalConnector {
     } else if (profile.id !== activeId) {
       throw invalidPayload("profile.id must be the active Agent ID");
     }
-    const client = this.profileClient(input.profile_service);
+    const client = await this.profileClient(input.profile_service);
     let envelope = this.signProfileUpdate(profile as unknown as ProfileUpdatePayload);
     let materialized: AgentProfile;
     try {
@@ -1703,7 +1703,13 @@ export class LocalConnector {
     return new DiscourseClient(host, this.fetchImpl);
   }
 
-  private profileClient(url: string): ProfileClient {
-    return new ProfileClient(url, this.fetchImpl);
+  /**
+   * Locates the profile endpoints from the service's discovery document; the
+   * allowlist covers the discovered origin too, since the connector signs for it.
+   */
+  private async profileClient(url: string): Promise<ProfileClient> {
+    const client = await ProfileClient.discover(url, this.fetchImpl);
+    this.requireAllowedOrigin(client.profilesUrl);
+    return client;
   }
 }

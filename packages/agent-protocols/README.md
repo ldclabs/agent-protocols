@@ -11,7 +11,7 @@ TypeScript SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Ag
 - `knowledge`: signed research contributions, validation, in-memory retrieval and state.
 - `mail`: signed mailbox cards, sender-signed HPKE packets, card pins, key retention, inbox deduplication, and relay state.
 - `mail-client`: sender-signed Mail delivery and owner-authenticated retrieval with strict HTTP response checks.
-- `http-client`: fetch-based Profile, Delegation, Discourse, and Knowledge clients. Lists use `{ result, next_cursor }`; non-2xx responses throw `HttpResponseError` with the protocol `code`, `data`, and `Max-Seen-Nonce`.
+- `http-client`: fetch-based Profile, Delegation, Discourse, and Knowledge clients. Lists use `{ result, next_cursor }`; non-2xx responses throw `HttpResponseError` with the protocol `code`, `data`, and `Max-Seen-Nonce`. `ProfileClient.discover(origin)` and `DelegationClient.discover(origin)` use the endpoints in the service's discovery document, falling back to the RECOMMENDED paths.
 - `local-connector`: the Local Agent Protocols MCP connector: 23 standard tools, resource URIs, structured views, and the connector engine.
 
 ## Example

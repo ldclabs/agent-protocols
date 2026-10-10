@@ -66,6 +66,8 @@ import {
   AgentProfile,
   ProfileBatchReadResponse,
   ProfileEventsResponse,
+  ProfileServiceDiscovery,
+  ProfileServiceEndpoints,
   ProfileUpdatePayload,
 } from "./profile.js";
 
@@ -110,18 +112,56 @@ export interface JoinRequestsOptions {
   cursor?: string;
 }
 
+/**
+ * Agent Profile client. Without `endpoints` it uses the RECOMMENDED paths
+ * under `baseUrl`; {@link ProfileClient.discover} reads the service's
+ * discovery document instead, whose endpoints clients MUST prefer.
+ */
 export class ProfileClient {
+  /** Base URL of profile reads, event history, and submission (Section 7.1). */
+  readonly profilesUrl: string;
+  private readonly batchUrl: string;
+
   constructor(
-    private readonly baseUrl: string,
+    baseUrl: string,
     private readonly fetchImpl: FetchLike = fetch,
-  ) {}
+    endpoints?: Partial<ProfileServiceEndpoints>,
+  ) {
+    const base = baseUrl.replace(/\/$/, "");
+    this.profilesUrl = (endpoints?.profiles ?? `${base}/v1/profiles`).replace(
+      /\/$/,
+      "",
+    );
+    this.batchUrl = endpoints?.profile_batch ?? `${this.profilesUrl}/batch`;
+  }
+
+  /**
+   * Builds a client for the service at `origin` from its discovery document,
+   * falling back to the default paths when the service publishes none.
+   */
+  static async discover(
+    origin: string,
+    fetchImpl: FetchLike = fetch,
+  ): Promise<ProfileClient> {
+    const base = origin.replace(/\/$/, "");
+    try {
+      const response = await fetchImpl(`${base}/.well-known/agent-profile`);
+      if (response.ok) {
+        const discovery = (await response.json()) as ProfileServiceDiscovery;
+        return new ProfileClient(base, fetchImpl, discovery.endpoints);
+      }
+    } catch {
+      // Discovery is optional; the default paths apply.
+    }
+    return new ProfileClient(base, fetchImpl);
+  }
 
   async getProfile(agentId: AgentId): Promise<AgentProfile> {
-    return this.getJson(`/v1/profiles/${agentId}`);
+    return this.getJson(`${this.profilesUrl}/${agentId}`);
   }
 
   async getProfiles(agentIds: AgentId[]): Promise<ProfileBatchReadResponse> {
-    return this.postJson("/v1/profiles/batch", { ids: agentIds });
+    return this.postJson(this.batchUrl, { ids: agentIds });
   }
 
   async profileEvents(
@@ -130,32 +170,28 @@ export class ProfileClient {
     cursor?: string,
   ): Promise<ProfileEventsResponse> {
     return this.getJson(
-      addQuery(`/v1/profiles/${agentId}/events`, { limit, cursor }),
+      addQuery(`${this.profilesUrl}/${agentId}/events`, { limit, cursor }),
     );
   }
 
   async submitProfileUpdate(
     envelope: Envelope<ProfileUpdatePayload>,
   ): Promise<AgentProfile> {
-    return this.postJson("/v1/profiles", envelope);
+    return this.postJson(this.profilesUrl, envelope);
   }
 
-  private async getJson<T>(path: string): Promise<T> {
-    const response = await this.fetchImpl(this.url(path));
+  private async getJson<T>(url: string): Promise<T> {
+    const response = await this.fetchImpl(url);
     return readJson<T>(response);
   }
 
-  private async postJson<T>(path: string, body: unknown): Promise<T> {
-    const response = await this.fetchImpl(this.url(path), {
+  private async postJson<T>(url: string, body: unknown): Promise<T> {
+    const response = await this.fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     return readJson<T>(response);
-  }
-
-  private url(path: string): string {
-    return `${this.baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
   }
 }
 

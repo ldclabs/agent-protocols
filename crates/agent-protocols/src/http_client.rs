@@ -20,7 +20,7 @@ use crate::error::SdkError;
 use crate::identity::{AgentId, Envelope, ErrorResponse, ListResponse, MAX_NONCE_HEADER};
 use crate::profile::{
     AgentProfile, ProfileBatchReadRequest, ProfileBatchReadResponse, ProfileEventsResponse,
-    ProfileUpdatePayload,
+    ProfileServiceDiscovery, ProfileServiceEndpoints, ProfileUpdatePayload,
 };
 
 /// Principal URLs come from signed events that anyone can submit, so every
@@ -111,9 +111,13 @@ fn join_url(base_url: &str, path: &str) -> String {
     )
 }
 
+/// Agent Profile client. Without endpoints it uses the RECOMMENDED paths under
+/// `base_url`; [`ProfileClient::discover`] reads the service's discovery
+/// document instead, whose endpoints clients MUST prefer.
 #[derive(Clone, Debug)]
 pub struct ProfileClient {
-    base_url: String,
+    profiles_url: String,
+    batch_url: String,
     inner: reqwest::Client,
 }
 
@@ -123,30 +127,62 @@ impl ProfileClient {
     }
 
     pub fn with_client(base_url: impl Into<String>, inner: reqwest::Client) -> Self {
+        let profiles = join_url(&base_url.into(), "/v1/profiles");
+        Self::with_endpoints(
+            inner,
+            &ProfileServiceEndpoints {
+                profiles,
+                profile_batch: None,
+            },
+        )
+    }
+
+    /// Uses the endpoints of a discovery document; `profile_batch` defaults to
+    /// `{profiles}/batch`.
+    pub fn with_endpoints(inner: reqwest::Client, endpoints: &ProfileServiceEndpoints) -> Self {
+        let profiles_url = endpoints.profiles.trim_end_matches('/').to_owned();
+        let batch_url = endpoints
+            .profile_batch
+            .clone()
+            .unwrap_or_else(|| format!("{profiles_url}/batch"));
         Self {
-            base_url: base_url.into(),
+            profiles_url,
+            batch_url,
             inner,
         }
     }
 
+    /// Builds a client for the service at `origin` from its discovery
+    /// document, falling back to the default paths when the service publishes none.
+    pub async fn discover(origin: &str) -> Self {
+        Self::discover_with_client(origin, reqwest::Client::new()).await
+    }
+
+    pub async fn discover_with_client(origin: &str, inner: reqwest::Client) -> Self {
+        let base = origin.trim_end_matches('/');
+        let discovered: Result<ProfileServiceDiscovery> =
+            send_json(inner.get(format!("{base}/.well-known/agent-profile"))).await;
+        match discovered {
+            Ok(discovery) => Self::with_endpoints(inner, &discovery.endpoints),
+            // Discovery is optional; the default paths apply.
+            Err(_) => Self::with_client(base, inner),
+        }
+    }
+
+    /// Base URL of profile reads, event history, and submission (Section 7.1).
+    pub fn profiles_url(&self) -> &str {
+        &self.profiles_url
+    }
+
     pub async fn get_profile(&self, agent_id: &AgentId) -> Result<AgentProfile> {
-        send_json(
-            self.inner
-                .get(self.url(&format!("/v1/profiles/{agent_id}"))),
-        )
-        .await
+        send_json(self.inner.get(format!("{}/{agent_id}", self.profiles_url))).await
     }
 
     pub async fn get_profiles(&self, agent_ids: &[AgentId]) -> Result<ProfileBatchReadResponse> {
         let request = ProfileBatchReadRequest {
             ids: agent_ids.to_vec(),
         };
-        send_json(
-            self.inner
-                .post(self.url("/v1/profiles/batch"))
-                .json(&request),
-        )
-        .await
+        send_json(self.inner.post(&self.batch_url).json(&request)).await
     }
 
     pub async fn profile_events(
@@ -168,19 +204,15 @@ impl ProfileClient {
             pairs.push(format!("limit={limit}"));
         }
         push_query_pair(&mut pairs, "cursor", cursor);
-        let path = with_query(format!("/v1/profiles/{agent_id}/events"), &pairs);
-        send_json(self.inner.get(self.url(&path))).await
+        let url = with_query(format!("{}/{agent_id}/events", self.profiles_url), &pairs);
+        send_json(self.inner.get(url)).await
     }
 
     pub async fn submit_profile_update(
         &self,
         envelope: &Envelope<ProfileUpdatePayload>,
     ) -> Result<AgentProfile> {
-        send_json(self.inner.post(self.url("/v1/profiles")).json(envelope)).await
-    }
-
-    fn url(&self, path: &str) -> String {
-        join_url(&self.base_url, path)
+        send_json(self.inner.post(&self.profiles_url).json(envelope)).await
     }
 }
 

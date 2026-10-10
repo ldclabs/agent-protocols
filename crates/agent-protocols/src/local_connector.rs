@@ -1027,7 +1027,10 @@ impl LocalConnector {
             }
         }
         let payload: ProfileUpdatePayload = serde_json::from_value(profile)?;
-        let client = ProfileClient::with_client(&input.profile_service, self.http.clone());
+        // The allowlist covers the discovered origin too, since the connector signs for it.
+        let client =
+            ProfileClient::discover_with_client(&input.profile_service, self.http.clone()).await;
+        self.require_allowed_origin(client.profiles_url())?;
         let (materialized, envelope) = submit_signed!(
             self,
             self.sign_profile_update(payload.clone()),

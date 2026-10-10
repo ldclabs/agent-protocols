@@ -259,6 +259,69 @@ fn profile_client_round_trips_every_endpoint() {
 }
 
 #[test]
+fn profile_client_discovers_endpoints_and_falls_back_to_default_paths() {
+    let server = MockServer::start();
+    let aid = sample_agent_id();
+    let base = server.base_url.clone();
+    server.enqueue(
+        200,
+        format!(
+            r#"{{"protocol":"agent-profile/1.0","service":"{base}","endpoints":{{"profiles":"{base}/p/","profile_batch":"{base}/b"}}}}"#
+        ),
+    );
+    server.enqueue(200, r#"{"result":[]}"#);
+    server.enqueue(200, r#"{"result":[]}"#);
+    // Without profile_batch the batch endpoint extends profiles.
+    server.enqueue(
+        200,
+        format!(
+            r#"{{"protocol":"agent-profile/1.0","service":"{base}","endpoints":{{"profiles":"{base}/p"}}}}"#
+        ),
+    );
+    server.enqueue(200, r#"{"result":[]}"#);
+    // Without a discovery document the default paths apply.
+    server.enqueue(404, r#"{"error":{"code":"not_found","message":"none"}}"#);
+
+    block_on(async {
+        let agent_id: AgentId = aid.parse().unwrap();
+        let client =
+            ProfileClient::discover_with_client(&format!("{base}/"), no_proxy_client()).await;
+        assert_eq!(client.profiles_url(), format!("{base}/p"));
+        client
+            .get_profiles(std::slice::from_ref(&agent_id))
+            .await
+            .unwrap();
+        client.profile_events(&agent_id, None).await.unwrap();
+
+        let partial = ProfileClient::discover_with_client(&base, no_proxy_client()).await;
+        partial
+            .get_profiles(std::slice::from_ref(&agent_id))
+            .await
+            .unwrap();
+
+        let missing = ProfileClient::discover_with_client(&base, no_proxy_client()).await;
+        assert_eq!(missing.profiles_url(), format!("{base}/v1/profiles"));
+    });
+
+    let paths: Vec<String> = server
+        .requests()
+        .into_iter()
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "GET /.well-known/agent-profile".to_owned(),
+            "POST /b".to_owned(),
+            format!("GET /p/{aid}/events"),
+            "GET /.well-known/agent-profile".to_owned(),
+            "POST /p/batch".to_owned(),
+            "GET /.well-known/agent-profile".to_owned(),
+        ]
+    );
+}
+
+#[test]
 fn profile_events_without_limit_omits_query() {
     let server = MockServer::start();
     let aid = sample_agent_id();

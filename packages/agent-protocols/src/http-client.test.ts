@@ -315,6 +315,40 @@ test("delegation enumeration requires a request JWT and queries the principal's 
   assert.equal(calls[1].url, "https://delegations.example.com/query");
 });
 
+test("ProfileClient.discover uses the discovered endpoints and falls back to the default paths", async () => {
+  const profile = { id: AGENT_ID, name: "A", updated_at: 1, event_id: "e" };
+  const { fetchImpl, calls } = makeFetch([
+    { body: { protocol: "agent-profile/1.0", service: "https://api.example.com", endpoints: { profiles: "https://api.example.com/p/", profile_batch: "https://batch.example.com/b" } } },
+    { body: profile },
+    { body: { result: [] } },
+    { body: { result: [] } },
+    { body: profile },
+  ]);
+  const client = await ProfileClient.discover("https://api.example.com/", fetchImpl);
+  assert.equal(client.profilesUrl, "https://api.example.com/p");
+  await client.getProfile(AGENT_ID);
+  await client.getProfiles([AGENT_ID]);
+  await client.profileEvents(AGENT_ID);
+  await client.submitProfileUpdate({} as never);
+  assert.deepEqual(
+    calls.map((call) => `${call.init?.method ?? "GET"} ${call.url}`),
+    [
+      "GET https://api.example.com/.well-known/agent-profile",
+      `GET https://api.example.com/p/${AGENT_ID}`,
+      "POST https://batch.example.com/b",
+      `GET https://api.example.com/p/${AGENT_ID}/events?limit=1`,
+      "POST https://api.example.com/p",
+    ],
+  );
+
+  // Without profile_batch the batch endpoint extends profiles; without discovery the default paths apply.
+  const partial = makeFetch([{ body: { protocol: "agent-profile/1.0", service: "https://api.example.com", endpoints: { profiles: "https://api.example.com/p" } } }, { body: { result: [] } }]);
+  await (await ProfileClient.discover("https://api.example.com", partial.fetchImpl)).getProfiles([AGENT_ID]);
+  assert.equal(partial.calls[1].url, "https://api.example.com/p/batch");
+  const missing = makeFetch([{ ok: false, status: 404, body: {} }]);
+  assert.equal((await ProfileClient.discover("https://api.example.com", missing.fetchImpl)).profilesUrl, "https://api.example.com/v1/profiles");
+});
+
 test("DelegationClient re-resolves a principal document served away from its id", async () => {
   const document = { id: PRINCIPAL_ID, protocol: "agent-delegation/1.0", updated_at: 1000, controllers: [{ id: AGENT_ID, source: "local", valid_from: 0 }], aliases: ["https://al.ink/yan"] };
   const { fetchImpl, calls } = makeFetch([{ body: document }, { body: document }]);
