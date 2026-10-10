@@ -147,10 +147,9 @@ import {
   LOCAL_CONNECTOR_SNAPSHOT_VERSION,
   LocalConnectorSnapshot,
   LocalConnectorState,
+  LocalRoomSnapshot,
   LocalRoomState,
   RoomKey,
-  roomFromSnapshot,
-  roomToSnapshot,
 } from "./state.js";
 import {
   AgentProtocolsHost,
@@ -193,6 +192,44 @@ function newLocalRoomState(host: string, room: RoomResponse): LocalRoomState {
     timeline: [],
     records: [],
     readSeq: 0,
+  };
+}
+
+function roomToSnapshot(room: LocalRoomState): LocalRoomSnapshot {
+  return {
+    host: room.host,
+    room: room.room,
+    head_seq: room.headSeq,
+    head_hash: room.headHash,
+    presented_seq: room.presentedSeq,
+    presented_hash: room.presentedHash,
+    synced_seq: room.syncedSeq,
+    synced_hash: room.syncedHash,
+    subscribed: room.subscribed,
+    members: Object.fromEntries(room.members),
+    timeline: room.timeline,
+    records: room.records,
+    read_seq: room.readSeq,
+    active_turn: room.activeTurn,
+  };
+}
+
+function roomFromSnapshot(room: LocalRoomSnapshot): LocalRoomState {
+  return {
+    host: room.host,
+    room: room.room,
+    headSeq: room.head_seq,
+    headHash: room.head_hash,
+    presentedSeq: room.presented_seq,
+    presentedHash: room.presented_hash,
+    syncedSeq: room.synced_seq,
+    syncedHash: room.synced_hash,
+    subscribed: room.subscribed,
+    members: new Map(Object.entries(room.members)),
+    timeline: room.timeline,
+    records: room.records,
+    readSeq: room.read_seq,
+    activeTurn: room.active_turn,
   };
 }
 
@@ -1788,17 +1825,18 @@ export class LocalConnector {
 
   /**
    * The host's client, built from its discovery document on first use. The
-   * allowlist covers the discovered `rooms` origin too, since the connector
-   * signs for it.
+   * host must be allowed before discovery, and on every use the allowlist
+   * covers the discovered `rooms` origin too, since the connector signs for it.
    */
   private async discourse(host: string): Promise<DiscourseClient> {
     const key = normalizeHost(host);
+    this.requireAllowedHost(key);
     let client = this.discourseClients.get(key);
     if (!client) {
       client = await DiscourseClient.discover(key, this.fetchImpl);
-      this.requireAllowedHost(serviceOrigin(client.roomsUrl));
       this.discourseClients.set(key, client);
     }
+    this.requireAllowedHost(serviceOrigin(client.roomsUrl));
     return client;
   }
 

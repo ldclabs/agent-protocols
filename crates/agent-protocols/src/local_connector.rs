@@ -43,7 +43,7 @@ use state::{
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -121,7 +121,7 @@ impl LocalConnector {
     /// is trusted local state, so only its version, Agent ID, and shape are
     /// checked; it must belong to `signer`'s Agent ID.
     pub fn from_snapshot(signer: AgentSigner, snapshot: &Value) -> Result<Self> {
-        let snapshot: ConnectorSnapshot = serde_json::from_value(snapshot.clone())?;
+        let snapshot = ConnectorSnapshot::deserialize(snapshot)?;
         if snapshot.version != LOCAL_CONNECTOR_SNAPSHOT_VERSION {
             return Err(SdkError::protocol(
                 "invalid_request",
@@ -1928,17 +1928,21 @@ impl LocalConnector {
     }
 
     /// The host's client, built from its discovery document on first use. The
-    /// allowlist covers the discovered `rooms` origin too, since the connector
-    /// signs for it.
+    /// host must be allowed before discovery, and on every use the allowlist
+    /// covers the discovered `rooms` origin too, since the connector signs for it.
     async fn discourse(&self, host: &str) -> Result<DiscourseClient> {
         let host = normalize_host(host);
+        self.require_allowed_host(&host)?;
         let cached = self.discourse_cache().get(&host).cloned();
-        if let Some(client) = cached {
-            return Ok(client);
-        }
-        let client = DiscourseClient::discover_with_client(&host, self.http.clone()).await;
+        let client = match cached {
+            Some(client) => client,
+            None => {
+                let client = DiscourseClient::discover_with_client(&host, self.http.clone()).await;
+                self.discourse_cache().insert(host, client.clone());
+                client
+            }
+        };
         self.require_allowed_host(&service_origin(client.rooms_url())?)?;
-        self.discourse_cache().insert(host, client.clone());
         Ok(client)
     }
 

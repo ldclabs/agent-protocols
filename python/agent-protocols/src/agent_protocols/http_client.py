@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from typing import Any, Callable, Iterator
 from urllib.parse import quote, urlencode, urljoin, urlparse
 
@@ -64,14 +65,18 @@ _PRINCIPAL_TIMEOUT = 30.0
 _MAX_PRINCIPAL_DOCUMENT_BYTES = 1024 * 1024
 
 
-def _read_bounded_json(response: Any, limit: int) -> Any:
-    """Like ``_read_json``, but rejects a body over ``limit`` bytes."""
+def _read_bounded_json(response: Any, limit: int, deadline: float) -> Any:
+    """Like ``_read_json``, but rejects a body over ``limit`` bytes or one still
+    arriving after ``deadline`` (a ``time.monotonic()`` value): a ``requests``
+    timeout bounds each socket read, not the whole download."""
     chunks, count = [], 0
     try:
         for chunk in response.iter_content(chunk_size=65536):
             count += len(chunk)
             if count > limit:
                 raise AgentProtocolError("payload_too_large", f"response exceeds {limit} bytes")
+            if time.monotonic() > deadline:
+                raise TimeoutError("response exceeds the fetch time limit")
             chunks.append(chunk)
     finally:
         response.close()
@@ -371,6 +376,7 @@ class DelegationClient:
         for redirects in range(6):
             if urlparse(url).scheme != "https":
                 raise ValueError("principal resolution requires HTTPS")
+            deadline = time.monotonic() + _PRINCIPAL_TIMEOUT
             response = self.session.get(url, headers={"Accept": "application/json"}, allow_redirects=False,
                                         timeout=_PRINCIPAL_TIMEOUT, stream=True)
             if 300 <= getattr(response, "status_code", 200) < 400:
@@ -380,7 +386,7 @@ class DelegationClient:
                     raise ValueError("invalid principal redirect chain")
                 url = urljoin(url, location)
                 continue
-            document = _read_bounded_json(response, _MAX_PRINCIPAL_DOCUMENT_BYTES)
+            document = _read_bounded_json(response, _MAX_PRINCIPAL_DOCUMENT_BYTES, deadline)
             resolved = getattr(response, "url", None) or url
             if (not isinstance(document, dict) or not isinstance(document.get("id"), str)
                 or urlparse(document["id"]).scheme != "https" or not urlparse(document["id"]).hostname

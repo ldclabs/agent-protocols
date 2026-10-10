@@ -1,5 +1,7 @@
+import itertools
 import json
 import unittest
+from unittest import mock
 
 import agent_protocols.http_client as http_client
 from agent_protocols.http_client import (
@@ -340,9 +342,6 @@ class HelperTests(unittest.TestCase):
             http_client.requests = original
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class DiscourseDiscoveryTests(unittest.TestCase):
     def test_discover_uses_the_discovered_rooms_and_my_rooms_endpoints(self):
         session = FakeSession([
@@ -443,3 +442,18 @@ class DelegationResolutionRevisionTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "payload_too_large")
         self.assertEqual(session.kwargs["timeout"], 30.0)
         self.assertTrue(session.kwargs["stream"])
+
+        # A requests timeout bounds each read, so a body that keeps trickling
+        # in is cut off at the 30-second deadline instead.
+        class Trickle(FakeResponse):
+            def iter_content(self, chunk_size=1):
+                for byte in self.text.encode():
+                    yield bytes([byte])
+        with mock.patch.object(http_client, "time") as clock:
+            clock.monotonic.side_effect = itertools.count(0.0, 10.0)
+            with self.assertRaises(TimeoutError):
+                DelegationClient("https://al.ink/yan", FakeSession([Trickle(PRINCIPAL_DOCUMENT)])).principal()
+
+
+if __name__ == "__main__":
+    unittest.main()

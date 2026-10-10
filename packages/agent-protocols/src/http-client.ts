@@ -249,7 +249,7 @@ export class DiscourseClient {
   }
 
   async room(roomId: string, jwt?: string): Promise<RoomResponse> {
-    return this.getJson(`${this.roomUrl(roomId)}`, jwt);
+    return this.getJson(this.roomUrl(roomId), jwt);
   }
 
   async publicRooms(
@@ -323,21 +323,21 @@ export class DiscourseClient {
     roomId: string,
     envelope: Envelope<RoomJoinPayload>,
   ): Promise<ServerRecord<RoomJoinPayload>> {
-    return this.postJson(`${this.roomUrl(roomId)}`, envelope);
+    return this.postJson(this.roomUrl(roomId), envelope);
   }
 
   async leaveRoom(
     roomId: string,
     envelope: Envelope<RoomLeavePayload>,
   ): Promise<ServerRecord<RoomLeavePayload>> {
-    return this.postJson(`${this.roomUrl(roomId)}`, envelope);
+    return this.postJson(this.roomUrl(roomId), envelope);
   }
 
   async submitEvent<P>(
     roomId: string,
     envelope: Envelope<P>,
   ): Promise<ServerRecord<P>> {
-    return this.postJson(`${this.roomUrl(roomId)}`, envelope);
+    return this.postJson(this.roomUrl(roomId), envelope);
   }
 
   async events(

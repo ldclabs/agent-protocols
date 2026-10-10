@@ -1010,6 +1010,121 @@ mod connector_regressions {
     }
 
     #[test]
+    fn the_allowlist_applies_to_every_discourse_call() {
+        let host = MockServer::start();
+        let rooms = MockServer::start();
+        let entry = |url: &str, allowed: bool| AgentProtocolsHost {
+            host: url.to_owned(),
+            label: None,
+            allowed,
+            features: vec![],
+            profile_service: None,
+            last_checked_at: None,
+        };
+        host.enqueue(
+            200,
+            json!({"protocol": "agent-discourse/1.0", "service": host.base_url,
+                   "endpoints": {"rooms": format!("{}/rooms", rooms.base_url)}})
+            .to_string(),
+        );
+        rooms.enqueue(200, r#"{"result":[]}"#);
+        let mut connector = LocalConnector::new(AgentSigner::from_seed([81; 32]))
+            .with_http_client(no_proxy_client());
+        connector.add_host(entry(&host.base_url, true));
+        connector.add_host(entry(&rooms.base_url, true));
+        let room: RoomResponse = serde_json::from_value(json!({
+            "id": "room9", "status": "active", "url": format!("{}/rooms/room9", rooms.base_url),
+            "seq": 0, "hash": "", "accepted_at": 0,
+        }))
+        .unwrap();
+        connector.observe_room(rooms.base_url.clone(), room);
+        block_on(async {
+            let list = json!({"scope": "public", "host": host.base_url});
+            connector
+                .call_tool(TOOL_ROOMS_LIST, list.clone())
+                .await
+                .unwrap();
+            // A host disallowed later gets no request, not even discovery, and
+            // a cached client loses its rooms origin.
+            connector.add_host(entry(&rooms.base_url, false));
+            for (tool, input) in [
+                (TOOL_ROOMS_LIST, list),
+                (
+                    TOOL_ROOM_TIMELINE,
+                    json!({"room_id": "room9", "refresh": true}),
+                ),
+            ] {
+                let error = connector.call_tool(tool, input).await.unwrap_err();
+                assert!(matches!(error, SdkError::PermissionDenied), "{error}");
+            }
+        });
+        let paths = |server: &MockServer| -> Vec<String> {
+            server.requests().into_iter().map(|r| r.path).collect()
+        };
+        assert_eq!(paths(&host), ["/.well-known/agent-discourse"]);
+        assert_eq!(paths(&rooms), ["/rooms"]);
+    }
+
+    #[test]
+    fn profile_update_posts_to_the_discovered_profiles_endpoint_and_allowlists_it() {
+        let server = MockServer::start();
+        let base = server.base_url.clone();
+        let active = AgentSigner::from_seed([81; 32]);
+        let connector_with = |profiles: String| {
+            server.enqueue(
+                200,
+                json!({"protocol": "agent-profile/1.0", "service": base, "endpoints": {"profiles": profiles}})
+                    .to_string(),
+            );
+            let mut connector = LocalConnector::new(AgentSigner::from_seed([81; 32]))
+                .with_http_client(no_proxy_client());
+            connector.add_host(AgentProtocolsHost {
+                host: "https://api.example.test".to_owned(),
+                label: None,
+                allowed: true,
+                features: vec![],
+                profile_service: Some(base.clone()),
+                last_checked_at: None,
+            });
+            connector
+        };
+        let update = json!({"profile_service": base, "profile": {"name": "A"}});
+        block_on(async {
+            let mut connector = connector_with(format!("{base}/api/profiles"));
+            server.enqueue(
+                200,
+                json!({"id": active.agent_id(), "name": "A", "updated_at": 1, "event_id": "e"})
+                    .to_string(),
+            );
+            connector
+                .call_tool(TOOL_PROFILE_UPDATE, update.clone())
+                .await
+                .unwrap();
+            // A discovery document cannot move signed writes to an origin the
+            // operator never allowed.
+            let mut elsewhere = connector_with("https://elsewhere.example/profiles".to_owned());
+            let error = elsewhere
+                .call_tool(TOOL_PROFILE_UPDATE, update)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, SdkError::PermissionDenied), "{error}");
+        });
+        let requests: Vec<String> = server
+            .requests()
+            .into_iter()
+            .map(|r| format!("{} {}", r.method, r.path))
+            .collect();
+        assert_eq!(
+            requests,
+            [
+                "GET /.well-known/agent-profile",
+                "POST /api/profiles",
+                "GET /.well-known/agent-profile",
+            ]
+        );
+    }
+
+    #[test]
     fn consecutive_own_messages_share_the_coordination_head() {
         let (server, mut connector, _, genesis) = fixture();
         let active = AgentSigner::from_seed([81; 32]);

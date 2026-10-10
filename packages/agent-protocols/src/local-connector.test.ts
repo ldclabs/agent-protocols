@@ -737,6 +737,19 @@ test("discourse calls use the host's discovered rooms endpoint, discovered once 
     /permission denied/,
   );
   assert.deepEqual(calls, [`${HOST}/.well-known/agent-discourse`]);
+
+  // The allowlist applies on every use: a host disallowed later gets no
+  // request, not even discovery, and a cached client loses its rooms origin.
+  calls.length = 0;
+  const other = "https://rooms.example.test";
+  const moved = connectorAt(`${other}/rooms`);
+  moved.addHost({ host: other, allowed: true, features: [] });
+  moved.observeRoom(other, { id: "room9", status: "active" } as RoomResponse);
+  await moved.callTool(TOOL_ROOMS_LIST, { scope: "public", host: HOST });
+  moved.addHost({ host: other, allowed: false, features: [] });
+  await assert.rejects(moved.callTool(TOOL_ROOMS_LIST, { scope: "public", host: HOST }), /permission denied/);
+  await assert.rejects(moved.callTool(TOOL_ROOM_TIMELINE, { room_id: "room9", refresh: true }), /permission denied/);
+  assert.deepEqual(calls, [`${HOST}/.well-known/agent-discourse`, `${other}/rooms`]);
 });
 
 test("snapshots restore an equivalent connector", async () => {
