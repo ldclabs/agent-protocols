@@ -123,7 +123,12 @@ impl LocalConnector {
             nonce_manager: ClientNonceManager::new(),
             state,
             mail_keys: BTreeMap::new(),
-            http: reqwest::Client::new(),
+            // Requests carrying owner JWTs never follow redirects (Agent
+            // Mail Section 8.1), and every service is an allowed origin.
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("valid HTTP client"),
             discourse_clients: Default::default(),
             knowledge_clients: Default::default(),
         }
@@ -221,7 +226,9 @@ impl LocalConnector {
     }
 
     /// Uses `client` for Agent Discourse, Profile, Mail, and Knowledge
-    /// requests. Agent Delegation requests keep their own bounded clients.
+    /// requests. Like the default, it must not follow redirects: Mail and
+    /// Knowledge requests carry owner request JWTs (Agent Mail Section 8.1).
+    /// Agent Delegation requests keep their own bounded clients.
     pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
         self.http = client;
         self.discourse_clients = Default::default();

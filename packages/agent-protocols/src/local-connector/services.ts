@@ -209,7 +209,6 @@ export function mailInboxItem(
     actor: message.from,
     created_at: now,
     requires_response: false,
-    deadline: null,
     reason: "received",
     suggested_tools: [TOOL_MAIL_LIST],
     message: {

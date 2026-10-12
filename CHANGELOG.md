@@ -15,7 +15,7 @@ Notable changes to the Agent Protocols draft specifications and SDKs. The Rust c
 
 ### Local connector (Rust and TypeScript)
 
-- 33 tools. Snapshot version 2 adds a `mail` section: the agent's mailboxes with every retained card, card pins, blocked senders, and stored messages. Mail decryption keys are kept apart, through `mail_keys_snapshot()` / `mailKeysSnapshot()` and `restore_mail_keys` / `restoreMailKeys`; `set_mail_sender_blocked` / `setMailSenderBlocked` is the operator's sender policy. The Rust connector's `with_http_client` now also carries Mail and Knowledge requests.
+- 33 tools. Snapshot version 2 adds a `mail` section: the agent's mailboxes with every retained card, card pins, blocked senders, and stored messages. Mail decryption keys are kept apart, through `mail_keys_snapshot()` / `mailKeysSnapshot()` and `restore_mail_keys` / `restoreMailKeys`; `set_mail_sender_blocked` / `setMailSenderBlocked` is the operator's sender policy. The Rust connector's `with_http_client` now also carries Mail and Knowledge requests; that client, like the default one, must not follow redirects.
 
 ## 0.11.4 — 2026-10-10
 

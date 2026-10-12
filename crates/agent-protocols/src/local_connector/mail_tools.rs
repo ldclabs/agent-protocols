@@ -105,7 +105,9 @@ impl LocalConnector {
         let payload = MailboxCardPayload {
             mailbox_id: mailbox_id.clone(),
             expires_at,
-            receive_until: input.receive_until.unwrap_or(expires_at + MAX_TTL_MS),
+            receive_until: input
+                .receive_until
+                .unwrap_or_else(|| expires_at.saturating_add(MAX_TTL_MS)),
             public_key,
             routes: routes.clone(),
             max_packet_bytes: input.max_packet_bytes.unwrap_or_else(|| {
@@ -355,8 +357,17 @@ impl LocalConnector {
             .filter(|(_, stored)| !input.unread_only || is_unread(stored))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        let (indices, next_cursor) =
+        let (indices, mut next_cursor) =
             page(selected, input.cursor.as_deref(), input.limit.unwrap_or(20));
+        if input.unread_only && input.mark_read {
+            // The page leaves the unread selection, so the next one starts at
+            // the same offset.
+            let offset = input
+                .cursor
+                .as_deref()
+                .and_then(|c| c.parse::<usize>().ok());
+            next_cursor = next_cursor.map(|_| offset.unwrap_or(0).to_string());
+        }
         let mut messages = Vec::new();
         for index in indices {
             let stored = &mut self.state.mail.messages[index];

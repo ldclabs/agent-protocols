@@ -324,10 +324,12 @@ fn read_request(stream: &mut impl Read) -> Option<Request> {
     })
 }
 
-/// Trusts only the test certificate.
+/// Trusts only the test certificate and, like the default transport, follows
+/// no redirects.
 fn tls_client() -> reqwest::Client {
     reqwest::Client::builder()
         .tls_certs_only(vec![reqwest::Certificate::from_der(CERT).unwrap()])
+        .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .build()
         .unwrap()
@@ -615,6 +617,42 @@ fn mailbox_rotation_closing_sender_policy_and_the_allowlist() {
         )
         .await;
         assert_eq!(error.code(), Some("mailbox_unavailable"));
+    });
+}
+
+#[test]
+fn unread_pages_marked_read_skip_no_letter() {
+    let services = Services::start();
+    run(async {
+        let mut alice = services.connector(9);
+        let mut bob = services.connector(10);
+        let bob_box = open_mailbox(&mut bob, &services).await;
+        for text in ["one", "two", "three"] {
+            call(
+                &mut alice,
+                TOOL_MAIL_SEND,
+                json!({ "to": bob_box["address"], "text": text }),
+            )
+            .await;
+        }
+        call(&mut bob, TOOL_MAIL_SYNC, json!({})).await;
+
+        // Each page leaves the unread selection, so following next_cursor
+        // still reaches every letter.
+        let mut input = json!({ "unread_only": true, "mark_read": true, "limit": 2 });
+        let mut texts = Vec::new();
+        loop {
+            let page = call(&mut bob, TOOL_MAIL_LIST, input.clone()).await;
+            for message in page["messages"].as_array().unwrap() {
+                texts.push(message["parts"][0]["text"].as_str().unwrap().to_owned());
+            }
+            match page.get("next_cursor") {
+                Some(cursor) => input["cursor"] = cursor.clone(),
+                None => break,
+            }
+        }
+        texts.sort();
+        assert_eq!(texts, ["one", "three", "two"]);
     });
 }
 

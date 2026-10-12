@@ -44,9 +44,10 @@ impl MailClient {
             reqwest::Client::builder().tls_certs_only(roots).no_proxy(),
         )
     }
-    /// The local connector's transport: the operator-supplied client it uses
-    /// for every service. Crate-private, so ordinary callers still cannot
-    /// inject credentials or redirect policies; the response origin check applies.
+    /// The local connector's transport: the client it uses for every service,
+    /// which must not follow redirects (Section 8.1). Crate-private, so ordinary
+    /// callers still cannot inject credentials or redirect policies; the
+    /// response origin check applies.
     #[cfg(feature = "local-connector")]
     pub(crate) fn with_client(origin: impl Into<String>, inner: reqwest::Client) -> Result<Self> {
         let origin = origin.into();

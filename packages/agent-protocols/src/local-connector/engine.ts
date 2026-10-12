@@ -2084,12 +2084,16 @@ export class LocalConnector {
       (input.thread_id === undefined || stored.message.thread_id === input.thread_id) &&
       (input.message_id === undefined || stored.message.message_id === input.message_id) &&
       (!input.unread_only || isUnread(stored)));
-    const { items, next_cursor } = page(selected, input.cursor, input.limit ?? 20);
-    const messages = items.map((stored) => {
+    const result = page(selected, input.cursor, input.limit ?? 20);
+    const messages = result.items.map((stored) => {
       const view = mailMessageView(stored, input.include_data === true);
       if (input.mark_read && stored.direction === "received") stored.read = true;
       return view;
     });
+    // The page leaves the unread selection, so the next one starts at the same offset.
+    const next_cursor = result.next_cursor !== undefined && input.unread_only && input.mark_read
+      ? String(parseCursor(input.cursor))
+      : result.next_cursor;
     const unread_count = this.state.mail.messages.filter(isUnread).length;
     return next_cursor === undefined
       ? { messages, unread_count }

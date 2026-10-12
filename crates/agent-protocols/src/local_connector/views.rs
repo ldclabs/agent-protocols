@@ -526,7 +526,6 @@ pub struct MailPartView {
 pub enum MailDeliveryStatus {
     Queued,
     Delivered,
-    Expired,
 }
 
 /// Delivery state of a sent message.

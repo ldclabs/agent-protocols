@@ -409,6 +409,33 @@ test("mailbox rotation, closing, sender policy, and the allowlist", async () => 
   );
 });
 
+test("unread pages marked read skip no letter", async () => {
+  const s = services();
+  const alice = s.connector(9);
+  const bob = s.connector(10);
+  const bobBox = await openMailbox(bob);
+  for (const text of ["one", "two", "three"]) {
+    await call(alice, TOOL_MAIL_SEND, { to: bobBox.address, text });
+  }
+  await call(bob, TOOL_MAIL_SYNC, {});
+
+  // Each page leaves the unread selection, so following next_cursor still
+  // reaches every letter.
+  const texts: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await call(bob, TOOL_MAIL_LIST, {
+      unread_only: true,
+      mark_read: true,
+      limit: 2,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    texts.push(...page.messages.map((message: Json) => message.parts[0].text));
+    cursor = page.next_cursor;
+  } while (cursor !== undefined);
+  assert.deepEqual(texts.sort(), ["one", "three", "two"]);
+});
+
 test("knowledge publish, query, search, and status", async () => {
   const s = services();
   const alice = s.connector(5);
