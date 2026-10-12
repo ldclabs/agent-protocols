@@ -15,6 +15,8 @@
 //! - [`inputs`] — the per-tool deserialization shapes.
 //! - [`state`] — the in-memory store records are projected into.
 //! - [`projection`] — the pure ADP record → room-state rules and validation.
+//! - `mail_tools` and `knowledge_tools` — the Agent Mail and Agent Knowledge
+//!   tools, further `impl` blocks of the same connector.
 //!
 //! The orchestration that ties signing, networking, and projection together
 //! stays here because those methods are mutually recursive over `self`; they
@@ -22,6 +24,8 @@
 
 mod catalog;
 mod inputs;
+mod knowledge_tools;
+mod mail_tools;
 mod projection;
 mod state;
 mod views;
@@ -62,13 +66,14 @@ use crate::discourse::{
 };
 use crate::error::{Result, SdkError};
 use crate::http_client::{
-    DelegationClient, DiscourseClient, JoinRequestsOptions, ProfileClient, PublicRoomsOptions,
-    RoomEventsOptions,
+    DelegationClient, DiscourseClient, JoinRequestsOptions, KnowledgeClient, ProfileClient,
+    PublicRoomsOptions, RoomEventsOptions,
 };
 use crate::identity::{
     service_origin, unix_ms, unix_secs, AgentId, AgentSigner, ClientNonceManager, Envelope, Event,
     RequestBinding, RequestJwtClaims, DEFAULT_REQUEST_JWT_TTL_SECS,
 };
+use crate::mail::MailEncryptionKey;
 use crate::profile::{profile_update_event, AgentProfile, ProfileUpdatePayload};
 
 /// Automatic `send_anyway` re-sign attempts before a draft is held.
@@ -97,9 +102,14 @@ pub struct LocalConnector {
     signer: AgentSigner,
     nonce_manager: ClientNonceManager,
     state: LocalConnectorState,
+    /// Agent Mail decryption keys by public key: key-store material, never in
+    /// the snapshot (see [`LocalConnector::mail_keys_snapshot`]).
+    mail_keys: BTreeMap<String, MailEncryptionKey>,
     http: reqwest::Client,
     /// Discourse clients built from each host's discovery document, once per session.
     discourse_clients: std::sync::Mutex<BTreeMap<String, DiscourseClient>>,
+    /// Knowledge clients built from each service's discovery document, once per session.
+    knowledge_clients: std::sync::Mutex<BTreeMap<String, KnowledgeClient>>,
 }
 
 impl LocalConnector {
@@ -112,8 +122,10 @@ impl LocalConnector {
             signer,
             nonce_manager: ClientNonceManager::new(),
             state,
+            mail_keys: BTreeMap::new(),
             http: reqwest::Client::new(),
             discourse_clients: Default::default(),
+            knowledge_clients: Default::default(),
         }
     }
 
@@ -135,7 +147,7 @@ impl LocalConnector {
             ));
         }
         let nonce_manager = ClientNonceManager::with_next(snapshot.next_nonce)?;
-        let mut connector = Self::with_state(signer, snapshot.into_state());
+        let mut connector = Self::with_state(signer, snapshot.into_state()?);
         connector.nonce_manager = nonce_manager;
         Ok(connector)
     }
@@ -143,20 +155,77 @@ impl LocalConnector {
     /// The durable state local connector Section 4.1 requires a host to
     /// persist: the next nonce, hosts, rooms with their records, members,
     /// timeline, read and presented heads, join requests, agent statuses,
-    /// profiles, the inbox with its leases, and held drafts. Save it after
-    /// every tool call and restore it with [`LocalConnector::from_snapshot`].
+    /// profiles, the inbox with its leases, held drafts, and mail state
+    /// (mailbox cards, card pins, blocked senders, and messages). Save it
+    /// after every tool call and restore it with
+    /// [`LocalConnector::from_snapshot`]. It holds private correspondence and
+    /// room content but no keys.
     pub fn snapshot(&self) -> Result<Value> {
         Ok(serde_json::to_value(ConnectorSnapshot::new(
             self.agent_id(),
             self.nonce_manager.peek(),
             &self.state,
-        ))?)
+        )?)?)
     }
 
-    /// Uses `client` for Agent Discourse and Agent Profile requests.
+    /// SENSITIVE: the Agent Mail decryption keys of the mailboxes' retained
+    /// cards, as `{version, agent_id, keys: {public_key: secret}}`. Keep it in
+    /// the key store, apart from [`LocalConnector::snapshot`]; save it after a
+    /// mailbox publish and restore it with [`LocalConnector::restore_mail_keys`].
+    pub fn mail_keys_snapshot(&self) -> Value {
+        let keys = self
+            .mail_keys
+            .iter()
+            .map(|(public_key, key)| {
+                (
+                    public_key.clone(),
+                    crate::mail::encode_bytes(&key.export_secret()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        json!({ "version": 1, "agent_id": self.agent_id(), "keys": keys })
+    }
+
+    /// Restores [`LocalConnector::mail_keys_snapshot`]; every secret must
+    /// match its public key.
+    pub fn restore_mail_keys(&mut self, value: &Value) -> Result<()> {
+        if value["version"] != 1 || value["agent_id"] != json!(self.agent_id()) {
+            return Err(SdkError::protocol(
+                "invalid_request",
+                "mail keys belong to another version or Agent ID",
+            ));
+        }
+        let keys: BTreeMap<String, String> = serde_json::from_value(value["keys"].clone())?;
+        for (public_key, secret) in keys {
+            let bytes = zeroize::Zeroizing::new(crate::mail::decode_bytes(&secret)?);
+            let key = MailEncryptionKey::from_secret(&bytes)?;
+            if key.public_key() != public_key {
+                return Err(SdkError::protocol(
+                    "invalid_private_key",
+                    "mail key does not match its public key",
+                ));
+            }
+            self.mail_keys.insert(public_key, key);
+        }
+        Ok(())
+    }
+
+    /// Operator sender policy (Agent Mail Section 7.2): packets from a
+    /// blocked sender are deleted unopened. No tool changes it.
+    pub fn set_mail_sender_blocked(&mut self, sender: AgentId, blocked: bool) {
+        if blocked {
+            self.state.mail.blocked_senders.insert(sender);
+        } else {
+            self.state.mail.blocked_senders.remove(&sender);
+        }
+    }
+
+    /// Uses `client` for Agent Discourse, Profile, Mail, and Knowledge
+    /// requests. Agent Delegation requests keep their own bounded clients.
     pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
         self.http = client;
         self.discourse_clients = Default::default();
+        self.knowledge_clients = Default::default();
         self
     }
 
@@ -330,6 +399,16 @@ impl LocalConnector {
             }
             TOOL_JOIN_REQUESTS_LIST => self.join_requests_list(parse_input(input)?).await,
             TOOL_JOIN_REQUEST_REVIEW => self.join_request_review(parse_input(input)?).await,
+            TOOL_MAIL_MAILBOXES_LIST => self.mail_mailboxes_list(),
+            TOOL_MAIL_MAILBOX_PUBLISH => self.mail_mailbox_publish(parse_input(input)?).await,
+            TOOL_MAIL_SEND => self.mail_send(parse_input(input)?).await,
+            TOOL_MAIL_SYNC => self.mail_sync(parse_input(input)?).await,
+            TOOL_MAIL_LIST => self.mail_list(parse_input(input)?),
+            TOOL_KNOWLEDGE_SUBMIT => self.knowledge_submit(parse_input(input)?).await,
+            TOOL_KNOWLEDGE_QUERY => self.knowledge_query(parse_input(input)?).await,
+            TOOL_KNOWLEDGE_GET => self.knowledge_get(parse_input(input)?).await,
+            TOOL_KNOWLEDGE_SEARCH => self.knowledge_search(parse_input(input)?).await,
+            TOOL_KNOWLEDGE_STATUS => self.knowledge_status(parse_input(input)?).await,
             _ => Err(SdkError::InvalidPayload(format!(
                 "unknown local connector tool: {name}"
             ))),
@@ -1966,6 +2045,15 @@ fn http_code(error: &SdkError) -> Option<&str> {
     match error {
         SdkError::HttpStatus { code, .. } => code.as_deref(),
         _ => None,
+    }
+}
+
+/// The error code a tool result reports: the Agent Protocol code, or
+/// `network_error` when the request never completed.
+fn error_code(error: &SdkError) -> &str {
+    match error {
+        SdkError::Http(_) => "network_error",
+        _ => error.code().unwrap_or("invalid_request"),
     }
 }
 

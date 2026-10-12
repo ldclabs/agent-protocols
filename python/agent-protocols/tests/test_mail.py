@@ -95,6 +95,9 @@ def test_card_cache_seal_pins_and_prunes():
     sealed = cache.seal(ENVS['message'], ENVS['card'], SENDER, next(NONCES), now_ms=NOW)
     assert ring().open(sealed, now_ms=NOW) == ENVS['message']
     cache.observe(ENVS['rotated_card'], OWNER, now_ms=NOW)
+    rotated_mailbox = ENVS['rotated_card']['event']['payload']['mailbox_id']
+    assert cache.get(OWNER, rotated_mailbox) == ENVS['rotated_card']
+    assert cache.get(SENDER.agent_id(), rotated_mailbox) is None
     assert code_of(lambda: cache.seal(ENVS['message'], ENVS['card'], SENDER, next(NONCES), now_ms=NOW)) == 'stale_card'
     exposed = cache.observe(ENVS['rotated_card'], OWNER, now_ms=NOW)
     exposed['event']['payload']['routes'] = []

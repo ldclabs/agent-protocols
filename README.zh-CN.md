@@ -53,9 +53,9 @@ Agent Identity
 
 ## MCP Interfaces
 
-通用 MCP 智能体 SHOULD 通过本地 Agent Protocols MCP connector 集成；该 connector 负责签名、nonce 管理、request JWT、room 状态和实时 SSE 同步。Connector 是既有协议上的本地适配层，不是新的 Agent Protocol。参见 [docs/mcp/local-connector/1.0.zh-CN.md](docs/mcp/local-connector/1.0.zh-CN.md)。
+通用 MCP 智能体 SHOULD 通过本地 Agent Protocols MCP connector 集成；该 connector 负责签名、nonce 管理、request JWT、room 状态、邮件加密和实时 SSE 同步。Connector 是既有协议上的本地适配层，不是新的 Agent Protocol。参见 [docs/mcp/local-connector/1.0.zh-CN.md](docs/mcp/local-connector/1.0.zh-CN.md)。
 
-Agent Mail 已提供原生 Rust、TypeScript 和 Python SDK 模块。Mail 的本地 MCP Connector 支持仍属于后续工作。
+除身份、委托、Profile 与 Room 工具外，connector 还覆盖 Agent Mail（邮箱、发信，以及把新来信同步进收件箱）和 Agent Knowledge（签名提交、经验证的查询、搜索与生命周期状态检查）。
 
 ## 成熟度
 
@@ -94,7 +94,7 @@ docs/
 
 这些 SDK 覆盖 Agent ID 编码、严格 Ed25519 验证、签名事件信封、Profile 物化、Delegation controller 权限、历史与凭证验证、Discourse 内核与类型系统、权限 helper，以及 HTTP client。Rust 与 TypeScript SDK 还包含本地 MCP Connector 核心。
 
-Knowledge 支持包括事件构建与验证、依赖与生命周期检查、证据完整性、内存参考存储、结构化查询、词法文本匹配、批量读取、绑定检查点的分页与 `after_seq` 轮询、服务发现，以及带响应验证的 HTTP 客户端。排序搜索工具验证调用方提供的候选项和单页响应契约，不提供嵌入模型或排名引擎。持久化存储、托管服务、学科验证器和 Knowledge 专用 MCP 工具仍属于应用或后续集成工作。各 SDK 的 README 提供公共 API 与示例。
+Knowledge 支持包括事件构建与验证、依赖与生命周期检查、证据完整性、内存参考存储、结构化查询、词法文本匹配、批量读取、绑定检查点的分页与 `after_seq` 轮询、服务发现，以及带响应验证的 HTTP 客户端。排序搜索工具验证调用方提供的候选项和单页响应契约，不提供嵌入模型或排名引擎。持久化存储、托管服务和学科验证器仍属于应用或后续集成工作；Rust 与 TypeScript 的本地连接器提供 Knowledge MCP 工具。各 SDK 的 README 提供公共 API 与示例。
 
 Mail 支持包括签名卡片与密文包验证、绑定发件人的 HPKE 加解密、卡片回滚防护、旧解密密钥保留、逻辑消息去重、解密前发件人拒收、内存中继状态和 HTTP 客户端。应用需要持久保存安全状态与密钥，并在确认投递前提交收件状态；内存工具不是持久化邮箱服务。Mail 测试使用共享规范性向量和三语言加解密矩阵。安装三种 SDK 的开发依赖后，可运行 `make test-mail-interop` 验证各语言新生成密文的互操作性。
 

@@ -1,19 +1,23 @@
 //! In-memory store the local connector projects records into. The public
-//! [`LocalConnectorState`] holds the room, inbox, and draft entries that the
-//! handlers and projection read and mutate; [`ConnectorSnapshot`] is its
+//! [`LocalConnectorState`] holds the room, inbox, draft, and mail entries that
+//! the handlers and projection read and mutate; [`ConnectorSnapshot`] is its
 //! durable form, which `LocalConnector::snapshot` writes with the next nonce.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::discourse::{AgentStatus, ArchiveRecord, RoomJoinRequest, RoomResponse};
+use crate::error::Result;
 use crate::identity::AgentId;
+use crate::mail::{MailCardCache, MailboxCard, MessagePayload, Packet};
 use crate::profile::AgentProfile;
 
 use super::inputs::{RoomSendMessageInput, RoomSubmitEventInput};
 use super::views::{
-    ActiveTurn, AgentProtocolsHost, HeldDraft, InboxItem, RoomMemberView, TimelineItem,
+    ActiveTurn, AgentProtocolsHost, HeldDraft, InboxItem, MailDelivery, MailDirection,
+    RoomMemberView, TimelineItem,
 };
 
 /// Local room state is keyed by `(host, room_id)`: ADP room IDs are only
@@ -33,6 +37,7 @@ pub struct LocalConnectorState {
     pub(crate) agent_statuses: BTreeMap<RoomKey, BTreeMap<AgentId, AgentStatus>>,
     pub(crate) inbox: BTreeMap<String, InboxEntry>,
     pub(crate) drafts: BTreeMap<String, HeldDraftEntry>,
+    pub(crate) mail: MailState,
 }
 
 impl LocalConnectorState {
@@ -93,6 +98,38 @@ impl LocalRoomState {
     }
 }
 
+/// Agent Mail state. Decryption keys are not part of it: the connector keeps
+/// them apart, for the host's key store.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MailState {
+    /// The active Agent ID's mailboxes: every card retained until its
+    /// `receive_until`, in signing order, the last one current.
+    pub(crate) mailboxes: BTreeMap<String, Vec<MailboxCard>>,
+    /// Sender-side card pins (Agent Mail Section 3.2).
+    pub(crate) pins: MailCardCache,
+    /// Operator sender policy, applied before decryption.
+    pub(crate) blocked_senders: BTreeSet<AgentId>,
+    /// Received and sent messages in local order, kept until they expire.
+    pub(crate) messages: Vec<StoredMailMessage>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct StoredMailMessage {
+    pub(crate) direction: MailDirection,
+    pub(crate) message: MessagePayload,
+    /// The receiving mailbox, or the recipient's mailbox for a sent message.
+    pub(crate) mailbox_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) received_at: Option<i64>,
+    #[serde(default)]
+    pub(crate) read: bool,
+    /// A sent message's latest packet, retried byte-for-byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) packet: Option<Packet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) delivery: Option<MailDelivery>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum InboxEntryState {
@@ -127,7 +164,7 @@ pub(crate) enum HeldDraftRequest {
 }
 
 /// Version of the document [`super::LocalConnector::snapshot`] produces.
-pub const LOCAL_CONNECTOR_SNAPSHOT_VERSION: u64 = 1;
+pub const LOCAL_CONNECTOR_SNAPSHOT_VERSION: u64 = 2;
 
 /// The persisted form of a connector: its Agent ID, next nonce, and every
 /// map of [`LocalConnectorState`]. Maps keyed by `(host, room_id)` become
@@ -145,6 +182,21 @@ pub(crate) struct ConnectorSnapshot {
     agent_statuses: Vec<RoomAgentStatuses>,
     inbox: BTreeMap<String, InboxEntry>,
     drafts: BTreeMap<String, HeldDraftEntry>,
+    mail: MailSnapshot,
+}
+
+#[derive(Serialize, Deserialize)]
+struct MailSnapshot {
+    mailboxes: Vec<OwnMailbox>,
+    pins: Vec<MailboxCard>,
+    blocked_senders: BTreeSet<AgentId>,
+    messages: Vec<StoredMailMessage>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct OwnMailbox {
+    mailbox_id: String,
+    cards: Vec<MailboxCard>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -169,8 +221,13 @@ struct RoomAgentStatuses {
 }
 
 impl ConnectorSnapshot {
-    pub(crate) fn new(agent_id: AgentId, next_nonce: u64, state: &LocalConnectorState) -> Self {
-        Self {
+    pub(crate) fn new(
+        agent_id: AgentId,
+        next_nonce: u64,
+        state: &LocalConnectorState,
+    ) -> Result<Self> {
+        let pins = serde_json::from_value(state.mail.pins.snapshot()?["pins"].take())?;
+        Ok(Self {
             version: LOCAL_CONNECTOR_SNAPSHOT_VERSION,
             agent_id,
             next_nonce,
@@ -206,11 +263,26 @@ impl ConnectorSnapshot {
                 .collect(),
             inbox: state.inbox.clone(),
             drafts: state.drafts.clone(),
-        }
+            mail: MailSnapshot {
+                mailboxes: state
+                    .mail
+                    .mailboxes
+                    .iter()
+                    .map(|(mailbox_id, cards)| OwnMailbox {
+                        mailbox_id: mailbox_id.clone(),
+                        cards: cards.clone(),
+                    })
+                    .collect(),
+                pins,
+                blocked_senders: state.mail.blocked_senders.clone(),
+                messages: state.mail.messages.clone(),
+            },
+        })
     }
 
-    pub(crate) fn into_state(self) -> LocalConnectorState {
-        LocalConnectorState {
+    pub(crate) fn into_state(self) -> Result<LocalConnectorState> {
+        let pins = MailCardCache::from_snapshot(&json!({"version": 1, "pins": self.mail.pins}))?;
+        Ok(LocalConnectorState {
             hosts: self.hosts,
             rooms: self
                 .rooms
@@ -235,6 +307,17 @@ impl ConnectorSnapshot {
                 .collect(),
             inbox: self.inbox,
             drafts: self.drafts,
-        }
+            mail: MailState {
+                mailboxes: self
+                    .mail
+                    .mailboxes
+                    .into_iter()
+                    .map(|mailbox| (mailbox.mailbox_id, mailbox.cards))
+                    .collect(),
+                pins,
+                blocked_senders: self.mail.blocked_senders,
+                messages: self.mail.messages,
+            },
+        })
     }
 }

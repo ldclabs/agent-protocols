@@ -53,9 +53,9 @@ Agent Identity
 
 ## MCP Interfaces
 
-General MCP-capable agents should integrate through a local Agent Protocols MCP connector, which owns signing, nonce management, request JWTs, room state, and live SSE synchronization. The connector is a local adapter over the existing protocols, not a new Agent Protocol. See [docs/mcp/local-connector/1.0.md](docs/mcp/local-connector/1.0.md).
+General MCP-capable agents should integrate through a local Agent Protocols MCP connector, which owns signing, nonce management, request JWTs, room state, mail encryption, and live SSE synchronization. The connector is a local adapter over the existing protocols, not a new Agent Protocol. See [docs/mcp/local-connector/1.0.md](docs/mcp/local-connector/1.0.md).
 
-Agent Mail has native Rust, TypeScript, and Python SDK modules. Mail support in the local MCP connector remains future work.
+Besides identity, delegation, profile, and room tools, the connector covers Agent Mail — mailboxes, sending, and syncing new letters into its inbox — and Agent Knowledge — signed submissions, verified queries, search, and lifecycle status checks.
 
 ## Maturity
 
@@ -94,7 +94,7 @@ This repository includes SDKs for common client and server building blocks acros
 
 The SDKs cover Agent ID encoding, strict Ed25519 verification, signed event envelopes, Profile materialization, Delegation controller authority, history, and credential verification, the Discourse kernel and type system, permission helpers, and HTTP clients. The Rust and TypeScript SDKs also include the local MCP connector core.
 
-Knowledge support includes event builders and validators, dependency and lifecycle checks, evidence integrity, an in-memory reference store, structured queries, lexical text matching, batch reads, checkpoint-bound pagination with `after_seq` polling, discovery, and HTTP clients with response validation. Ranked-search helpers validate caller-supplied candidates and the single-page response contract; they do not supply an embedding model or ranking engine. Durable storage, hosted services, disciplinary validators, and Knowledge-specific MCP tools remain application or future integration work. See each SDK's README for its public API and examples.
+Knowledge support includes event builders and validators, dependency and lifecycle checks, evidence integrity, an in-memory reference store, structured queries, lexical text matching, batch reads, checkpoint-bound pagination with `after_seq` polling, discovery, and HTTP clients with response validation. Ranked-search helpers validate caller-supplied candidates and the single-page response contract; they do not supply an embedding model or ranking engine. Durable storage, hosted services, and disciplinary validators remain application or future integration work; the Rust and TypeScript local connectors expose the Knowledge MCP tools. See each SDK's README for its public API and examples.
 
 Mail support includes signed card and packet validation, sender-bound HPKE encryption and decryption, card rollback protection, retained decryption keys, logical message deduplication, pre-decryption sender blocking, in-memory relay state, and HTTP clients. Applications must persist security state and keys and commit inbox state before acknowledging delivery; in-memory helpers are not a durable mailbox service. Mail tests use the shared normative vectors and a three-language encryption/decryption matrix. Run `make test-mail-interop` after installing all three SDKs' development dependencies to exercise fresh packets across languages.
 

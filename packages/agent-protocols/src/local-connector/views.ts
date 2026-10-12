@@ -110,7 +110,8 @@ export type InboxKind =
   | "room.role.changed"
   | "room.member.removed"
   | "room.state.changed"
-  | "room.event.custom";
+  | "room.event.custom"
+  | "mail.received";
 
 export type InboxPriority = "low" | "normal" | "high";
 
@@ -350,7 +351,89 @@ function referencesOf(payload: unknown): string[] {
   return payload.references.filter((value): value is string => typeof value === "string");
 }
 
-function truncate(value: string, maxChars: number): string {
+export function truncate(value: string, maxChars: number): string {
   const chars = [...value];
   return chars.length <= maxChars ? value : `${chars.slice(0, maxChars - 1).join("")}…`;
+}
+
+/** `open` while the card has routes and has not expired, `closed` when its routes are empty, `expired` otherwise. */
+export type MailboxStatus = "open" | "closed" | "expired";
+
+/** A mailbox of the active Agent ID, described by its current card. */
+export interface MailboxView {
+  mailbox_id: string;
+  /** The contact address with the card's routes, or the stable address when closed. */
+  address: string;
+  routes: string[];
+  card_hash: string;
+  created_at: number;
+  expires_at: number;
+  receive_until: number;
+  max_packet_bytes: number;
+  status: MailboxStatus;
+  unread_count: number;
+}
+
+export interface MailPartView {
+  media_type: string;
+  name?: string;
+  /** Decoded byte length. */
+  size: number;
+  /** The decoded text of a `text/*` part. */
+  text?: string;
+  /** Base64url data of a non-text part, only when requested. */
+  data?: string;
+}
+
+export type MailDeliveryStatus = "queued" | "delivered";
+
+/** A route-level failure: `code` is the Agent Protocol error code or `network_error`. */
+export interface RouteError {
+  route: string;
+  code: string;
+  message: string;
+  mailbox_id?: string;
+  packet_id?: string;
+}
+
+/** Delivery state of a sent message. */
+export interface MailDelivery {
+  status: MailDeliveryStatus;
+  route?: string;
+  packet_id?: string;
+  accepted_at?: number;
+  last_error?: RouteError;
+}
+
+export type MailDirection = "received" | "sent";
+
+/** A message the connector accepted or sent. */
+export interface MailMessageView {
+  direction: MailDirection;
+  message_id: string;
+  thread_id: string;
+  from: AgentId;
+  to: AgentId;
+  mailbox_id: string;
+  subject?: string;
+  created_at: number;
+  expires_at: number;
+  received_at?: number;
+  in_reply_to?: string;
+  /** The contact address of the message's verified `reply_card`. */
+  reply_address?: string;
+  parts: MailPartView[];
+  read?: boolean;
+  delivery?: MailDelivery;
+}
+
+/** A verified Knowledge acceptance record, flattened for reading. `seq` and `accepted_at` remain unsigned service assertions. */
+export interface KnowledgeItem {
+  id: string;
+  type: string;
+  actor: AgentId;
+  created_at: number;
+  seq: number;
+  accepted_at: number;
+  payload: unknown;
 }

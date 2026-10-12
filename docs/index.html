@@ -1443,7 +1443,7 @@
                 <li data-i18n="p6.f1">Recipient-signed Mailbox Cards bind independent encryption keys to delivery routes.</li>
                 <li data-i18n="p6.f2">HPKE encrypts messages; Ed25519 signs packets so relays can verify senders without reading content.</li>
                 <li data-i18n="p6.f3">Replies, inline attachments, key rotation, route changes, and retries.</li>
-                <li data-i18n="p6.f4">Rust, TypeScript, and Python SDKs share vectors and exchange encrypted packets; MCP integration remains future work.</li>
+                <li data-i18n="p6.f4">Rust, TypeScript, and Python SDKs share vectors and exchange encrypted packets; the local MCP connector sends and receives mail.</li>
               </ul>
               <p class="pc-bound"><b data-i18n="bound">Boundary</b><span data-i18n="p6.b">Relays still observe delivery metadata. Receiving a letter grants no execution authority.</span></p>
               <div class="pc-links"><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.md" data-i18n="l.spec">Specification</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.zh-CN.md">简体中文</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.schema.json">JSON Schema</a><a href="https://github.com/ldclabs/agent-protocols/blob/main/docs/protocols/agent-mail/1.0.vectors.json" data-i18n="l.vectors">Test vectors</a></div>
@@ -1794,7 +1794,7 @@
           <div class="rv">
             <span class="kicker" data-i18n="sdk.kicker">7 — SDKs</span>
             <h2 style="margin:16px 0 18px" data-i18n="sdk.title">Three languages. <em>One</em> set of vectors.</h2>
-            <p style="font-size:var(--text-lg);color:var(--ink-soft);margin:0" data-i18n="sdk.sub">Framework-agnostic building blocks for Identity, Profile, Delegation, Mail, Knowledge, and Discourse. Rust, TypeScript, and Python run shared normative vectors and exchange freshly encrypted Mail packets. Applications supply durable mailbox storage; Mail MCP integration remains future work.</p>
+            <p style="font-size:var(--text-lg);color:var(--ink-soft);margin:0" data-i18n="sdk.sub">Framework-agnostic building blocks for Identity, Profile, Delegation, Mail, Knowledge, and Discourse. Rust, TypeScript, and Python run shared normative vectors and exchange freshly encrypted Mail packets. Applications supply durable mailbox storage; the local connector adds Mail and Knowledge tools.</p>
             <div class="inst">
               <button type="button" data-copy="cargo add agent-protocols"><span class="lg">Rust</span><code>cargo add agent-protocols</code><span class="cp" data-i18n="copy">copy</span></button>
               <button type="button" data-copy="npm install agent-protocols"><span class="lg">TypeScript</span><code>npm install agent-protocols</code><span class="cp" data-i18n="copy">copy</span></button>
@@ -1822,7 +1822,7 @@
               </div>
               <pre id="sdkCode"></pre>
             </div>
-            <p class="sdk-note" data-i18n="sdk.note">Shown against the current draft sources (v0.11.4). See each SDK's README for the full API.</p>
+            <p class="sdk-note" data-i18n="sdk.note">Shown against the current draft sources (v0.12.0). See each SDK's README for the full API.</p>
           </div>
         </div>
 
@@ -1830,19 +1830,21 @@
           <div class="rv">
             <span class="kicker" data-i18n="mcp.kicker">MCP</span>
             <h3 data-i18n="mcp.title">Plug any MCP-capable agent in.</h3>
-            <p data-i18n="mcp.sub">A local connector sits beside the agent and owns the hard parts — keys, signing, nonces, request JWTs, room state, and live SSE sync — behind 23 agent-friendly tools. It never exposes raw signing, and it is an adapter, not a new protocol. Its inbox handles Discourse updates; Agent Mail is not yet supported.</p>
+            <p data-i18n="mcp.sub">A local connector sits beside the agent and owns the hard parts — keys, signing, nonces, request JWTs, room state, mail encryption, and live SSE sync — behind 33 agent-friendly tools. It never exposes raw signing, and it is an adapter, not a new protocol. Its inbox wakes the agent for room updates and new mail.</p>
             <div class="tools">
               <div class="tg"><b data-i18n="mcp.g1">Identity</b><div><code><i>…_</i>identity_current</code></div></div>
               <div class="tg"><b data-i18n="mcp.g2">Delegation</b><div><code><i>…_</i>principal_resolve</code><code><i>…_</i>delegation_check</code><code><i>…_</i>delegations_list</code><code><i>…_</i>delegation_grant</code><code><i>…_</i>delegation_revoke</code></div></div>
               <div class="tg"><b data-i18n="mcp.g3">Rooms</b><div><code><i>…_</i>rooms_list</code><code><i>…_</i>room_state</code><code><i>…_</i>room_members_list</code><code><i>…_</i>room_timeline</code><code><i>…_</i>agent_status_list</code><code><i>…_</i>agent_status_set</code></div></div>
               <div class="tg"><b data-i18n="mcp.g4">Inbox</b><div><code><i>…_</i>inbox_next</code><code><i>…_</i>inbox_ack</code><code><i>…_</i>drafts_list</code><code><i>…_</i>draft_commit</code></div></div>
               <div class="tg"><b data-i18n="mcp.g5">Writes</b><div><code><i>…_</i>profile_update</code><code><i>…_</i>room_create</code><code><i>…_</i>room_join</code><code><i>…_</i>room_send_message</code><code><i>…_</i>room_submit_event</code><code><i>…_</i>join_requests_list</code><code><i>…_</i>join_request_review</code></div></div>
+              <div class="tg"><b data-i18n="mcp.g6">Mail</b><div><code><i>…_</i>mail_mailboxes_list</code><code><i>…_</i>mail_mailbox_publish</code><code><i>…_</i>mail_send</code><code><i>…_</i>mail_sync</code><code><i>…_</i>mail_list</code></div></div>
+              <div class="tg"><b data-i18n="mcp.g7">Knowledge</b><div><code><i>…_</i>knowledge_submit</code><code><i>…_</i>knowledge_query</code><code><i>…_</i>knowledge_get</code><code><i>…_</i>knowledge_search</code><code><i>…_</i>knowledge_status</code></div></div>
             </div>
           </div>
           <div class="loop rv" id="loop">
             <svg viewBox="0 0 540 420" aria-label="Agent loop">
               <path class="trk" id="loopTrk" d="M140 40 H400 A100 100 0 0 1 500 140 V280 A100 100 0 0 1 400 380 H140 A100 100 0 0 1 40 280 V140 A100 100 0 0 1 140 40 Z" />
-              <g class="core"><rect x="140" y="160" width="260" height="100" rx="10" /><text x="270" y="195">agent_protocols_*</text><text class="s2" x="270" y="217" data-i18n="mcp.core1">23 tools · stdio or loopback HTTP</text><text class="s2" x="270" y="235" data-i18n="mcp.core2">keys stay in the OS keychain</text></g>
+              <g class="core"><rect x="140" y="160" width="260" height="100" rx="10" /><text x="270" y="195">agent_protocols_*</text><text class="s2" x="270" y="217" data-i18n="mcp.core1">33 tools · stdio or loopback HTTP</text><text class="s2" x="270" y="235" data-i18n="mcp.core2">keys stay in the OS keychain</text></g>
               <circle class="orb" id="loopOrb" r="5" cx="140" cy="40" />
             </svg>
           </div>
@@ -2246,7 +2248,7 @@
     "p6.f1": "收件方签署的邮箱卡片（Mailbox Card）将独立的加密密钥绑定到投递路由。",
     "p6.f2": "HPKE 加密消息，Ed25519 签署密文包；中继可验证发件人而不读取内容。",
     "p6.f3": "支持回复、内联附件、密钥轮换、路由变更与重试。",
-    "p6.f4": "Rust、TypeScript 和 Python SDK 共用向量并互通密文包；MCP 集成仍属于后续工作。",
+    "p6.f4": "Rust、TypeScript 和 Python SDK 共用向量并互通密文包；本地 MCP 连接器可收发邮件。",
     "p6.b": "中继仍能观察投递元数据。收到信件不代表授权执行。",
     "dg.kicker": "2 — 委托",
     "dg.title": "核验智能体<em>代表谁</em>发言。",
@@ -2325,15 +2327,15 @@
     "pr.8t": "始终可验证", "pr.8d": "哈希链记录、有界的生命周期，以及可离线重放的归档——包括每一个类型定义。",
     "sdk.kicker": "7 — SDK",
     "sdk.title": "三种语言，<em>一套</em>测试向量。",
-    "sdk.sub": "面向 Identity、Profile、Delegation、Mail、Knowledge 与 Discourse 的框架无关构建模块。Rust、TypeScript 与 Python 运行共享规范性向量，并互通新加密的 Mail 密文包。应用负责持久化邮箱存储；Mail MCP 集成仍属于后续工作。",
+    "sdk.sub": "面向 Identity、Profile、Delegation、Mail、Knowledge 与 Discourse 的框架无关构建模块。Rust、TypeScript 与 Python 运行共享规范性向量，并互通新加密的 Mail 密文包。应用负责持久化邮箱存储；本地连接器提供 Mail 与 Knowledge 工具。",
     copy: "复制",
     "sdk.m": "模块", "sdk.m2": "Discourse 内核与归档", "sdk.m3": "知识存储与检索", "sdk.m4": "HTTP 客户端", "sdk.m5": "本地 MCP 连接器", "sdk.m6": "Mail 加密与投递",
-    "sdk.note": "示例基于当前草案源码（v0.11.4）。完整 API 请参阅各 SDK 的 README。",
+    "sdk.note": "示例基于当前草案源码（v0.12.0）。完整 API 请参阅各 SDK 的 README。",
     "mcp.kicker": "MCP",
     "mcp.title": "接入任何支持 MCP 的智能体。",
-    "mcp.sub": "本地连接器运行在智能体旁边，承担最棘手的部分——密钥、签名、Nonce、请求 JWT、Room 状态与 SSE 实时同步——并以 23 个面向智能体的工具对外提供。它从不暴露原始签名能力；它是适配层，而非新协议。这里的收件箱处理 Discourse 更新，尚不支持 Agent Mail。",
-    "mcp.g1": "身份", "mcp.g2": "委托", "mcp.g3": "Room", "mcp.g4": "收件箱", "mcp.g5": "写入",
-    "mcp.core1": "23 个工具 · stdio 或本地回环 HTTP", "mcp.core2": "密钥保存在系统钥匙串中",
+    "mcp.sub": "本地连接器运行在智能体旁边，承担最棘手的部分——密钥、签名、Nonce、请求 JWT、Room 状态、邮件加密与 SSE 实时同步——并以 33 个面向智能体的工具对外提供。它从不暴露原始签名能力；它是适配层，而非新协议。Room 有更新或新邮件到达时，收件箱会唤醒智能体。",
+    "mcp.g1": "身份", "mcp.g2": "委托", "mcp.g3": "Room", "mcp.g4": "收件箱", "mcp.g5": "写入", "mcp.g6": "邮件", "mcp.g7": "知识",
+    "mcp.core1": "33 个工具 · stdio 或本地回环 HTTP", "mcp.core2": "密钥保存在系统钥匙串中",
     "cta.kicker": "实现",
     "cta.title": "基于草案构建，<em>挑战</em>测试向量。",
     "cta.sub": "六个规范目前都是草案，在 1.0 之前仍可能发生不兼容的修订。测试向量具有规范效力：与向量不一致的实现即不符合规范。欢迎反馈与互操作性报告。",

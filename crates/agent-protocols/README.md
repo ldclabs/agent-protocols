@@ -62,9 +62,11 @@ ADP room writes carry a signed `base_seq` / `base_hash`. Message and control wri
 agent-protocols = { path = "crates/agent-protocols", features = ["local-connector"] }
 ```
 
-The local connector feature builds on `http-client` and exposes the 23 standard MCP tool definitions, a JSON tool dispatcher, local room, member, timeline, inbox, and draft projections, presented-head tracking, held drafts for message and control writes, and internal signing for Agent Protocols writes. It does not expose raw signing tools or private key material to agents. It reads each Discourse host's discovery document once per session, and each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed.
+The local connector feature builds on `http-client` and exposes the 33 standard MCP tool definitions, a JSON tool dispatcher, local room, member, timeline, inbox, and draft projections, presented-head tracking, held drafts for message and control writes, and internal signing for Agent Protocols writes. It does not expose raw signing tools or private key material to agents. It reads each Discourse host's discovery document once per session, and each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed.
 
-`LocalConnector::snapshot()` returns a versioned JSON document with the next nonce and all the local state that local connector Section 4.1 requires a host to persist: hosts, rooms with their records, members, timeline, read and presented heads, join requests, agent statuses, profiles, the inbox with its leases, and held drafts. Save it after every tool call; `LocalConnector::from_snapshot(signer, &snapshot)` restores it for the same Agent ID. The TypeScript connector uses the same layout.
+The Mail tools create and rotate the agent's mailboxes, send letters with pinned and refreshed cards, retry queued packets byte-for-byte, and sync new mail into the inbox; a sync deletes a relay copy only in a later call, after the host has saved the state that stored the message. The Knowledge tools sign and submit contributions, read verified query, batch, and search pages, and check an event's lifecycle status. Mail relays and Knowledge services must be allowed hosts, and `with_http_client` sets the transport for them too. `set_mail_sender_blocked` is the operator's sender policy.
+
+`LocalConnector::snapshot()` returns a versioned JSON document with the next nonce and all the local state that local connector Section 4.1 requires a host to persist: hosts, rooms with their records, members, timeline, read and presented heads, join requests, agent statuses, profiles, the inbox with its leases, held drafts, and mail state (mailbox cards, card pins, blocked senders, and messages). Save it after every tool call; `LocalConnector::from_snapshot(signer, &snapshot)` restores it for the same Agent ID. The TypeScript connector uses the same layout. Mail decryption keys are not in the snapshot: `mail_keys_snapshot()` returns them for the key store, and `restore_mail_keys(&keys)` loads them after a restore.
 
 ## Delegation
 
@@ -201,8 +203,9 @@ keys cannot erase copies in backups. Production HPKE always uses fresh randomnes
 
 Mailbox addressing uses `did:agent:<key>/mail/<mailbox_id>` and optional
 `?route=<origin>` hints. Parse/format helpers reuse Agent Identity's Agent URLs.
-Hints do not authorize a route; verified, pinned cards supply current routes.
-The local MCP connector does not yet expose Mail tools.
+Hints do not authorize a route; verified, pinned cards supply current routes,
+and `MailCardCache::get` reads a pin. The local connector's Mail tools build on
+these helpers.
 
 ```rust
 use agent_protocols::{identity::{AgentSigner, ClientNonceManager}, mail::*};
@@ -256,4 +259,4 @@ ambient credentials, and accepts explicit private CA roots through
 `with_tls_roots`. Card reads pin even closed or expired cards; clones share the
 cache. Use `card_at` for an explicit clock, `card_cache_snapshot` for persistence,
 and `with_card_cache` for a shared restored cache. Applications enforce local
-network/DNS policy. No Mail MCP tools or hosted relay are supplied.
+network/DNS policy. No hosted relay is supplied.

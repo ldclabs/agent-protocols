@@ -36,6 +36,16 @@ import {
   TOOL_DRAFT_COMMIT,
   TOOL_INBOX_NEXT,
   TOOL_JOIN_REQUEST_REVIEW,
+  TOOL_KNOWLEDGE_GET,
+  TOOL_KNOWLEDGE_QUERY,
+  TOOL_KNOWLEDGE_SEARCH,
+  TOOL_KNOWLEDGE_STATUS,
+  TOOL_KNOWLEDGE_SUBMIT,
+  TOOL_MAIL_LIST,
+  TOOL_MAIL_MAILBOXES_LIST,
+  TOOL_MAIL_MAILBOX_PUBLISH,
+  TOOL_MAIL_SEND,
+  TOOL_MAIL_SYNC,
   TOOL_PRINCIPAL_RESOLVE,
   TOOL_PROFILE_UPDATE,
   TOOL_ROOM_JOIN,
@@ -206,10 +216,10 @@ function plan(author: AgentSigner, host: MockHost, step: string, nonce: number):
   return author.signEvent(discourseEvent(PLAN_TYPE.type, author.agentId(), 120, nonce, host.roomId, head.seq, head.hash, { step }));
 }
 
-test("the tool catalog is the consolidated 23-tool surface", () => {
+test("the tool catalog is the consolidated 33-tool surface", () => {
   const names = standardToolDefinitions().map((tool) => tool.name);
-  assert.equal(names.length, 23);
-  assert.equal(new Set(names).size, 23);
+  assert.equal(names.length, 33);
+  assert.equal(new Set(names).size, 33);
   for (const removed of [
     "agent_protocols_rooms_search", "agent_protocols_room_leave",
     "agent_protocols_hosts_list", "agent_protocols_room_open", "agent_protocols_room_member_get",
@@ -238,6 +248,17 @@ test("the tool catalog is the consolidated 23-tool surface", () => {
   assert.ok(grant.required.includes("audiences"));
   assert.ok(!("delegation_service" in grant.properties));
   assert.ok((find(TOOL_DELEGATION_CHECK).input_schema.required as string[]).includes("audience"));
+  for (const name of [TOOL_MAIL_MAILBOX_PUBLISH, TOOL_MAIL_SEND, TOOL_MAIL_SYNC, TOOL_KNOWLEDGE_SUBMIT]) {
+    assert.equal(find(name).annotations.readOnlyHint, false, name);
+    assert.equal(find(name).annotations.openWorldHint, true, name);
+  }
+  for (const name of [TOOL_KNOWLEDGE_QUERY, TOOL_KNOWLEDGE_GET, TOOL_KNOWLEDGE_SEARCH, TOOL_KNOWLEDGE_STATUS, TOOL_MAIL_MAILBOXES_LIST]) {
+    assert.equal(find(name).annotations.readOnlyHint, true, name);
+  }
+  // mark_read makes the mail list a write, like the room timeline.
+  assert.equal(find(TOOL_MAIL_LIST).annotations.readOnlyHint, false);
+  // Submitting a Knowledge event is a public, permanent disclosure.
+  assert.match(find(TOOL_KNOWLEDGE_SUBMIT).description, /publicly and permanently/);
   const banned: RoomMemberStatus = "banned";
   const removedKind: InboxKind = "room.member.removed";
   assert.deepEqual([banned, removedKind], ["banned", "room.member.removed"]);
@@ -787,5 +808,5 @@ test("snapshots restore an equivalent connector", async () => {
 
   // A snapshot belongs to one Agent ID and one format version.
   assert.throws(() => LocalConnector.fromSnapshot(signer(2), persisted), /another Agent ID/);
-  assert.throws(() => LocalConnector.fromSnapshot(active, { ...persisted, version: 2 }), /version/);
+  assert.throws(() => LocalConnector.fromSnapshot(active, { ...persisted, version: LOCAL_CONNECTOR_SNAPSHOT_VERSION + 1 }), /version/);
 });

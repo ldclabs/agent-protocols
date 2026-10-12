@@ -217,6 +217,8 @@ pub enum InboxKind {
     RoomStateChanged,
     #[serde(rename = "room.event.custom")]
     RoomEventCustom,
+    #[serde(rename = "mail.received")]
+    MailReceived,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -469,11 +471,134 @@ pub fn summarize_payload(event_type: &str, payload: &Value) -> String {
         .unwrap_or_else(|| event_type.to_owned())
 }
 
-fn truncate(value: &str, max_chars: usize) -> String {
+pub(crate) fn truncate(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_owned();
     }
     let mut truncated: String = value.chars().take(max_chars - 1).collect();
     truncated.push('…');
     truncated
+}
+
+/// `open` while the card has routes and has not expired, `closed` when its
+/// routes are empty, and `expired` otherwise.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MailboxStatus {
+    Open,
+    Closed,
+    Expired,
+}
+
+/// A mailbox of the active Agent ID, described by its current card.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MailboxView {
+    pub mailbox_id: String,
+    /// The contact address with the card's routes, or the stable address when closed.
+    pub address: String,
+    pub routes: Vec<String>,
+    pub card_hash: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub receive_until: i64,
+    pub max_packet_bytes: usize,
+    pub status: MailboxStatus,
+    pub unread_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MailPartView {
+    pub media_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Decoded byte length.
+    pub size: usize,
+    /// The decoded text of a `text/*` part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Base64url data of a non-text part, only when requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MailDeliveryStatus {
+    Queued,
+    Delivered,
+    Expired,
+}
+
+/// Delivery state of a sent message.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MailDelivery {
+    pub status: MailDeliveryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<RouteError>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MailDirection {
+    Received,
+    Sent,
+}
+
+/// A message the connector accepted or sent.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MailMessageView {
+    pub direction: MailDirection,
+    pub message_id: String,
+    pub thread_id: String,
+    pub from: AgentId,
+    pub to: AgentId,
+    pub mailbox_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    pub created_at: i64,
+    pub expires_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub received_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to: Option<String>,
+    /// The contact address of the message's verified `reply_card`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_address: Option<String>,
+    pub parts: Vec<MailPartView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<MailDelivery>,
+}
+
+/// A route-level failure: `code` is the Agent Protocol error code or `network_error`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RouteError {
+    pub route: String,
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mailbox_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_id: Option<String>,
+}
+
+/// A verified Knowledge acceptance record, flattened for reading. `seq` and
+/// `accepted_at` remain unsigned service assertions.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct KnowledgeItem {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub actor: AgentId,
+    pub created_at: i64,
+    pub seq: u64,
+    pub accepted_at: i64,
+    pub payload: Value,
 }

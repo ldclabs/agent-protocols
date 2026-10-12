@@ -182,9 +182,9 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 }
 
 #[test]
-fn standard_tool_definitions_list_the_25_tools() {
+fn standard_tool_definitions_list_every_tool() {
     let tools = standard_tool_definitions();
-    assert_eq!(tools.len(), 23);
+    assert_eq!(tools.len(), TOOL_NAMES.len());
     let names = tools
         .iter()
         .map(|tool| tool.name.as_str())
@@ -220,6 +220,34 @@ fn standard_tool_definitions_list_the_25_tools() {
         let tool = find(name);
         assert!(!tool.annotations.read_only_hint && !tool.annotations.idempotent_hint);
     }
+    for name in [
+        TOOL_MAIL_MAILBOX_PUBLISH,
+        TOOL_MAIL_SEND,
+        TOOL_MAIL_SYNC,
+        TOOL_KNOWLEDGE_SUBMIT,
+    ] {
+        let tool = find(name);
+        assert!(!tool.annotations.read_only_hint && tool.annotations.open_world_hint);
+    }
+    for name in [
+        TOOL_KNOWLEDGE_QUERY,
+        TOOL_KNOWLEDGE_GET,
+        TOOL_KNOWLEDGE_SEARCH,
+        TOOL_KNOWLEDGE_STATUS,
+    ] {
+        assert!(find(name).annotations.read_only_hint);
+    }
+    assert!(find(TOOL_MAIL_MAILBOXES_LIST).annotations.read_only_hint);
+    // mark_read makes the mail list a write, like the room timeline.
+    assert!(!find(TOOL_MAIL_LIST).annotations.read_only_hint);
+    // Submitting a Knowledge event is a public, permanent disclosure.
+    assert!(find(TOOL_KNOWLEDGE_SUBMIT)
+        .description
+        .contains("publicly and permanently"));
+    assert_eq!(
+        find(TOOL_KNOWLEDGE_SUBMIT).input_schema["properties"]["type"]["enum"],
+        json!(["knowledge.publish", "knowledge.assess", "knowledge.retract"])
+    );
 }
 
 #[test]

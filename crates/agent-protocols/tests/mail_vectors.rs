@@ -602,6 +602,18 @@ fn keyring_and_card_cache_seal_prune_and_bind_keys() {
     cache
         .observe(&v["envelopes"]["rotated_card"], &owner, now)
         .unwrap();
+    let rotated = card(&v, "rotated_card");
+    assert_eq!(
+        cache.get(&owner, &rotated.event.payload.mailbox_id),
+        Some(&rotated)
+    );
+    assert_eq!(
+        cache.get(
+            &sender_signer(&v).agent_id(),
+            &rotated.event.payload.mailbox_id
+        ),
+        None
+    );
     assert_eq!(
         code(cache.seal(
             &message,

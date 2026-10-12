@@ -392,6 +392,9 @@ test("Mail sealing checks recipient, lifetime, size and card usability first", a
   const sealed = await cache.seal(e.message, e.card, sender, nextNonce++, now);
   assert.deepEqual(await keyring().open(sealed, now), e.message);
   cache.observe(e.rotated_card, owner, now);
+  const rotatedMailbox = e.rotated_card.event.payload.mailbox_id;
+  assert.deepEqual(cache.get(owner, rotatedMailbox), e.rotated_card);
+  assert.equal(cache.get(sender.agentId(), rotatedMailbox), undefined);
   await assert.rejects(
     () => cache.seal(e.message, e.card, sender, nextNonce++, now),
     {

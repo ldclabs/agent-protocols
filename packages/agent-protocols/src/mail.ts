@@ -712,6 +712,11 @@ export class MailCardCache {
   snapshot(): MailCardCacheSnapshot {
     return { version: 1, pins: clone([...this.pins.values()]) };
   }
+  /** The pinned card of `(owner, mailboxId)`, if any. */
+  get(owner: string, mailboxId: string): MailboxCard | undefined {
+    const pin = this.pins.get(this.id(owner, mailboxId));
+    return pin === undefined ? undefined : clone(pin);
+  }
   /** Pin a verified card, then (by default) require that it is usable for new encryption. */
   observe(
     card: MailboxCard,

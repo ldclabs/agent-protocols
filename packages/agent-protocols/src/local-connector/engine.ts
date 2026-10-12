@@ -33,19 +33,21 @@ import {
   validateRoomPath,
   verifyServerRecord,
 } from "../discourse.js";
-import { base64UrlEncode } from "../encoding.js";
+import { base64UrlDecodeCanonical, base64UrlEncode } from "../encoding.js";
 import {
   AgentId,
   AgentSigner,
   ClientNonceManager,
   DEFAULT_REQUEST_JWT_TTL_SECS,
   Envelope,
+  createEvent,
   createRequestBinding,
   createRequestJwtClaims,
   publicKeyBytes,
   serviceOrigin,
   unixTimeMillis,
   unixTimeSecs,
+  validateOrigin,
   withMentions,
 } from "../identity.js";
 import {
@@ -53,8 +55,40 @@ import {
   DiscourseClient,
   FetchLike,
   HttpResponseError,
+  KnowledgeClient,
   ProfileClient,
 } from "../http-client.js";
+import {
+  KNOWLEDGE_EVENT_TYPES,
+  KNOWLEDGE_PROTOCOL,
+  KnowledgePageTracker,
+  validateKnowledgeEnvelope,
+  validateKnowledgeId,
+  type KnowledgeEnvelope,
+  type KnowledgeQuery,
+  type KnowledgeQueryResponse,
+  type KnowledgeRecord,
+} from "../knowledge.js";
+import {
+  MAIL_MAX_TTL_MS,
+  MailCardCache,
+  MailEncryptionKey,
+  MailKeyring,
+  createMailMessage,
+  mailboxPublishEvent,
+  mailTextPart,
+  newMailId,
+  parseMailAddress,
+  sealMailPacket,
+  validateMailboxCard,
+  validateMailReply,
+  validateMailSenderCard,
+  type MailboxCard,
+  type MailboxCardPayload,
+  type MailMessagePayload,
+  type MailPacketRecord,
+} from "../mail.js";
+import { MailClient } from "../mail-client.js";
 import {
   DelegationCredential,
   DelegationGrantPayload,
@@ -87,6 +121,16 @@ import {
   TOOL_INBOX_NEXT,
   TOOL_JOIN_REQUESTS_LIST,
   TOOL_JOIN_REQUEST_REVIEW,
+  TOOL_KNOWLEDGE_GET,
+  TOOL_KNOWLEDGE_QUERY,
+  TOOL_KNOWLEDGE_SEARCH,
+  TOOL_KNOWLEDGE_STATUS,
+  TOOL_KNOWLEDGE_SUBMIT,
+  TOOL_MAIL_LIST,
+  TOOL_MAIL_MAILBOXES_LIST,
+  TOOL_MAIL_MAILBOX_PUBLISH,
+  TOOL_MAIL_SEND,
+  TOOL_MAIL_SYNC,
   TOOL_PRINCIPAL_RESOLVE,
   TOOL_PROFILE_UPDATE,
   TOOL_ROOMS_LIST,
@@ -117,6 +161,15 @@ import {
   InboxNextInput,
   JoinRequestReviewInput,
   JoinRequestsListInput,
+  KnowledgeGetInput,
+  KnowledgeQueryInput,
+  KnowledgeSearchInput,
+  KnowledgeStatusInput,
+  KnowledgeSubmitInput,
+  MailListInput,
+  MailMailboxPublishInput,
+  MailSendInput,
+  MailSyncInput,
   PrincipalResolveInput,
   ProfileUpdateInput,
   RoomCreateInput,
@@ -150,13 +203,31 @@ import {
   LocalRoomSnapshot,
   LocalRoomState,
   RoomKey,
+  StoredMailMessage,
 } from "./state.js";
+import {
+  checkedRoutes,
+  errorJson,
+  isQueued,
+  isTransient,
+  isUnread,
+  knowledgeItem,
+  mailInboxItem,
+  mailMessageView,
+  mailboxView,
+  routeError,
+  sameMessage,
+  scoped,
+} from "./services.js";
 import {
   AgentProtocolsHost,
   DraftAction,
   HeadMismatchPolicy,
   HeldDraft,
   InboxItem,
+  MailboxView,
+  MailMessageView,
+  RouteError,
   RoomMemberProfile,
   RoomStateView,
   RoomSummary,
@@ -171,6 +242,17 @@ import {
 export const SEND_ANYWAY_MAX_ATTEMPTS = 3;
 /** Lease on an inbox item claimed with `claim: true`. */
 export const INBOX_CLAIM_LEASE_MS = 60_000;
+/** `max_packet_bytes` of a new mailbox. */
+const DEFAULT_MAX_PACKET_BYTES = 262_144;
+/** Default message lifetime, bounded by the card's `receive_until`. */
+const MESSAGE_TTL_MS = 7 * 86_400_000;
+/** Packet list pages read per mailbox route in one sync. */
+const SYNC_MAX_PAGES = 10;
+const SYNC_PAGE_LIMIT = 100;
+const MAX_KNOWLEDGE_SERVICES = 8;
+/** Reverse-link query pages a status check reads before reporting `complete: false`. */
+const STATUS_MAX_PAGES = 10;
+const STATUS_PAGE_LIMIT = 1000;
 
 function roomKeyString(key: RoomKey): string {
   return `${key.host} ${key.roomId}`;
@@ -373,6 +455,10 @@ export class LocalConnector {
   private readonly fetchImpl: FetchLike;
   /** Discourse clients built from each host's discovery document, once per session. */
   private readonly discourseClients = new Map<string, DiscourseClient>();
+  /** Knowledge clients built from each service's discovery document, once per session. */
+  private readonly knowledgeClients = new Map<string, KnowledgeClient>();
+  /** Agent Mail decryption keys by public key: key-store material, never in the snapshot. */
+  private readonly mailKeys = new Map<string, MailEncryptionKey>();
 
   constructor(
     private readonly signer: AgentSigner,
@@ -399,9 +485,10 @@ export class LocalConnector {
     if (doc.agent_id !== signer.agentId()) {
       throw protocolError("invalid_request", "local connector snapshot belongs to another Agent ID");
     }
-    const maps = [doc.hosts, doc.profiles, doc.inbox, doc.drafts];
+    const maps = [doc.hosts, doc.profiles, doc.inbox, doc.drafts, doc.mail];
     const lists = [doc.rooms, doc.join_requests, doc.own_join_requests, doc.agent_statuses];
-    if (!maps.every(isRecord) || !lists.every(Array.isArray)) {
+    const mail = [doc.mail?.mailboxes, doc.mail?.pins, doc.mail?.blocked_senders, doc.mail?.messages];
+    if (!maps.every(isRecord) || !lists.every(Array.isArray) || !mail.every(Array.isArray)) {
       throw protocolError("invalid_request", "malformed local connector snapshot");
     }
     const nonces = new ClientNonceManager(doc.next_nonce);
@@ -425,6 +512,10 @@ export class LocalConnector {
     }
     state.inbox = new Map(Object.entries(doc.inbox));
     state.drafts = new Map(Object.entries(doc.drafts));
+    for (const box of doc.mail.mailboxes) state.mail.mailboxes.set(box.mailbox_id, box.cards);
+    state.mail.pins = new MailCardCache({ version: 1, pins: doc.mail.pins });
+    state.mail.blockedSenders = new Set(doc.mail.blocked_senders);
+    state.mail.messages = doc.mail.messages;
     const connector = new LocalConnector(signer, { ...options, state });
     connector.nonces = nonces;
     return connector;
@@ -434,8 +525,10 @@ export class LocalConnector {
    * The durable state local connector Section 4.1 requires a host to persist:
    * the next nonce, hosts, rooms with their records, members, timeline, read
    * and presented heads, join requests, agent statuses, profiles, the inbox
-   * with its leases, and held drafts. Save it after every tool call and
-   * restore it with {@link LocalConnector.fromSnapshot}.
+   * with its leases, held drafts, and mail state (mailbox cards, card pins,
+   * blocked senders, and messages). Save it after every tool call and restore
+   * it with {@link LocalConnector.fromSnapshot}. It holds private
+   * correspondence and room content but no keys.
    */
   snapshot(): LocalConnectorSnapshot {
     const doc: LocalConnectorSnapshot = {
@@ -453,8 +546,53 @@ export class LocalConnector {
       })),
       inbox: Object.fromEntries(this.state.inbox),
       drafts: Object.fromEntries(this.state.drafts),
+      mail: {
+        mailboxes: [...this.state.mail.mailboxes.entries()]
+          .sort((a, b) => compareStrings(a[0], b[0]))
+          .map(([mailbox_id, cards]) => ({ mailbox_id, cards })),
+        pins: this.state.mail.pins.snapshot().pins,
+        blocked_senders: [...this.state.mail.blockedSenders].sort(compareStrings),
+        messages: this.state.mail.messages,
+      },
     };
     return JSON.parse(JSON.stringify(doc)) as LocalConnectorSnapshot;
+  }
+
+  /**
+   * SENSITIVE: the Agent Mail decryption keys of the mailboxes' retained
+   * cards, as `{ version, agent_id, keys: { public_key: secret } }`. Keep it in
+   * the key store, apart from {@link LocalConnector.snapshot}; save it after a
+   * mailbox publish and restore it with {@link LocalConnector.restoreMailKeys}.
+   */
+  mailKeysSnapshot(): { version: 1; agent_id: AgentId; keys: Record<string, string> } {
+    const keys: Record<string, string> = {};
+    for (const [publicKey, key] of [...this.mailKeys.entries()].sort((a, b) => compareStrings(a[0], b[0]))) {
+      keys[publicKey] = base64UrlEncode(key.exportSecret());
+    }
+    return { version: 1, agent_id: this.agentId(), keys };
+  }
+
+  /** Restores {@link LocalConnector.mailKeysSnapshot}; every secret must match its public key. */
+  restoreMailKeys(value: { version: number; agent_id: AgentId; keys: Record<string, string> }): void {
+    if (!isRecord(value) || value.version !== 1 || value.agent_id !== this.agentId() || !isRecord(value.keys)) {
+      throw protocolError("invalid_request", "mail keys belong to another version or Agent ID");
+    }
+    for (const [publicKey, secret] of Object.entries(value.keys)) {
+      const bytes = typeof secret === "string" ? base64UrlDecodeCanonical(secret) : undefined;
+      if (bytes === undefined) throw protocolError("invalid_private_key", "malformed mail key");
+      const key = MailEncryptionKey.fromBytes(bytes);
+      bytes.fill(0);
+      if (key.publicKey() !== publicKey) {
+        throw protocolError("invalid_private_key", "mail key does not match its public key");
+      }
+      this.mailKeys.set(publicKey, key);
+    }
+  }
+
+  /** Operator sender policy (Agent Mail Section 7.2): packets from a blocked sender are deleted unopened. No tool changes it. */
+  setMailSenderBlocked(sender: AgentId, blocked: boolean): void {
+    if (blocked) this.state.mail.blockedSenders.add(sender);
+    else this.state.mail.blockedSenders.delete(sender);
   }
 
   agentId(): AgentId {
@@ -614,6 +752,26 @@ export class LocalConnector {
         return this.joinRequestsList(input as JoinRequestsListInput);
       case TOOL_JOIN_REQUEST_REVIEW:
         return this.joinRequestReview(input as JoinRequestReviewInput);
+      case TOOL_MAIL_MAILBOXES_LIST:
+        return this.mailMailboxesList();
+      case TOOL_MAIL_MAILBOX_PUBLISH:
+        return this.mailMailboxPublish(input as MailMailboxPublishInput);
+      case TOOL_MAIL_SEND:
+        return this.mailSend(input as MailSendInput);
+      case TOOL_MAIL_SYNC:
+        return this.mailSync((input ?? {}) as MailSyncInput);
+      case TOOL_MAIL_LIST:
+        return this.mailList((input ?? {}) as MailListInput);
+      case TOOL_KNOWLEDGE_SUBMIT:
+        return this.knowledgeSubmit(input as KnowledgeSubmitInput);
+      case TOOL_KNOWLEDGE_QUERY:
+        return this.knowledgeQuery(input as KnowledgeQueryInput);
+      case TOOL_KNOWLEDGE_GET:
+        return this.knowledgeGet(input as KnowledgeGetInput);
+      case TOOL_KNOWLEDGE_SEARCH:
+        return this.knowledgeSearch(input as KnowledgeSearchInput);
+      case TOOL_KNOWLEDGE_STATUS:
+        return this.knowledgeStatus(input as KnowledgeStatusInput);
       default:
         throw invalidPayload(`unknown local connector tool: ${name}`);
     }
@@ -1760,6 +1918,608 @@ export class LocalConnector {
     );
     if (!item) throw invalidPayload("timeline item not materialized");
     return item;
+  }
+
+  // ── Agent Mail (local connector Section 4.3).
+
+  private mailMailboxesList(): unknown {
+    const now = unixTimeMillis();
+    const mailboxes: MailboxView[] = [];
+    for (const [mailboxId, cards] of this.state.mail.mailboxes) {
+      const card = cards.at(-1);
+      if (card) mailboxes.push(this.mailboxView(mailboxId, card, now));
+    }
+    return { mailboxes };
+  }
+
+  private async mailMailboxPublish(input: MailMailboxPublishInput): Promise<unknown> {
+    const now = unixTimeMillis();
+    this.pruneMail(now);
+    const routes = checkedRoutes(input.routes);
+    for (const route of routes) this.requireAllowedHost(route);
+    let mailboxId: string;
+    let previous: MailboxCard | undefined;
+    let newKey: MailEncryptionKey | undefined;
+    if (input.mailbox_id === undefined) {
+      if (routes.length === 0) throw invalidPayload("a new mailbox needs routes");
+      mailboxId = newMailId();
+      newKey = MailEncryptionKey.generate();
+    } else {
+      mailboxId = input.mailbox_id;
+      previous = this.state.mail.mailboxes.get(mailboxId)?.at(-1);
+      if (!previous) throw invalidPayload("unknown mailbox");
+      if (input.rotate_key) newKey = MailEncryptionKey.generate();
+      else if (!this.mailKeys.has(previous.event.payload.public_key)) {
+        throw invalidPayload("the mailbox key is not loaded; restore mail keys or rotate the key");
+      }
+    }
+    const expiresAt = input.expires_at ?? now + MAIL_MAX_TTL_MS;
+    const payload: MailboxCardPayload = {
+      mailbox_id: mailboxId,
+      expires_at: expiresAt,
+      receive_until: input.receive_until ?? expiresAt + MAIL_MAX_TTL_MS,
+      public_key: newKey?.publicKey() ?? previous!.event.payload.public_key,
+      routes,
+      max_packet_bytes: input.max_packet_bytes ?? previous?.event.payload.max_packet_bytes ?? DEFAULT_MAX_PACKET_BYTES,
+    };
+
+    // Publish to every route of the previous and new cards (Agent Mail
+    // Section 4.2); routes the operator no longer allows are reported.
+    const targets = [...routes];
+    for (const route of previous?.event.payload.routes ?? []) {
+      if (!targets.includes(route)) targets.push(route);
+    }
+    const failed: RouteError[] = [];
+    const allowed: string[] = [];
+    for (const route of targets) {
+      try {
+        this.requireAllowedHost(route);
+        allowed.push(route);
+      } catch (error) {
+        failed.push(routeError(route, error));
+      }
+    }
+    if (allowed.length === 0) throw permissionDenied();
+    let card = this.signMailCard(payload);
+    let resynced = false;
+    let published: string[];
+    let errors: [string, unknown][];
+    for (;;) {
+      published = [];
+      errors = [];
+      let resync = false;
+      for (const route of allowed) {
+        try {
+          await this.mailClient(route).publish(card);
+          published.push(route);
+        } catch (error) {
+          if (!resynced && this.resyncNonce(error)) {
+            resync = true;
+            break;
+          }
+          errors.push([route, error]);
+        }
+      }
+      if (!resync) break;
+      // One re-signed card, published to every route again.
+      resynced = true;
+      card = this.signMailCard(payload);
+    }
+    failed.push(...errors.map(([route, error]) => routeError(route, error)));
+    if (published.length === 0) throw errors[0]?.[1] ?? permissionDenied();
+    if (newKey) this.mailKeys.set(newKey.publicKey(), newKey);
+    const cards = this.state.mail.mailboxes.get(mailboxId) ?? [];
+    cards.push(card);
+    this.state.mail.mailboxes.set(mailboxId, cards);
+    return { mailbox: this.mailboxView(mailboxId, card, unixTimeMillis()), published, failed };
+  }
+
+  private async mailSend(input: MailSendInput): Promise<unknown> {
+    const now = unixTimeMillis();
+    const parent = input.in_reply_to === undefined ? undefined : this.replyParent(input.in_reply_to, input.to);
+    let owner: AgentId;
+    let mailboxId: string;
+    let routes: string[];
+    if (input.to !== undefined) {
+      const address = parseMailAddress(input.to);
+      ({ owner, mailbox_id: mailboxId, routes } = address);
+    } else if (parent) {
+      const replyCard = parent.reply_card;
+      if (replyCard === undefined) throw invalidPayload("the parent message carries no reply card; pass to");
+      validateMailboxCard(replyCard);
+      owner = replyCard.event.actor;
+      mailboxId = replyCard.event.payload.mailbox_id;
+      routes = replyCard.event.payload.routes;
+    } else {
+      throw invalidPayload("to or in_reply_to is required");
+    }
+    if (parent && parent.from !== owner) throw invalidPayload("a reply must be addressed to the parent's sender");
+    const card = await this.mailCard(owner, mailboxId, routes, now);
+    if (!card.event.payload.routes.some((route) => this.isAllowedHost(route))) throw permissionDenied();
+    const replyCard = input.reply_mailbox_id === undefined ? undefined : this.openMailboxCard(input.reply_mailbox_id, now);
+
+    const parts = [...(input.text === undefined ? [] : [mailTextPart(input.text)]), ...(input.parts ?? [])];
+    if (parts.length === 0) throw invalidPayload("a message needs text or parts");
+    const message = createMailMessage(this.agentId(), now, {
+      to: owner,
+      expires_at: input.expires_at ?? Math.min(now + MESSAGE_TTL_MS, card.event.payload.receive_until),
+      thread_id: parent?.thread_id ?? newMailId(),
+      parts,
+      ...(input.subject === undefined ? {} : { subject: input.subject }),
+      ...(parent === undefined ? {} : { in_reply_to: parent.message_id }),
+      ...(replyCard === undefined ? {} : { reply_card: replyCard }),
+    });
+    if (parent) validateMailReply(message, parent);
+    const stored: StoredMailMessage = { direction: "sent", message, mailbox_id: mailboxId, read: true };
+    const status = await this.deliver(stored, card);
+    const view = mailMessageView(stored, false);
+    this.state.mail.messages.push(stored);
+    return { status, message: view };
+  }
+
+  private async mailSync(input: MailSyncInput): Promise<unknown> {
+    if (input.mailbox_id !== undefined && !this.state.mail.mailboxes.has(input.mailbox_id)) {
+      throw invalidPayload("unknown mailbox");
+    }
+    const now = unixTimeMillis();
+    const errors: RouteError[] = [];
+    const { delivered, expired } = await this.retryQueued(now, errors);
+    this.pruneMail(now);
+    const received = await this.pollMailboxes(input.mailbox_id, errors);
+    return {
+      received,
+      delivered,
+      expired,
+      queued: this.state.mail.messages.filter(isQueued).length,
+      errors,
+      pending_inbox_count: this.pendingInboxCount(),
+    };
+  }
+
+  private mailList(input: MailListInput): unknown {
+    const selected = this.state.mail.messages.filter((stored) =>
+      (input.direction === undefined || stored.direction === input.direction) &&
+      (input.mailbox_id === undefined || stored.mailbox_id === input.mailbox_id) &&
+      (input.from === undefined || stored.message.from === input.from) &&
+      (input.thread_id === undefined || stored.message.thread_id === input.thread_id) &&
+      (input.message_id === undefined || stored.message.message_id === input.message_id) &&
+      (!input.unread_only || isUnread(stored)));
+    const { items, next_cursor } = page(selected, input.cursor, input.limit ?? 20);
+    const messages = items.map((stored) => {
+      const view = mailMessageView(stored, input.include_data === true);
+      if (input.mark_read && stored.direction === "received") stored.read = true;
+      return view;
+    });
+    const unread_count = this.state.mail.messages.filter(isUnread).length;
+    return next_cursor === undefined
+      ? { messages, unread_count }
+      : { messages, next_cursor, unread_count };
+  }
+
+  private signMailCard(payload: MailboxCardPayload): MailboxCard {
+    const createdAt = unixTimeMillis();
+    const card = this.signer.signEvent(
+      mailboxPublishEvent(this.agentId(), createdAt, this.nonces.nextNonce(createdAt), payload),
+    );
+    validateMailboxCard(card, this.agentId());
+    return card;
+  }
+
+  private mailClient(route: string): MailClient {
+    this.requireAllowedHost(route);
+    return new MailClient(route, { fetch: this.fetchImpl });
+  }
+
+  /**
+   * Reads the card from an allowed route — the given routes, or the pinned
+   * card's — and pins it. A newer card that is closed or expired supersedes
+   * older ones; when no route answers, a usable pin is used.
+   */
+  private async mailCard(owner: AgentId, mailboxId: string, routes: string[], now: number): Promise<MailboxCard> {
+    const pins = this.state.mail.pins;
+    const candidates = routes.length > 0 ? routes : pins.get(owner, mailboxId)?.event.payload.routes ?? [];
+    let lastError: unknown;
+    for (const route of candidates) {
+      let record;
+      try {
+        record = await this.mailClient(route).card(mailboxId, owner);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      let card: MailboxCard;
+      try {
+        card = pins.observe(record.envelope, owner, now, false);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      validateMailSenderCard(card, owner, now);
+      return card;
+    }
+    const pinned = pins.get(owner, mailboxId);
+    if (pinned) {
+      try {
+        validateMailSenderCard(pinned, owner, now);
+        return pinned;
+      } catch {
+        // An unusable pin falls through to the last route error.
+      }
+    }
+    throw lastError ?? invalidPayload("no card is pinned for this mailbox; use a contact address with routes");
+  }
+
+  /**
+   * Delivers a sent message to its card's allowed routes in order, sealing a
+   * packet unless the stored one was sealed under this card. On `stale_card`
+   * it reads the card again and seals under a newer pin once.
+   */
+  private async deliver(stored: StoredMailMessage, card: MailboxCard): Promise<"delivered" | "queued"> {
+    const owner = stored.message.to;
+    let refreshed = false;
+    for (;;) {
+      const now = unixTimeMillis();
+      let packet = stored.packet;
+      if (packet === undefined || packet.event.payload.header.card_hash !== card.hash) {
+        packet = await sealMailPacket(stored.message, card, this.signer, this.nonces.nextNonce(now), now);
+        stored.packet = packet;
+      }
+      let transient: RouteError | undefined;
+      let permanent: [string, unknown] | undefined;
+      let stale = false;
+      for (const route of card.event.payload.routes) {
+        if (!this.isAllowedHost(route)) continue;
+        try {
+          const result = await this.mailClient(route).deliver(packet);
+          stored.delivery = {
+            status: "delivered",
+            route,
+            packet_id: result.packet_id,
+            accepted_at: result.accepted_at,
+          };
+          return "delivered";
+        } catch (error) {
+          stale ||= isHttpError(error, "stale_card");
+          if (isTransient(error)) transient = routeError(route, error);
+          else permanent ??= [route, error];
+        }
+      }
+      if (stale && !refreshed) {
+        refreshed = true;
+        const fresh = await this.mailCard(owner, card.event.payload.mailbox_id, card.event.payload.routes, now);
+        if (fresh.hash !== card.hash) {
+          card = fresh;
+          continue;
+        }
+      }
+      const lastError = transient ?? (permanent === undefined ? undefined : routeError(permanent[0], permanent[1]));
+      stored.delivery = { status: "queued", ...(lastError === undefined ? {} : { last_error: lastError }) };
+      if (transient) return "queued";
+      throw permanent?.[1] ?? permissionDenied();
+    }
+  }
+
+  /** Retries queued messages with their stored packets. */
+  private async retryQueued(now: number, errors: RouteError[]): Promise<{ delivered: string[]; expired: string[] }> {
+    const delivered: string[] = [];
+    const expired: string[] = [];
+    for (const stored of this.state.mail.messages) {
+      if (!isQueued(stored)) continue;
+      if (now >= stored.message.expires_at) {
+        expired.push(stored.message.message_id);
+        continue;
+      }
+      const card = this.state.mail.pins.get(stored.message.to, stored.mailbox_id);
+      if (!card) continue;
+      try {
+        if ((await this.deliver(stored, card)) === "delivered") delivered.push(stored.message.message_id);
+      } catch {
+        if (stored.delivery?.last_error) errors.push(stored.delivery.last_error);
+      }
+    }
+    return { delivered, expired };
+  }
+
+  private async pollMailboxes(only: string | undefined, errors: RouteError[]): Promise<MailMessageView[]> {
+    const owner = this.agentId();
+    const keyring = this.mailKeyring();
+    // Every route of every retained card: old routes keep queued packets until
+    // they are retrieved or expire (Agent Mail Section 4.3).
+    const targets: [string, string[]][] = [];
+    for (const [mailboxId, cards] of this.state.mail.mailboxes) {
+      if (only !== undefined && only !== mailboxId) continue;
+      const routes: string[] = [];
+      for (const card of [...cards].reverse()) {
+        for (const route of card.event.payload.routes) if (!routes.includes(route)) routes.push(route);
+      }
+      targets.push([mailboxId, routes]);
+    }
+    const received: MailMessageView[] = [];
+    for (const [mailboxId, routes] of targets) {
+      for (const route of routes) {
+        if (!this.isAllowedHost(route)) continue;
+        const client = this.mailClient(route);
+        const jwt = this.requestJwt(route);
+        const deletions: string[] = [];
+        let cursor: string | undefined;
+        for (let pageCount = 0; pageCount < SYNC_MAX_PAGES; pageCount += 1) {
+          let listed;
+          try {
+            listed = await client.list(mailboxId, owner, jwt, { limit: SYNC_PAGE_LIMIT, cursor });
+          } catch (error) {
+            errors.push({ ...routeError(route, error), mailbox_id: mailboxId });
+            break;
+          }
+          const now = unixTimeMillis();
+          for (const record of listed.result) {
+            const outcome = await this.acceptPacket(keyring, mailboxId, record, now);
+            if (outcome === "delete") deletions.push(record.packet_id);
+            else if ("error" in outcome) {
+              errors.push({ ...routeError(route, outcome.error), mailbox_id: mailboxId, packet_id: record.packet_id });
+            } else received.push(outcome.stored);
+          }
+          cursor = listed.next_cursor;
+          if (cursor === undefined) break;
+        }
+        for (const packetId of deletions) {
+          try {
+            await client.delete(mailboxId, packetId, owner, jwt);
+          } catch (error) {
+            errors.push({ ...routeError(route, error), mailbox_id: mailboxId, packet_id: packetId });
+          }
+        }
+      }
+    }
+    return received;
+  }
+
+  /**
+   * Recipient acceptance (Agent Mail Section 7.2) of one listed packet, whose
+   * shape, hash, and signature the list already verified. A new message keeps
+   * its relay copy until a later sync, after the host saved this call's state.
+   */
+  private async acceptPacket(
+    keyring: MailKeyring,
+    mailboxId: string,
+    record: MailPacketRecord,
+    now: number,
+  ): Promise<"delete" | { error: unknown } | { stored: MailMessageView }> {
+    const packet = record.packet;
+    // Sender policy applies before decryption.
+    if (this.state.mail.blockedSenders.has(packet.event.actor) || now >= packet.event.payload.header.expires_at) {
+      return "delete";
+    }
+    let message: MailMessagePayload;
+    try {
+      message = await keyring.open(packet, now);
+    } catch (error) {
+      return { error };
+    }
+    const existing = this.state.mail.messages.find((stored) =>
+      stored.direction === "received" &&
+      stored.message.from === message.from &&
+      stored.message.message_id === message.message_id);
+    if (existing) {
+      return sameMessage(existing.message, message)
+        ? "delete"
+        : { error: protocolError("invalid_event", "message ID reused for different content") };
+    }
+    if (message.reply_card !== undefined) {
+      // Verified with the message; a card older than the pin is not used.
+      try {
+        this.state.mail.pins.observe(message.reply_card, message.from, now, false);
+      } catch {
+        // The pin stays.
+      }
+    }
+    const stored: StoredMailMessage = { direction: "received", message, mailbox_id: mailboxId, received_at: now, read: false };
+    this.insertInbox(mailInboxItem(message, now));
+    this.state.mail.messages.push(stored);
+    return { stored: mailMessageView(stored, false) };
+  }
+
+  /** The retained cards whose keys are loaded, for opening packets. */
+  private mailKeyring(): MailKeyring {
+    const keyring = new MailKeyring(this.agentId());
+    for (const cards of this.state.mail.mailboxes.values()) {
+      for (const card of cards) {
+        const key = this.mailKeys.get(card.event.payload.public_key);
+        if (key) keyring.add(card, key);
+      }
+    }
+    return keyring;
+  }
+
+  /** Drops cards past `receive_until` with keys no retained card advertises, stale pins, and expired messages. */
+  private pruneMail(now: number): void {
+    const mail = this.state.mail;
+    for (const [mailboxId, cards] of mail.mailboxes) {
+      const kept = cards.filter((card) => now < card.event.payload.receive_until);
+      if (kept.length === 0) mail.mailboxes.delete(mailboxId);
+      else mail.mailboxes.set(mailboxId, kept);
+    }
+    const advertised = new Set([...mail.mailboxes.values()].flat().map((card) => card.event.payload.public_key));
+    for (const [publicKey, key] of this.mailKeys) {
+      if (!advertised.has(publicKey)) {
+        key.destroy();
+        this.mailKeys.delete(publicKey);
+      }
+    }
+    mail.pins.prune(now);
+    mail.messages = mail.messages.filter((stored) => now < stored.message.expires_at);
+  }
+
+  private replyParent(messageId: string, to: string | undefined): MailMessagePayload {
+    const owner = to === undefined ? undefined : parseMailAddress(to).owner;
+    const found = this.state.mail.messages.filter((stored) =>
+      stored.direction === "received" &&
+      stored.message.message_id === messageId &&
+      (owner === undefined || stored.message.from === owner));
+    if (found.length > 1) throw invalidPayload("several received messages share this message_id; pass to");
+    if (found.length === 0) throw invalidPayload("no received message has this message_id");
+    return found[0].message;
+  }
+
+  private openMailboxCard(mailboxId: string, now: number): MailboxCard {
+    const card = this.state.mail.mailboxes.get(mailboxId)?.at(-1);
+    if (!card) throw invalidPayload("unknown reply mailbox");
+    try {
+      validateMailSenderCard(card, this.agentId(), now);
+    } catch {
+      throw invalidPayload("the reply mailbox is not open");
+    }
+    return card;
+  }
+
+  private mailboxView(mailboxId: string, card: MailboxCard, now: number): MailboxView {
+    const unread = this.state.mail.messages.filter((stored) => isUnread(stored) && stored.mailbox_id === mailboxId).length;
+    return mailboxView(mailboxId, card, now, unread);
+  }
+
+  // ── Agent Knowledge (local connector Section 4.3).
+
+  private async knowledgeSubmit(input: KnowledgeSubmitInput): Promise<unknown> {
+    if (!Array.isArray(input.services) || input.services.length === 0 || input.services.length > MAX_KNOWLEDGE_SERVICES) {
+      throw invalidPayload("services must name one to eight services");
+    }
+    const services: string[] = [];
+    for (const service of input.services) {
+      const origin = this.knowledgeOrigin(service);
+      if (services.includes(origin)) throw invalidPayload("duplicate service");
+      services.push(origin);
+    }
+    if (!(KNOWLEDGE_EVENT_TYPES as readonly string[]).includes(input.type)) {
+      throw invalidPayload(`unknown Knowledge event type: ${input.type}`);
+    }
+    const createdAt = unixTimeMillis();
+    const envelope = this.signer.signEvent(
+      createEvent(KNOWLEDGE_PROTOCOL, input.type, this.agentId(), createdAt, this.nonces.nextNonce(createdAt), input.payload),
+    ) as KnowledgeEnvelope;
+    // A malformed contribution fails here, before anything is disclosed.
+    validateKnowledgeEnvelope(envelope);
+    const results: Record<string, unknown>[] = [];
+    let firstError: unknown;
+    let accepted = false;
+    for (const service of services) {
+      try {
+        const client = await this.knowledge(service);
+        const record = await client.submit(envelope, this.requestJwt(service));
+        results.push({ service, item: knowledgeItem(record) });
+        accepted = true;
+      } catch (error) {
+        results.push({ service, error: errorJson(error) });
+        firstError ??= error;
+      }
+    }
+    if (!accepted) throw firstError;
+    return { id: envelope.hash, envelope, results };
+  }
+
+  private async knowledgeQuery(input: KnowledgeQueryInput): Promise<unknown> {
+    const { service, ...query } = input;
+    const response = await (await this.knowledge(service)).query(query);
+    const result = scoped(response, { items: response.result.map(knowledgeItem) });
+    return response.next_cursor === undefined ? result : { ...result, next_cursor: response.next_cursor };
+  }
+
+  private async knowledgeGet(input: KnowledgeGetInput): Promise<unknown> {
+    const response = await (await this.knowledge(input.service)).batch(input.ids);
+    return scoped(response, { items: response.result.map(knowledgeItem), missing: response.missing });
+  }
+
+  private async knowledgeSearch(input: KnowledgeSearchInput): Promise<unknown> {
+    const { service, ...request } = input;
+    const response = await (await this.knowledge(service)).search(request);
+    const hits = response.result.map((hit) => ({
+      item: knowledgeItem(hit.record),
+      ...(hit.explanation === undefined ? {} : { explanation: hit.explanation }),
+    }));
+    return scoped(response, { hits, ranking: response.ranking, coverage: response.coverage });
+  }
+
+  /**
+   * The lifecycle check of Agent Knowledge Section 9.6 at one service: the
+   * event, then every page of `target={id}` within the page bound.
+   */
+  private async knowledgeStatus(input: KnowledgeStatusInput): Promise<unknown> {
+    validateKnowledgeId(input.id, "invalid_request");
+    const origin = this.knowledgeOrigin(input.service);
+    const client = await this.knowledge(origin);
+    const batch = await client.batch([input.id]);
+    const record: KnowledgeRecord | undefined = batch.result[0];
+    if (!record) throw protocolError("not_found", "event not found at this service");
+    const target = record.envelope.event;
+
+    const tracker = new KnowledgePageTracker(origin);
+    const request: Record<string, unknown> = { target: input.id, limit: STATUS_PAGE_LIMIT };
+    const links: KnowledgeRecord[] = [];
+    let scope: KnowledgeQueryResponse | undefined;
+    for (let pageCount = 0; pageCount < STATUS_MAX_PAGES; pageCount += 1) {
+      const response = await client.query(request as KnowledgeQuery);
+      tracker.accept(request as KnowledgeQuery, response);
+      links.push(...response.result);
+      scope ??= response;
+      if (tracker.complete) break;
+      request.cursor = response.next_cursor;
+    }
+
+    // The service checked target rules; same-author and nonce rules are
+    // rechecked here so a hostile service cannot withdraw another's event.
+    const laterByAuthor = (event: KnowledgeEnvelope["event"]) =>
+      event.actor === target.actor && event.nonce > target.nonce;
+    const retractions = new Set<string>();
+    const successors = new Set<string>();
+    const assessments = new Set<string>();
+    for (const link of links) {
+      const event = link.envelope.event;
+      const payload = event.payload as unknown as Record<string, unknown>;
+      if (event.type === "knowledge.retract" && payload.target === input.id && laterByAuthor(event)) {
+        retractions.add(link.envelope.hash);
+      } else if (event.type === "knowledge.assess" && payload.target === input.id) {
+        assessments.add(link.envelope.hash);
+      } else if (
+        event.type === "knowledge.publish" &&
+        laterByAuthor(event) &&
+        Array.isArray(payload.relations) &&
+        payload.relations.some((relation: { relation?: unknown; target?: unknown }) =>
+          relation.relation === "supersedes" && relation.target === input.id)
+      ) {
+        successors.add(link.envelope.hash);
+      }
+    }
+    const sorted = (ids: Set<string>) => [...ids].sort(compareStrings);
+    const complete = tracker.complete;
+    return scoped(scope!, {
+      item: knowledgeItem(record),
+      complete,
+      ...(complete ? { status: retractions.size === 0 ? "active" : "retracted" } : {}),
+      retractions: sorted(retractions),
+      successors: sorted(successors),
+      assessments: sorted(assessments),
+    });
+  }
+
+  /** A service origin the operator allows. */
+  private knowledgeOrigin(service: string): string {
+    const origin = normalizeHost(service);
+    validateOrigin(origin);
+    this.requireAllowedHost(origin);
+    return origin;
+  }
+
+  /** The service's client, built from its discovery document once per session. */
+  private async knowledge(service: string): Promise<KnowledgeClient> {
+    const origin = this.knowledgeOrigin(service);
+    let client = this.knowledgeClients.get(origin);
+    if (!client) {
+      client = await KnowledgeClient.discover(origin, this.fetchImpl);
+      this.knowledgeClients.set(origin, client);
+    }
+    return client;
+  }
+
+  private isAllowedHost(host: string): boolean {
+    return this.state.hosts.get(normalizeHost(host))?.allowed === true;
   }
 
   // ── Internal helpers.

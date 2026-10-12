@@ -44,6 +44,21 @@ impl MailClient {
             reqwest::Client::builder().tls_certs_only(roots).no_proxy(),
         )
     }
+    /// The local connector's transport: the operator-supplied client it uses
+    /// for every service. Crate-private, so ordinary callers still cannot
+    /// inject credentials or redirect policies; the response origin check applies.
+    #[cfg(feature = "local-connector")]
+    pub(crate) fn with_client(origin: impl Into<String>, inner: reqwest::Client) -> Result<Self> {
+        let origin = origin.into();
+        identity::validate_origin(&origin)?;
+        Ok(Self {
+            base: format!("{origin}/v1/mailboxes"),
+            origin,
+            inner,
+            max_response_bytes: 128 * MAX_PACKET_BYTES,
+            cards: Arc::new(Mutex::new(MailCardCache::new())),
+        })
+    }
     fn build(origin: String, builder: reqwest::ClientBuilder) -> Result<Self> {
         identity::validate_origin(&origin)?;
         let inner = builder

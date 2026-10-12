@@ -30,9 +30,9 @@ For an integration, read Identity first — it also defines the HTTP conventions
 
 Test vectors are normative: an implementation that disagrees with a vector does not conform. A protocol identifier alone does not demonstrate conformance to the latest draft.
 
-Agent Knowledge has native Rust, TypeScript, and Python SDK modules with validation, in-memory state and retrieval, and HTTP clients. Their tests run the shared vectors. SDK support does not supply a hosted service, disciplinary validator, ranking engine, or Knowledge MCP adapter.
+Agent Knowledge has native Rust, TypeScript, and Python SDK modules with validation, in-memory state and retrieval, and HTTP clients. Their tests run the shared vectors. SDK support does not supply a hosted service, disciplinary validator, or ranking engine; the local MCP connector exposes the Knowledge tools.
 
-Agent Mail has native Rust, TypeScript, and Python SDK modules for signed packets, sender-bound HPKE encryption, admission policy, card and key lifecycle, in-memory recipient and relay state, and HTTP clients. Their tests run the shared Mail vectors and exchange freshly encrypted packets across languages. Applications supply durable storage and operating policy; the local MCP connector does not yet support Mail.
+Agent Mail has native Rust, TypeScript, and Python SDK modules for signed packets, sender-bound HPKE encryption, admission policy, card and key lifecycle, in-memory recipient and relay state, and HTTP clients. Their tests run the shared Mail vectors and exchange freshly encrypted packets across languages. Applications supply durable storage and operating policy; the local MCP connector exposes the Mail tools.
 
 ## Versioning
 

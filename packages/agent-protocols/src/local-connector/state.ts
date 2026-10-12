@@ -1,5 +1,5 @@
 // In-memory store the connector projects records into. LocalConnectorState
-// holds the room, inbox, and draft entries the handlers mutate;
+// holds the room, inbox, draft, and mail entries the handlers mutate;
 // LocalConnectorSnapshot is its durable form, which LocalConnector.snapshot
 // writes with the next nonce.
 
@@ -10,6 +10,12 @@ import {
   RoomResponse,
 } from "../discourse.js";
 import { AgentId } from "../identity.js";
+import {
+  MailCardCache,
+  MailboxCard,
+  MailMessagePayload,
+  MailPacket,
+} from "../mail.js";
 import { AgentProfile } from "../profile.js";
 
 import {
@@ -17,6 +23,8 @@ import {
   AgentProtocolsHost,
   HeldDraft,
   InboxItem,
+  MailDelivery,
+  MailDirection,
   RoomMemberView,
   TimelineItem,
 } from "./views.js";
@@ -65,6 +73,35 @@ export interface HeldDraftEntry {
   request: HeldDraftRequest;
 }
 
+/** A received or sent message, kept until it expires. */
+export interface StoredMailMessage {
+  direction: MailDirection;
+  message: MailMessagePayload;
+  /** The receiving mailbox, or the recipient's mailbox for a sent message. */
+  mailbox_id: string;
+  received_at?: number;
+  read: boolean;
+  /** A sent message's latest packet, retried byte-for-byte. */
+  packet?: MailPacket;
+  delivery?: MailDelivery;
+}
+
+/**
+ * Agent Mail state. Decryption keys are not part of it: the connector keeps
+ * them apart, for the host's key store.
+ */
+export class MailState {
+  /** The active Agent ID's mailboxes: every card retained until its
+   * `receive_until`, in signing order, the last one current. */
+  mailboxes = new Map<string, MailboxCard[]>();
+  /** Sender-side card pins (Agent Mail Section 3.2). */
+  pins = new MailCardCache();
+  /** Operator sender policy, applied before decryption. */
+  blockedSenders = new Set<AgentId>();
+  /** Received and sent messages in local order. */
+  messages: StoredMailMessage[] = [];
+}
+
 /**
  * Working set the connector projects records into. `hosts` is operator
  * configuration; the room, inbox, and draft maps are the materialized state a
@@ -81,10 +118,11 @@ export class LocalConnectorState {
   agentStatuses = new Map<string, Map<AgentId, AgentStatus>>();
   inbox = new Map<string, InboxEntry>();
   drafts = new Map<string, HeldDraftEntry>();
+  mail = new MailState();
 }
 
 /** Version of the document {@link LocalConnector.snapshot} produces. */
-export const LOCAL_CONNECTOR_SNAPSHOT_VERSION = 1;
+export const LOCAL_CONNECTOR_SNAPSHOT_VERSION = 2;
 
 /** Persisted form of a {@link LocalRoomState}, with snake_case fields. */
 export interface LocalRoomSnapshot {
@@ -134,4 +172,10 @@ export interface LocalConnectorSnapshot {
   }[];
   inbox: Record<string, InboxEntry>;
   drafts: Record<string, HeldDraftEntry>;
+  mail: {
+    mailboxes: { mailbox_id: string; cards: MailboxCard[] }[];
+    pins: MailboxCard[];
+    blocked_senders: AgentId[];
+    messages: StoredMailMessage[];
+  };
 }

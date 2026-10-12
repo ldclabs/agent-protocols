@@ -50,6 +50,12 @@ class MailCardCache:
             validate_mailbox_card(card, owner, now_ms=now, for_sending=True)
         return copy.deepcopy(card)
 
+    def get(self, owner: str, mailbox_id: str) -> Envelope | None:
+        """The pinned card of (owner, mailbox_id), if any."""
+        with self._lock:
+            pin = self._pins.get((owner, mailbox_id))
+            return copy.deepcopy(pin) if pin is not None else None
+
     def prune(self, *, now_ms: int | None = None) -> None:
         now = _now(now_ms)
         with self._lock:

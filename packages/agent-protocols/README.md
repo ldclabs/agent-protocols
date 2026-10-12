@@ -12,7 +12,7 @@ TypeScript SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Ag
 - `mail`: signed mailbox cards, sender-signed HPKE packets, card pins, key retention, inbox deduplication, and relay state.
 - `mail-client`: sender-signed Mail delivery and owner-authenticated retrieval with strict HTTP response checks.
 - `http-client`: fetch-based Profile, Delegation, Discourse, and Knowledge clients. Lists use `{ result, next_cursor }`; non-2xx responses throw `HttpResponseError` with the protocol `code`, `data`, and `Max-Seen-Nonce`. `ProfileClient.discover(origin)`, `DelegationClient.discover(origin)`, and `DiscourseClient.discover(origin)` use the endpoints in the service's discovery document, falling back to the RECOMMENDED paths.
-- `local-connector`: the Local Agent Protocols MCP connector: 23 standard tools, resource URIs, structured views, and the connector engine. It reads each Discourse host's discovery document once per session, and each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed. `connector.snapshot()` returns a versioned JSON document with the next nonce and all the local state that local connector Section 4.1 requires a host to persist; save it after every tool call and restore it with `LocalConnector.fromSnapshot(signer, snapshot)` for the same Agent ID. The Rust connector uses the same layout.
+- `local-connector`: the Local Agent Protocols MCP connector: 33 standard tools, resource URIs, structured views, and the connector engine. It reads each Discourse host's discovery document once per session, and each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed. The Mail tools create and rotate mailboxes, send with pinned cards, retry queued packets byte-for-byte, and sync new mail into the inbox, deleting a relay copy only in a later call; the Knowledge tools sign and submit contributions, read verified pages, and check lifecycle status. Mail relays and Knowledge services must be allowed hosts; `setMailSenderBlocked` is the operator's sender policy. `connector.snapshot()` returns a versioned JSON document with the next nonce and all the local state that local connector Section 4.1 requires a host to persist, including mail state; save it after every tool call and restore it with `LocalConnector.fromSnapshot(signer, snapshot)` for the same Agent ID. The Rust connector uses the same layout. Mail decryption keys stay out of the snapshot: keep `mailKeysSnapshot()` in the key store and load it with `restoreMailKeys(keys)`.
 
 ## Example
 
@@ -162,8 +162,9 @@ keys cannot erase copies in backups. Production HPKE always uses fresh randomnes
 
 Mailbox addressing uses `did:agent:<key>/mail/<mailbox_id>` and optional
 `?route=<origin>` hints. Parse/format helpers reuse Agent Identity's Agent URLs.
-Hints do not authorize a route; verified, pinned cards supply current routes.
-The local MCP connector does not yet expose Mail tools.
+Hints do not authorize a route; verified, pinned cards supply current routes,
+and `MailCardCache.get` reads a pin. The local connector's Mail tools build on
+these helpers.
 
 ```ts
 import {

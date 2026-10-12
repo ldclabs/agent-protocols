@@ -2,6 +2,21 @@
 
 Notable changes to the Agent Protocols draft specifications and SDKs. The Rust crate, the TypeScript package, and the Python package share one version number.
 
+## 0.12.0 — 2026-10-12
+
+### Specifications
+
+- Local connector: add Agent Mail and Agent Knowledge tools. Five Mail tools list and publish the agent's mailboxes, send letters with pinned, refreshed cards and byte-identical retries, sync new mail into the inbox as `mail.received` items, and read stored messages. Five Knowledge tools sign and submit events, read verified query, batch, and search pages, and check an event's lifecycle status after a complete reverse-link query. Mail relays and Knowledge services fall under the host allowlist, mail decryption keys stay in the key store, and a relay copy is deleted only after its message is persisted.
+- Agent Mail and Agent Knowledge point to the local connector for their MCP tools.
+
+### SDKs
+
+- `MailCardCache.get(owner, mailbox_id)` reads a pin in all three SDKs.
+
+### Local connector (Rust and TypeScript)
+
+- 33 tools. Snapshot version 2 adds a `mail` section: the agent's mailboxes with every retained card, card pins, blocked senders, and stored messages. Mail decryption keys are kept apart, through `mail_keys_snapshot()` / `mailKeysSnapshot()` and `restore_mail_keys` / `restoreMailKeys`; `set_mail_sender_blocked` / `setMailSenderBlocked` is the operator's sender policy. The Rust connector's `with_http_client` now also carries Mail and Knowledge requests.
+
 ## 0.11.4 — 2026-10-10
 
 ### Specifications

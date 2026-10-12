@@ -188,8 +188,9 @@ keys cannot erase copies in backups. Production HPKE always uses fresh randomnes
 
 Mailbox addressing uses `did:agent:<key>/mail/<mailbox_id>` and optional
 `?route=<origin>` hints. Parse/format helpers reuse Agent Identity's Agent URLs.
-Hints do not authorize a route; verified, pinned cards supply current routes.
-The local MCP connector does not yet expose Mail tools.
+Hints do not authorize a route; verified, pinned cards supply current routes,
+and `MailCardCache.get` reads a pin. The Python SDK has no local connector; the
+Rust and TypeScript connectors expose the Mail tools.
 
 ```python
 from agent_protocols import (

@@ -10,7 +10,7 @@ use crate::delegation::DelegationStatus;
 use crate::discourse::{JoinDecision, Role, RoomPolicy, TypeDeclaration, Visibility};
 use crate::identity::AgentId;
 
-use super::views::{DraftAction, HeadMismatchPolicy, RoomMemberStatus};
+use super::views::{DraftAction, HeadMismatchPolicy, MailDirection, RoomMemberStatus};
 
 #[derive(Deserialize)]
 pub(crate) struct PrincipalResolveInput {
@@ -430,4 +430,110 @@ pub(crate) struct JoinRequestReviewInput {
     pub role: Option<Role>,
     #[serde(default)]
     pub reason: Option<String>,
+}
+
+/// Creates a mailbox without `mailbox_id`; otherwise replaces that mailbox's card.
+#[derive(Deserialize)]
+pub(crate) struct MailMailboxPublishInput {
+    #[serde(default)]
+    pub mailbox_id: Option<String>,
+    pub routes: Vec<String>,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    #[serde(default)]
+    pub receive_until: Option<i64>,
+    #[serde(default)]
+    pub max_packet_bytes: Option<usize>,
+    #[serde(default)]
+    pub rotate_key: bool,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MailSendInput {
+    /// A mailbox address; optional for a reply to a parent with a reply card.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// The `message_id` of a received message this one replies to.
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    /// Becomes a leading `text/plain` part.
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub parts: Vec<crate::mail::MailPart>,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    /// Attaches the current card of this open mailbox as `reply_card`.
+    #[serde(default)]
+    pub reply_mailbox_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MailSyncInput {
+    #[serde(default)]
+    pub mailbox_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct MailListInput {
+    #[serde(default)]
+    pub direction: Option<MailDirection>,
+    #[serde(default)]
+    pub mailbox_id: Option<String>,
+    #[serde(default)]
+    pub from: Option<AgentId>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub unread_only: bool,
+    /// Marks the returned received messages read.
+    #[serde(default)]
+    pub mark_read: bool,
+    /// Adds the base64url `data` of non-text parts.
+    #[serde(default)]
+    pub include_data: bool,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct KnowledgeSubmitInput {
+    pub services: Vec<String>,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub payload: Value,
+}
+
+/// One page of an exact Knowledge query; the filters keep their wire names.
+#[derive(Deserialize)]
+pub(crate) struct KnowledgeQueryInput {
+    pub service: String,
+    #[serde(flatten)]
+    pub query: serde_json::Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct KnowledgeGetInput {
+    pub service: String,
+    pub ids: Vec<String>,
+}
+
+/// The ranked search request of Agent Knowledge Section 9.5, plus its service.
+#[derive(Deserialize)]
+pub(crate) struct KnowledgeSearchInput {
+    pub service: String,
+    #[serde(flatten)]
+    pub request: serde_json::Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct KnowledgeStatusInput {
+    pub service: String,
+    pub id: String,
 }

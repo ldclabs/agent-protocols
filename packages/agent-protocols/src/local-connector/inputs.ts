@@ -10,11 +10,14 @@ import {
 } from "../discourse.js";
 import { DelegationStatus } from "../delegation.js";
 import { AgentId } from "../identity.js";
+import type { KnowledgeQuery, KnowledgeSearchRequest } from "../knowledge.js";
+import type { MailPart } from "../mail.js";
 
 import { invalidPayload } from "./internal.js";
 import {
   DraftAction,
   HeadMismatchPolicy,
+  MailDirection,
   RoomMemberStatus,
   RoomsListMembership,
 } from "./views.js";
@@ -265,4 +268,69 @@ export interface JoinRequestReviewInput {
   decision: JoinDecision;
   role?: Role;
   reason?: string;
+}
+
+/** Creates a mailbox without `mailbox_id`; otherwise replaces that mailbox's card. */
+export interface MailMailboxPublishInput {
+  mailbox_id?: string;
+  routes: string[];
+  expires_at?: number;
+  receive_until?: number;
+  max_packet_bytes?: number;
+  rotate_key?: boolean;
+}
+
+export interface MailSendInput {
+  /** A mailbox address; optional for a reply to a parent with a reply card. */
+  to?: string;
+  /** The `message_id` of a received message this one replies to. */
+  in_reply_to?: string;
+  subject?: string;
+  /** Becomes a leading `text/plain` part. */
+  text?: string;
+  parts?: MailPart[];
+  expires_at?: number;
+  /** Attaches the current card of this open mailbox as `reply_card`. */
+  reply_mailbox_id?: string;
+}
+
+export interface MailSyncInput {
+  mailbox_id?: string;
+}
+
+export interface MailListInput {
+  direction?: MailDirection;
+  mailbox_id?: string;
+  from?: AgentId;
+  thread_id?: string;
+  message_id?: string;
+  unread_only?: boolean;
+  /** Marks the returned received messages read. */
+  mark_read?: boolean;
+  /** Adds the base64url `data` of non-text parts. */
+  include_data?: boolean;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface KnowledgeSubmitInput {
+  services: string[];
+  type: string;
+  payload: unknown;
+}
+
+/** One page of an exact Knowledge query; the filters keep their wire names. */
+export type KnowledgeQueryInput = { service: string } & KnowledgeQuery;
+
+export interface KnowledgeGetInput {
+  service: string;
+  ids: string[];
+}
+
+/** The ranked search request of Agent Knowledge Section 9.5, plus its service. */
+export type KnowledgeSearchInput = { service: string } & KnowledgeSearchRequest;
+
+export interface KnowledgeStatusInput {
+  service: string;
+  id: string;
 }

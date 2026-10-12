@@ -1253,7 +1253,7 @@ mod connector_regressions {
                     .is_err()
             );
             let mut future = persisted.clone();
-            future["version"] = json!(2);
+            future["version"] = json!(LOCAL_CONNECTOR_SNAPSHOT_VERSION + 1);
             assert!(LocalConnector::from_snapshot(active(), &future).is_err());
         });
     }

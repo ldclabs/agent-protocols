@@ -19,7 +19,7 @@ fn mailbox_key(owner: &AgentId, mailbox: &str) -> String {
 /// Sender-side pins: the greatest-nonce card seen per (owner, mailbox),
 /// including closed or expired cards. Save `snapshot()` after every
 /// observation, even one that returns an error for an unusable new pin.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MailCardCache {
     pins: BTreeMap<String, MailboxCard>,
 }
@@ -60,6 +60,10 @@ impl MailCardCache {
         let card = self.observe_historical(value, owner, now)?;
         check_card_usable(&card, owner, now)?;
         Ok(card)
+    }
+    /// The pinned card of `(owner, mailbox_id)`, if any.
+    pub fn get(&self, owner: &AgentId, mailbox_id: &str) -> Option<&MailboxCard> {
+        self.pins.get(&mailbox_key(owner, mailbox_id))
     }
     /// Drop pins old enough that every earlier card of the mailbox has expired.
     pub fn prune(&mut self, now: i64) -> Result<()> {
