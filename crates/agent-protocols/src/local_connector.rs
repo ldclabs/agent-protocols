@@ -40,7 +40,7 @@ pub use views::*;
 use inputs::*;
 use projection::*;
 use state::{
-    ConnectorSnapshot, HeldDraftEntry, HeldDraftRequest, InboxEntry, InboxEntryState,
+    trim_inbox, ConnectorSnapshot, HeldDraftEntry, HeldDraftRequest, InboxEntry, InboxEntryState,
     LocalRoomState,
 };
 
@@ -50,6 +50,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::delegation::{
     is_principal_alias, validate_delegation_event_authority, verify_delegation_credential,
@@ -80,6 +81,41 @@ use crate::profile::{profile_update_event, AgentProfile, ProfileUpdatePayload};
 pub const SEND_ANYWAY_MAX_ATTEMPTS: u32 = 3;
 /// Lease on an inbox item claimed with `claim: true`.
 pub const INBOX_CLAIM_LEASE_MS: i64 = 60_000;
+/// Records, and timeline items, kept per room; older ones are forgotten.
+pub const ROOM_HISTORY_LIMIT: usize = 1000;
+/// Inbox entries kept; acknowledged ones are forgotten first, then the oldest.
+pub const INBOX_LIMIT: usize = 1000;
+
+/// Discourse and Knowledge clients built from discovery documents, shared by
+/// every connector given a clone of it, so a host that restores a connector
+/// for each call reads each origin's document once. A discovery that fails
+/// with a network error, `rate_limited`, or a 5xx status is not kept: the
+/// default paths serve that call and the next one reads the document again.
+/// The clients carry the HTTP client they were discovered with, so share a
+/// cache only among connectors that use the same one.
+#[derive(Clone, Default)]
+pub struct DiscoveryCache {
+    discourse: Arc<Mutex<BTreeMap<String, DiscourseClient>>>,
+    knowledge: Arc<Mutex<BTreeMap<String, KnowledgeClient>>>,
+}
+
+impl DiscoveryCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn discourse(&self) -> MutexGuard<'_, BTreeMap<String, DiscourseClient>> {
+        self.discourse
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn knowledge(&self) -> MutexGuard<'_, BTreeMap<String, KnowledgeClient>> {
+        self.knowledge
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 /// Signs and submits once, re-signing a single time after a bounded
 /// `Max-Seen-Nonce` resync. Evaluates to `Result<(response, envelope)>`.
@@ -106,10 +142,7 @@ pub struct LocalConnector {
     /// the snapshot (see [`LocalConnector::mail_keys_snapshot`]).
     mail_keys: BTreeMap<String, MailEncryptionKey>,
     http: reqwest::Client,
-    /// Discourse clients built from each host's discovery document, once per session.
-    discourse_clients: std::sync::Mutex<BTreeMap<String, DiscourseClient>>,
-    /// Knowledge clients built from each service's discovery document, once per session.
-    knowledge_clients: std::sync::Mutex<BTreeMap<String, KnowledgeClient>>,
+    discovery: DiscoveryCache,
 }
 
 impl LocalConnector {
@@ -129,8 +162,7 @@ impl LocalConnector {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("valid HTTP client"),
-            discourse_clients: Default::default(),
-            knowledge_clients: Default::default(),
+            discovery: DiscoveryCache::new(),
         }
     }
 
@@ -225,14 +257,27 @@ impl LocalConnector {
         }
     }
 
+    /// Replaces the operator's blocked senders with `senders`, so a restored
+    /// snapshot keeps none the operator dropped.
+    pub fn set_mail_blocked_senders(&mut self, senders: impl IntoIterator<Item = AgentId>) {
+        self.state.mail.blocked_senders = senders.into_iter().collect();
+    }
+
     /// Uses `client` for Agent Discourse, Profile, Mail, and Knowledge
     /// requests. Like the default, it must not follow redirects: Mail and
     /// Knowledge requests carry owner request JWTs (Agent Mail Section 8.1).
-    /// Agent Delegation requests keep their own bounded clients.
+    /// Agent Delegation requests keep their own bounded clients. It starts a
+    /// new discovery cache, since cached clients carry the previous client.
     pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
         self.http = client;
-        self.discourse_clients = Default::default();
-        self.knowledge_clients = Default::default();
+        self.discovery = DiscoveryCache::new();
+        self
+    }
+
+    /// Uses `cache` for discovered Discourse and Knowledge clients; set it
+    /// after [`Self::with_http_client`].
+    pub fn with_discovery_cache(mut self, cache: DiscoveryCache) -> Self {
+        self.discovery = cache;
         self
     }
 
@@ -338,6 +383,7 @@ impl LocalConnector {
             room.synced_hash = Some(record.hash().to_owned());
             room.records.push(record);
             room.timeline.push(item);
+            room.trim_history();
         }
         // Removal ends membership; the host clears the member's transient
         // agent status, so drop the local cache entry too.
@@ -1997,6 +2043,7 @@ impl LocalConnector {
                 item,
                 state: InboxEntryState::Pending,
             });
+        trim_inbox(&mut self.state.inbox);
     }
 
     fn pending_inbox_count(&self, room_id: Option<&str>) -> usize {
@@ -2019,23 +2066,29 @@ impl LocalConnector {
     async fn discourse(&self, host: &str) -> Result<DiscourseClient> {
         let host = normalize_host(host);
         self.require_allowed_host(&host)?;
-        let cached = self.discourse_cache().get(&host).cloned();
+        let cached = self.discovery.discourse().get(&host).cloned();
         let client = match cached {
             Some(client) => client,
             None => {
-                let client = DiscourseClient::discover_with_client(&host, self.http.clone()).await;
-                self.discourse_cache().insert(host, client.clone());
+                let discovered = DiscourseClient::from_discovery(&host, self.http.clone()).await;
+                let (client, keep) = match discovered {
+                    Ok(client) => (client, true),
+                    // Discovery is optional: a host that answers without a
+                    // document uses the default paths, and one that could not
+                    // answer is asked again next time.
+                    Err(error) => (
+                        DiscourseClient::with_client(&host, self.http.clone()),
+                        !mail_tools::is_transient(&error),
+                    ),
+                };
+                if keep {
+                    self.discovery.discourse().insert(host, client.clone());
+                }
                 client
             }
         };
         self.require_allowed_host(&service_origin(client.rooms_url())?)?;
         Ok(client)
-    }
-
-    fn discourse_cache(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, DiscourseClient>> {
-        self.discourse_clients
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

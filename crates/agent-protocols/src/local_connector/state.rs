@@ -19,6 +19,7 @@ use super::views::{
     ActiveTurn, AgentProtocolsHost, HeldDraft, InboxItem, MailDelivery, MailDirection,
     RoomMemberView, TimelineItem,
 };
+use super::{INBOX_LIMIT, ROOM_HISTORY_LIMIT};
 
 /// Local room state is keyed by `(host, room_id)`: ADP room IDs are only
 /// RECOMMENDED to be globally unique, and a connector can be configured with
@@ -96,6 +97,15 @@ impl LocalRoomState {
             .filter(|item| item.seq > self.read_seq)
             .count()
     }
+
+    /// Forgets the oldest records and timeline items beyond
+    /// [`ROOM_HISTORY_LIMIT`]. The synced and head positions stay.
+    pub(crate) fn trim_history(&mut self) {
+        let excess = self.records.len().saturating_sub(ROOM_HISTORY_LIMIT);
+        self.records.drain(..excess);
+        let excess = self.timeline.len().saturating_sub(ROOM_HISTORY_LIMIT);
+        self.timeline.drain(..excess);
+    }
 }
 
 /// Agent Mail state. Decryption keys are not part of it: the connector keeps
@@ -148,6 +158,26 @@ pub(crate) enum InboxEntryState {
 pub(crate) struct InboxEntry {
     pub(crate) item: InboxItem,
     pub(crate) state: InboxEntryState,
+}
+
+/// Forgets inbox entries beyond [`INBOX_LIMIT`]: acknowledged ones first,
+/// then the oldest.
+pub(crate) fn trim_inbox(inbox: &mut BTreeMap<String, InboxEntry>) {
+    let excess = inbox.len().saturating_sub(INBOX_LIMIT);
+    if excess == 0 {
+        return;
+    }
+    let mut order: Vec<_> = inbox
+        .iter()
+        .map(|(id, entry)| {
+            let open = entry.state != InboxEntryState::Acknowledged;
+            (open, entry.item.created_at, id.clone())
+        })
+        .collect();
+    order.sort_unstable();
+    for (_, _, id) in order.into_iter().take(excess) {
+        inbox.remove(&id);
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -282,12 +312,17 @@ impl ConnectorSnapshot {
 
     pub(crate) fn into_state(self) -> Result<LocalConnectorState> {
         let pins = MailCardCache::from_snapshot(&json!({"version": 1, "pins": self.mail.pins}))?;
+        let mut inbox = self.inbox;
+        trim_inbox(&mut inbox);
         Ok(LocalConnectorState {
             hosts: self.hosts,
             rooms: self
                 .rooms
                 .into_iter()
-                .map(|room| ((room.host.clone(), room.room.id.clone()), room))
+                .map(|mut room| {
+                    room.trim_history();
+                    ((room.host.clone(), room.room.id.clone()), room)
+                })
                 .collect(),
             profiles: self.profiles,
             join_requests: self
@@ -305,7 +340,7 @@ impl ConnectorSnapshot {
                 .into_iter()
                 .map(|entry| ((entry.host, entry.room_id), entry.statuses))
                 .collect(),
-            inbox: self.inbox,
+            inbox,
             drafts: self.drafts,
             mail: MailState {
                 mailboxes: self

@@ -864,7 +864,7 @@ fn is_unread(stored: &StoredMailMessage) -> bool {
 }
 
 /// Network failures, `rate_limited`, and 5xx statuses are worth retrying.
-fn is_transient(error: &SdkError) -> bool {
+pub(super) fn is_transient(error: &SdkError) -> bool {
     match error {
         SdkError::Http(_) => true,
         SdkError::HttpStatus { status, code, .. } => {

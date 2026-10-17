@@ -12,6 +12,7 @@ import {
   AgentStatus,
   AgentStatusInput,
   ArchiveRecord,
+  DiscourseProtocolDiscovery,
   MessageCreatePayload,
   RoomCreatePayload,
   RoomJoinPayload,
@@ -197,6 +198,7 @@ import {
 import { protocolError } from "../errors.js";
 import {
   HeldDraftRequest,
+  InboxEntry,
   LOCAL_CONNECTOR_SNAPSHOT_VERSION,
   LocalConnectorSnapshot,
   LocalConnectorState,
@@ -242,6 +244,10 @@ import {
 export const SEND_ANYWAY_MAX_ATTEMPTS = 3;
 /** Lease on an inbox item claimed with `claim: true`. */
 export const INBOX_CLAIM_LEASE_MS = 60_000;
+/** Records, and timeline items, kept per room; older ones are forgotten. */
+export const ROOM_HISTORY_LIMIT = 1000;
+/** Inbox entries kept; acknowledged ones are forgotten first, then the oldest. */
+export const INBOX_LIMIT = 1000;
 /** `max_packet_bytes` of a new mailbox. */
 const DEFAULT_MAX_PACKET_BYTES = 262_144;
 /** Default message lifetime, bounded by the card's `receive_until`. */
@@ -317,6 +323,42 @@ function roomFromSnapshot(room: LocalRoomSnapshot): LocalRoomState {
 
 function unreadCount(room: LocalRoomState): number {
   return room.timeline.filter((item) => item.seq > room.readSeq).length;
+}
+
+/** Forgets the oldest records and timeline items beyond {@link ROOM_HISTORY_LIMIT}. The synced and head positions stay. */
+function trimHistory(room: LocalRoomState): void {
+  room.records.splice(0, Math.max(0, room.records.length - ROOM_HISTORY_LIMIT));
+  room.timeline.splice(0, Math.max(0, room.timeline.length - ROOM_HISTORY_LIMIT));
+}
+
+/** Forgets inbox entries beyond {@link INBOX_LIMIT}: acknowledged ones first, then the oldest. */
+function trimInbox(inbox: Map<string, InboxEntry>): void {
+  const excess = inbox.size - INBOX_LIMIT;
+  if (excess <= 0) return;
+  const open = (entry: InboxEntry) => Number(entry.state.kind !== "acknowledged");
+  const order = [...inbox].sort(
+    ([aId, a], [bId, b]) => open(a) - open(b) || a.item.created_at - b.item.created_at || compareStrings(aId, bId),
+  );
+  for (const [id] of order.slice(0, excess)) inbox.delete(id);
+}
+
+/**
+ * A host's client from its discovery document, and whether to keep it.
+ * Discovery is optional: a host that answers without a document uses the
+ * default paths, and one that could not answer (a network error, 429, or a
+ * 5xx status) is asked again next time.
+ */
+async function discoverDiscourse(host: string, fetchImpl: FetchLike): Promise<{ client: DiscourseClient; keep: boolean }> {
+  try {
+    const response = await fetchImpl(`${host}/.well-known/agent-discourse`);
+    if (response.ok) {
+      const discovery = (await response.json()) as DiscourseProtocolDiscovery;
+      return { client: new DiscourseClient(host, fetchImpl, discovery.endpoints), keep: true };
+    }
+    return { client: new DiscourseClient(host, fetchImpl), keep: response.status < 500 && response.status !== 429 };
+  } catch {
+    return { client: new DiscourseClient(host, fetchImpl), keep: false };
+  }
 }
 
 // ── Room metadata getters: prefer the host-materialized value, fall back to
@@ -442,21 +484,34 @@ function isHttpError(error: unknown, code: string): error is HttpResponseError {
   return error instanceof HttpResponseError && error.code === code;
 }
 
+/**
+ * Discourse and Knowledge clients built from discovery documents, shared by
+ * every connector given it, so a host that restores a connector for each call
+ * reads each origin's document once. A discovery that fails with a network
+ * error, 429, or a 5xx status is not kept: the default paths serve that call
+ * and the next one reads the document again.
+ * The clients carry the `fetch` they were discovered with, so share a cache
+ * only among connectors that use the same one.
+ */
+export class DiscoveryCache {
+  readonly discourse = new Map<string, DiscourseClient>();
+  readonly knowledge = new Map<string, KnowledgeClient>();
+}
+
 export interface LocalConnectorOptions {
   /** Restore a previously persisted working set. Defaults to empty. */
   state?: LocalConnectorState;
   /** Injected `fetch`, e.g. for tests or a custom transport. */
   fetchImpl?: FetchLike;
+  /** Discovered clients shared with other connectors. Defaults to a cache of this connector's own. */
+  discoveryCache?: DiscoveryCache;
 }
 
 export class LocalConnector {
   readonly state: LocalConnectorState;
   private nonces = new ClientNonceManager();
   private readonly fetchImpl: FetchLike;
-  /** Discourse clients built from each host's discovery document, once per session. */
-  private readonly discourseClients = new Map<string, DiscourseClient>();
-  /** Knowledge clients built from each service's discovery document, once per session. */
-  private readonly knowledgeClients = new Map<string, KnowledgeClient>();
+  private readonly discovery: DiscoveryCache;
   /** Agent Mail decryption keys by public key: key-store material, never in the snapshot. */
   private readonly mailKeys = new Map<string, MailEncryptionKey>();
 
@@ -466,6 +521,7 @@ export class LocalConnector {
   ) {
     this.state = options.state ?? new LocalConnectorState();
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.discovery = options.discoveryCache ?? new DiscoveryCache();
   }
 
   /**
@@ -495,7 +551,9 @@ export class LocalConnector {
     const state = new LocalConnectorState();
     state.hosts = new Map(Object.entries(doc.hosts));
     for (const room of doc.rooms) {
-      state.rooms.set(roomKeyString({ host: room.host, roomId: room.room.id }), roomFromSnapshot(room));
+      const restored = roomFromSnapshot(room);
+      trimHistory(restored);
+      state.rooms.set(roomKeyString({ host: room.host, roomId: room.room.id }), restored);
     }
     state.profiles = new Map(Object.entries(doc.profiles));
     for (const entry of doc.join_requests) {
@@ -511,6 +569,7 @@ export class LocalConnector {
       );
     }
     state.inbox = new Map(Object.entries(doc.inbox));
+    trimInbox(state.inbox);
     state.drafts = new Map(Object.entries(doc.drafts));
     for (const box of doc.mail.mailboxes) state.mail.mailboxes.set(box.mailbox_id, box.cards);
     state.mail.pins = new MailCardCache({ version: 1, pins: doc.mail.pins });
@@ -593,6 +652,11 @@ export class LocalConnector {
   setMailSenderBlocked(sender: AgentId, blocked: boolean): void {
     if (blocked) this.state.mail.blockedSenders.add(sender);
     else this.state.mail.blockedSenders.delete(sender);
+  }
+
+  /** Replaces the operator's blocked senders with `senders`, so a restored snapshot keeps none the operator dropped. */
+  setMailBlockedSenders(senders: Iterable<AgentId>): void {
+    this.state.mail.blockedSenders = new Set(senders);
   }
 
   agentId(): AgentId {
@@ -678,6 +742,7 @@ export class LocalConnector {
     room.syncedHash = record.hash;
     room.records.push(record);
     room.timeline.push(item);
+    trimHistory(room);
 
     // Removal ends membership; the host clears the member's transient status,
     // so drop the local cache entry too.
@@ -2511,13 +2576,13 @@ export class LocalConnector {
     return origin;
   }
 
-  /** The service's client, built from its discovery document once per session. */
+  /** The service's client, built from its discovery document on first use. */
   private async knowledge(service: string): Promise<KnowledgeClient> {
     const origin = this.knowledgeOrigin(service);
-    let client = this.knowledgeClients.get(origin);
+    let client = this.discovery.knowledge.get(origin);
     if (!client) {
       client = await KnowledgeClient.discover(origin, this.fetchImpl);
-      this.knowledgeClients.set(origin, client);
+      this.discovery.knowledge.set(origin, client);
     }
     return client;
   }
@@ -2567,6 +2632,7 @@ export class LocalConnector {
   private insertInbox(item: InboxItem): void {
     if (!this.state.inbox.has(item.id)) {
       this.state.inbox.set(item.id, { item, state: { kind: "pending" } });
+      trimInbox(this.state.inbox);
     }
   }
 
@@ -2595,10 +2661,11 @@ export class LocalConnector {
   private async discourse(host: string): Promise<DiscourseClient> {
     const key = normalizeHost(host);
     this.requireAllowedHost(key);
-    let client = this.discourseClients.get(key);
+    let client = this.discovery.discourse.get(key);
     if (!client) {
-      client = await DiscourseClient.discover(key, this.fetchImpl);
-      this.discourseClients.set(key, client);
+      const discovered = await discoverDiscourse(key, this.fetchImpl);
+      if (discovered.keep) this.discovery.discourse.set(key, discovered.client);
+      client = discovered.client;
     }
     this.requireAllowedHost(serviceOrigin(client.roomsUrl));
     return client;

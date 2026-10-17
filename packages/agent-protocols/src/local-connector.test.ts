@@ -17,7 +17,9 @@ import {
 import * as delegation from "./delegation.js";
 import { AgentSigner, Envelope, withMention } from "./identity.js";
 import {
+  DiscoveryCache,
   HeldDraft,
+  INBOX_LIMIT,
   InboxItem,
   LOCAL_CONNECTOR_SNAPSHOT_VERSION,
   LocalConnectorSnapshot,
@@ -26,6 +28,7 @@ import {
   RoomMemberStatus,
   RoomMemberView,
   RoomStateView,
+  ROOM_HISTORY_LIMIT,
   RoomWriteResult,
   SyncState,
   TOOL_DELEGATIONS_LIST,
@@ -809,4 +812,108 @@ test("snapshots restore an equivalent connector", async () => {
   // A snapshot belongs to one Agent ID and one format version.
   assert.throws(() => LocalConnector.fromSnapshot(signer(2), persisted), /another Agent ID/);
   assert.throws(() => LocalConnector.fromSnapshot(active, { ...persisted, version: LOCAL_CONNECTOR_SNAPSHOT_VERSION + 1 }), /version/);
+});
+
+test("room history and the inbox stay bounded", () => {
+  const creator = signer(5), active = signer(1);
+  const connector = new LocalConnector(active);
+  connector.acceptRoomResponse(HOST, roomResponse("room1", creator));
+  const mention = (seq: number, preHash: string): ServerRecord => {
+    const event = discourseEvent(eventType.MESSAGE_CREATE, creator.agentId(), 100 + seq, seq, "room1", 1, "room-create-head", {
+      content_type: "text/plain",
+      content: "ping",
+    });
+    const record = buildServerRecord("room1", seq, preHash, 100 + seq, creator.signEvent(withMention(event, active.agentId())));
+    connector.applyHostRecord(HOST, record);
+    return record;
+  };
+  const old = mention(2, "room-create-head");
+  // Earlier history up to `last - 1`, copied from that record rather than
+  // signed one by one; the ten newest inbox items are acknowledged.
+  const last = ROOM_HISTORY_LIMIT + 6;
+  const room = connector.state.rooms.get(`${HOST} room1`)!;
+  const [entryId, entry] = [...connector.state.inbox][0];
+  for (let seq = 3; seq < last; seq++) {
+    room.records.push({ ...room.records[0], seq, hash: `hash-${seq}` });
+    room.timeline.push({ ...room.timeline[0], seq });
+    const acknowledged = seq > last - 11;
+    connector.state.inbox.set(`${entryId}-${seq}`, {
+      item: { ...entry.item, id: `${entryId}-${seq}`, seq, created_at: 100 + seq },
+      state: acknowledged ? { kind: "acknowledged" } : { kind: "pending" },
+    });
+  }
+  room.syncedSeq = last - 1;
+  room.syncedHash = `hash-${last - 1}`;
+  mention(last, `hash-${last - 1}`);
+
+  assert.equal(room.records.length, ROOM_HISTORY_LIMIT);
+  assert.equal(room.timeline.length, ROOM_HISTORY_LIMIT);
+  assert.equal(room.timeline[0].seq, last + 1 - ROOM_HISTORY_LIMIT);
+  assert.equal(room.syncedSeq, last);
+  const inbox = [...connector.state.inbox.values()];
+  assert.equal(inbox.length, INBOX_LIMIT);
+  const seqs = (acknowledged: boolean) =>
+    inbox
+      .filter((item) => (item.state.kind === "acknowledged") === acknowledged)
+      .map((item) => item.item.seq!)
+      .sort((a, b) => a - b);
+  assert.deepEqual(seqs(true), [last - 5, last - 4, last - 3, last - 2, last - 1]);
+  assert.equal(seqs(false)[0], 2);
+  // A record older than the kept history is already in the chain.
+  connector.applyHostRecord(HOST, old);
+  assert.equal(room.syncedSeq, last);
+
+  // A snapshot that kept more is trimmed on restore.
+  room.timeline.unshift(...room.timeline.slice(0, 5));
+  const restored = LocalConnector.fromSnapshot(active, connector.snapshot());
+  const kept = restored.state.rooms.get(`${HOST} room1`)!;
+  assert.equal(kept.timeline.length, ROOM_HISTORY_LIMIT);
+  assert.equal(kept.timeline[0].seq, last + 1 - ROOM_HISTORY_LIMIT);
+});
+
+test("blocked senders are replaced as a whole", () => {
+  const connector = new LocalConnector(signer(1));
+  connector.setMailSenderBlocked(signer(2).agentId(), true);
+  connector.setMailBlockedSenders([signer(3).agentId()]);
+  assert.deepEqual(connector.snapshot().mail.blocked_senders, [signer(3).agentId()]);
+});
+
+test("connectors sharing a discovery cache discover each host once, and again after a failure", async () => {
+  const calls: string[] = [];
+  let failing = 0;
+  const fetchImpl = (async (url: string | URL | Request) => {
+    calls.push(new URL(String(url)).pathname);
+    if (String(url) === `${HOST}/.well-known/agent-discourse`) {
+      if (failing > 0) {
+        failing -= 1;
+        return Response.json({ error: { code: "service_unavailable", message: "restarting" } }, { status: 503 });
+      }
+      return Response.json({ protocol: "agent-discourse/1.0", service: HOST, endpoints: { rooms: `${HOST}/adp/rooms` } });
+    }
+    return Response.json({ result: [] });
+  }) as typeof fetch;
+  const listRooms = async (cache: DiscoveryCache) => {
+    const connector = new LocalConnector(signer(1), { fetchImpl, discoveryCache: cache });
+    connector.addHost({ host: HOST, allowed: true, features: [] });
+    await connector.callTool(TOOL_ROOMS_LIST, { scope: "public", host: HOST });
+  };
+
+  const shared = new DiscoveryCache();
+  await listRooms(shared);
+  await listRooms(shared);
+  assert.deepEqual(calls, ["/.well-known/agent-discourse", "/adp/rooms", "/adp/rooms"]);
+
+  // A failed discovery serves that call from the default paths and is read
+  // again by the next one.
+  calls.length = 0;
+  failing = 1;
+  const fresh = new DiscoveryCache();
+  for (let i = 0; i < 3; i++) await listRooms(fresh);
+  assert.deepEqual(calls, [
+    "/.well-known/agent-discourse",
+    "/v1/rooms",
+    "/.well-known/agent-discourse",
+    "/adp/rooms",
+    "/adp/rooms",
+  ]);
 });

@@ -271,13 +271,19 @@ impl DiscourseClient {
 
     pub async fn discover_with_client(origin: &str, inner: reqwest::Client) -> Self {
         let base = origin.trim_end_matches('/');
-        let discovered: Result<DiscourseProtocolDiscovery> =
-            send_json(inner.get(format!("{base}/.well-known/agent-discourse"))).await;
-        match discovered {
-            Ok(discovery) => Self::with_endpoints(base, inner, &discovery.endpoints),
+        match Self::from_discovery(base, inner.clone()).await {
+            Ok(client) => client,
             // Discovery is optional; the default paths apply.
             Err(_) => Self::with_client(base, inner),
         }
+    }
+
+    /// A client from the host's discovery document, which must be readable.
+    pub(crate) async fn from_discovery(origin: &str, inner: reqwest::Client) -> Result<Self> {
+        let base = origin.trim_end_matches('/');
+        let discovery: DiscourseProtocolDiscovery =
+            send_json(inner.get(format!("{base}/.well-known/agent-discourse"))).await?;
+        Ok(Self::with_endpoints(base, inner, &discovery.endpoints))
     }
 
     /// The `rooms` endpoint: `POST` creates rooms, `GET` lists discoverable

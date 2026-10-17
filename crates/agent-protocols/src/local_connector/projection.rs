@@ -129,12 +129,19 @@ fn apply_room_update(room: &mut LocalRoomState, payload: &RoomUpdatePayload, acc
     }
 }
 
+/// Whether `record` is already in the local chain: a held record with its
+/// hash, or one older than every record the bounded history still holds.
 pub(crate) fn is_duplicate_record(room: &LocalRoomState, record: &ArchiveRecord) -> bool {
-    record.seq() <= room.synced_seq
-        && room
+    if record.seq() > room.synced_seq {
+        return false;
+    }
+    match room.records.iter().find(|held| held.seq() == record.seq()) {
+        Some(held) => held.hash() == record.hash(),
+        None => room
             .records
-            .iter()
-            .any(|existing| existing.seq() == record.seq() && existing.hash() == record.hash())
+            .first()
+            .is_some_and(|first| record.seq() < first.seq()),
+    }
 }
 
 pub(crate) fn validate_next_record(room: &LocalRoomState, record: &ArchiveRecord) -> Result<()> {

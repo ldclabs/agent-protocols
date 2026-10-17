@@ -119,16 +119,18 @@ function applyRoomUpdate(
   if (payload.end_time !== undefined) response.end_time = payload.end_time;
 }
 
+/**
+ * Whether `record` is already in the local chain: a held record with its hash,
+ * or one older than every record the bounded history still holds.
+ */
 export function isDuplicateRecord(
   room: LocalRoomState,
   record: ArchiveRecord,
 ): boolean {
-  return (
-    record.seq <= room.syncedSeq &&
-    room.records.some(
-      (existing) => existing.seq === record.seq && existing.hash === record.hash,
-    )
-  );
+  if (record.seq > room.syncedSeq) return false;
+  const held = room.records.find((existing) => existing.seq === record.seq);
+  if (held) return held.hash === record.hash;
+  return room.records.length > 0 && record.seq < room.records[0].seq;
 }
 
 export function validateNextRecord(

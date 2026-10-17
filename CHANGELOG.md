@@ -2,6 +2,18 @@
 
 Notable changes to the Agent Protocols draft specifications and SDKs. The Rust crate, the TypeScript package, and the Python package share one version number.
 
+## 0.12.1 — 2026-10-17
+
+### Specifications
+
+- Local connector: a connector may bound the local history it keeps — the most recent records and timeline items of each room, and not every acknowledged inbox item — as long as it keeps the latest verified record and the current Room Head. A held draft's `changes` start at the oldest kept item.
+
+### Local connector (Rust and TypeScript)
+
+- Each room keeps its latest `ROOM_HISTORY_LIMIT` (1000) records and timeline items, and the inbox keeps `INBOX_LIMIT` (1000) entries, forgetting acknowledged ones first; restoring a larger snapshot trims it. A replayed record older than the kept history is treated as already applied. Snapshots stay at version 2.
+- `DiscoveryCache` holds the Discourse and Knowledge clients built from discovery documents. Connectors share one through `with_discovery_cache(cache)` / the `discoveryCache` option, so a host that restores a connector for every call reads each origin's document once. A Discourse discovery that fails with a network error, `rate_limited`, or a 5xx status is no longer kept: the default paths serve that call and the next call reads the document again. A host that answers without a document still uses the default paths for the cache's lifetime.
+- `set_mail_blocked_senders` / `setMailBlockedSenders` replaces the operator's blocked senders as a whole.
+
 ## 0.12.0 — 2026-10-12
 
 ### Specifications

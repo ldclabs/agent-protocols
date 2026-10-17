@@ -960,3 +960,99 @@ fn pages_carry_a_next_cursor_only_when_more_follow() {
     assert_eq!(page(vec![1, 2, 3], Some("2"), 2), (vec![3], None));
     let _ = TypeKind::Signal;
 }
+
+#[test]
+fn room_history_and_the_inbox_stay_bounded() {
+    let creator = signer(5);
+    let active = signer(1).agent_id();
+    let mut connector = connector_with_room(1, &creator);
+    let mut pre_hash = HEAD.to_owned();
+    let mut mention = |connector: &mut LocalConnector, seq: u64| {
+        let envelope = creator
+            .sign_event(
+                discourse_event(
+                    event_type::MESSAGE_CREATE,
+                    creator.agent_id(),
+                    100 + seq as i64,
+                    seq,
+                    "room1",
+                    1,
+                    HEAD,
+                    serde_json::to_value(MessageCreatePayload::text("ping")).unwrap(),
+                )
+                .with_mention(active.clone()),
+            )
+            .unwrap();
+        let record = build_server_record(
+            "room1",
+            seq,
+            Some(pre_hash.clone()),
+            100 + seq as i64,
+            envelope,
+        )
+        .unwrap();
+        pre_hash = record.hash.clone();
+        connector.apply_record(record.clone()).unwrap();
+        record
+    };
+    let last = ROOM_HISTORY_LIMIT as u64 + 6;
+    let mut old = None;
+    for seq in 2..=last - 10 {
+        let record = mention(&mut connector, seq);
+        if seq == 3 {
+            old = Some(record);
+        }
+    }
+    // The ten newest items are acknowledged, so they go before older open ones.
+    for entry in connector.state.inbox.values_mut() {
+        if entry.item.seq.unwrap() > last - 20 {
+            entry.state = InboxEntryState::Acknowledged;
+        }
+    }
+    for seq in last - 9..=last {
+        mention(&mut connector, seq);
+    }
+
+    let room = connector.local_room(&key()).unwrap();
+    assert_eq!(room.records.len(), ROOM_HISTORY_LIMIT);
+    assert_eq!(room.timeline.len(), ROOM_HISTORY_LIMIT);
+    assert_eq!(room.timeline[0].seq, last + 1 - ROOM_HISTORY_LIMIT as u64);
+    assert_eq!(room.synced_seq, last);
+    let inbox = &connector.state.inbox;
+    assert_eq!(inbox.len(), INBOX_LIMIT);
+    let seqs = |acknowledged: bool| {
+        let mut seqs = inbox
+            .values()
+            .filter(|entry| (entry.state == InboxEntryState::Acknowledged) == acknowledged)
+            .map(|entry| entry.item.seq.unwrap())
+            .collect::<Vec<_>>();
+        seqs.sort_unstable();
+        seqs
+    };
+    assert_eq!(seqs(true), (last - 14..=last - 10).collect::<Vec<_>>());
+    assert_eq!(seqs(false)[0], 2);
+    // A record older than the kept history is already in the chain.
+    connector.apply_record(old.unwrap()).unwrap();
+    assert_eq!(connector.local_room(&key()).unwrap().synced_seq, last);
+
+    // A snapshot that kept more is trimmed on restore.
+    let room = connector.state.rooms.get_mut(&key()).unwrap();
+    let extra = room.timeline[..5].to_vec();
+    room.timeline.splice(0..0, extra);
+    let restored =
+        LocalConnector::from_snapshot(signer(1), &connector.snapshot().unwrap()).unwrap();
+    let room = restored.local_room(&key()).unwrap();
+    assert_eq!(room.timeline.len(), ROOM_HISTORY_LIMIT);
+    assert_eq!(room.timeline[0].seq, last + 1 - ROOM_HISTORY_LIMIT as u64);
+}
+
+#[test]
+fn blocked_senders_are_replaced_as_a_whole() {
+    let mut connector = LocalConnector::new(signer(1));
+    connector.set_mail_sender_blocked(signer(2).agent_id(), true);
+    connector.set_mail_blocked_senders([signer(3).agent_id()]);
+    assert_eq!(
+        connector.snapshot().unwrap()["mail"]["blocked_senders"],
+        json!([signer(3).agent_id()])
+    );
+}

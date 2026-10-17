@@ -46,7 +46,11 @@ struct Services {
     knowledge: Mutex<KnowledgeStore>,
     /// Packet deliveries to answer with 503 before serving them.
     failing_deliveries: AtomicUsize,
+    /// Discourse discovery reads to answer with 503 before serving them.
+    failing_discoveries: AtomicUsize,
     packets_deleted: AtomicUsize,
+    /// Every request as `METHOD /path`.
+    requests: Mutex<Vec<String>>,
 }
 
 impl Services {
@@ -61,7 +65,9 @@ impl Services {
             knowledge: Mutex::new(KnowledgeStore::new(&origin).unwrap()),
             origin,
             failing_deliveries: AtomicUsize::new(0),
+            failing_discoveries: AtomicUsize::new(0),
             packets_deleted: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
         });
         let provider = rustls::crypto::aws_lc_rs::default_provider();
         let config = Arc::new(
@@ -98,6 +104,10 @@ impl Services {
 
     fn handle(&self, request: Request) -> (u16, String, String) {
         let now = unix_ms();
+        self.requests
+            .lock()
+            .unwrap()
+            .push(format!("{} {}", request.method, request.path));
         let segments: Vec<&str> = request.path.trim_start_matches('/').split('/').collect();
         let body = || serde_json::from_str::<Value>(&request.body).unwrap_or(Value::Null);
         let jwt = || {
@@ -155,6 +165,23 @@ impl Services {
                 }
                 deleted.map(|_| (204, Value::Null))
             }
+            ("GET", [".well-known", "agent-discourse"]) => {
+                let failing = self.failing_discoveries.load(Ordering::SeqCst);
+                if failing > 0 {
+                    self.failing_discoveries
+                        .store(failing - 1, Ordering::SeqCst);
+                    return error(503, "service_unavailable", "host restarting");
+                }
+                Ok((
+                    200,
+                    json!({
+                        "protocol": "agent-discourse/1.0",
+                        "service": self.origin,
+                        "endpoints": {"rooms": format!("{}/adp/rooms", self.origin)}
+                    }),
+                ))
+            }
+            ("GET", ["adp" | "v1", "rooms"]) => Ok((200, json!({"result": []}))),
             ("GET", [".well-known", "agent-knowledge"]) => Ok((
                 200,
                 json!({
@@ -240,6 +267,11 @@ impl Services {
                 (status, body.to_string(), String::new())
             }
         }
+    }
+
+    /// The requests served since the last call.
+    fn take_requests(&self) -> Vec<String> {
+        std::mem::take(&mut *self.requests.lock().unwrap())
     }
 
     fn connector(&self, seed: u8) -> LocalConnector {
@@ -840,4 +872,56 @@ fn one_nonce_sequence_spans_mail_and_knowledge() {
         assert!(packet > knowledge);
         assert!(nonce(&state, "/next_nonce") > packet);
     });
+}
+
+#[test]
+fn connectors_sharing_a_cache_discover_each_origin_once() {
+    let services = Services::start();
+    let origin = services.origin.clone();
+    let cache = DiscoveryCache::new();
+    let connector = |seed| services.connector(seed).with_discovery_cache(cache.clone());
+    let public = json!({ "scope": "public", "host": origin });
+    run(async {
+        call(&mut connector(1), TOOL_ROOMS_LIST, public.clone()).await;
+        call(&mut connector(2), TOOL_ROOMS_LIST, public.clone()).await;
+        let query = json!({ "service": origin, "tag": "caching" });
+        call(&mut connector(1), TOOL_KNOWLEDGE_QUERY, query.clone()).await;
+        call(&mut connector(2), TOOL_KNOWLEDGE_QUERY, query).await;
+    });
+    let requests = services.take_requests();
+    assert_eq!(
+        requests[..3],
+        [
+            "GET /.well-known/agent-discourse",
+            "GET /adp/rooms",
+            "GET /adp/rooms",
+        ]
+    );
+    let discoveries = |name: &str| {
+        let path = format!("GET /.well-known/{name}");
+        requests.iter().filter(|r| **r == path).count()
+    };
+    assert_eq!(discoveries("agent-discourse"), 1);
+    assert_eq!(discoveries("agent-knowledge"), 1);
+
+    // A failed discovery serves that call from the default paths and is
+    // read again by the next one.
+    services.failing_discoveries.store(1, Ordering::SeqCst);
+    let cache = DiscoveryCache::new();
+    run(async {
+        for seed in [1, 2, 3] {
+            let mut connector = services.connector(seed).with_discovery_cache(cache.clone());
+            call(&mut connector, TOOL_ROOMS_LIST, public.clone()).await;
+        }
+    });
+    assert_eq!(
+        services.take_requests(),
+        [
+            "GET /.well-known/agent-discourse",
+            "GET /v1/rooms",
+            "GET /.well-known/agent-discourse",
+            "GET /adp/rooms",
+            "GET /adp/rooms",
+        ]
+    );
 }

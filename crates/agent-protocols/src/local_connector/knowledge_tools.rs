@@ -216,23 +216,17 @@ impl LocalConnector {
         Ok(origin)
     }
 
-    /// The service's client, built from its discovery document once per session.
+    /// The service's client, built from its discovery document on first use.
     async fn knowledge(&self, service: &str) -> Result<KnowledgeClient> {
         let origin = self.knowledge_origin(service)?;
-        let cached = self.knowledge_cache().get(&origin).cloned();
+        let cached = self.discovery.knowledge().get(&origin).cloned();
         if let Some(client) = cached {
             return Ok(client);
         }
         let mut client = KnowledgeClient::with_client(&origin, self.http.clone())?;
         client.discover().await?;
-        self.knowledge_cache().insert(origin, client.clone());
+        self.discovery.knowledge().insert(origin, client.clone());
         Ok(client)
-    }
-
-    fn knowledge_cache(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, KnowledgeClient>> {
-        self.knowledge_clients
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
