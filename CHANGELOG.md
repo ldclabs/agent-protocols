@@ -6,7 +6,7 @@ Notable changes to the Agent Protocols draft specifications and SDKs. The Rust c
 
 ### Specifications
 
-- Local connector: a connector may bound the local history it keeps — the most recent records and timeline items of each room, and not every acknowledged inbox item — as long as it keeps the latest verified record and the current Room Head. A held draft's `changes` start at the oldest kept item.
+- Local connector: a connector may bound the local history it keeps — the most recent records and timeline items of each room, and the most recent inbox items, forgetting acknowledged ones first — as long as it keeps the latest verified record and the current Room Head. A held draft's `changes` start at the oldest kept item.
 
 ### Local connector (Rust and TypeScript)
 

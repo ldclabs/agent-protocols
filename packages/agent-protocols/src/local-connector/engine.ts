@@ -12,7 +12,6 @@ import {
   AgentStatus,
   AgentStatusInput,
   ArchiveRecord,
-  DiscourseProtocolDiscovery,
   MessageCreatePayload,
   RoomCreatePayload,
   RoomJoinPayload,
@@ -340,25 +339,6 @@ function trimInbox(inbox: Map<string, InboxEntry>): void {
     ([aId, a], [bId, b]) => open(a) - open(b) || a.item.created_at - b.item.created_at || compareStrings(aId, bId),
   );
   for (const [id] of order.slice(0, excess)) inbox.delete(id);
-}
-
-/**
- * A host's client from its discovery document, and whether to keep it.
- * Discovery is optional: a host that answers without a document uses the
- * default paths, and one that could not answer (a network error, 429, or a
- * 5xx status) is asked again next time.
- */
-async function discoverDiscourse(host: string, fetchImpl: FetchLike): Promise<{ client: DiscourseClient; keep: boolean }> {
-  try {
-    const response = await fetchImpl(`${host}/.well-known/agent-discourse`);
-    if (response.ok) {
-      const discovery = (await response.json()) as DiscourseProtocolDiscovery;
-      return { client: new DiscourseClient(host, fetchImpl, discovery.endpoints), keep: true };
-    }
-    return { client: new DiscourseClient(host, fetchImpl), keep: response.status < 500 && response.status !== 429 };
-  } catch {
-    return { client: new DiscourseClient(host, fetchImpl), keep: false };
-  }
 }
 
 // ── Room metadata getters: prefer the host-materialized value, fall back to
@@ -2663,9 +2643,17 @@ export class LocalConnector {
     this.requireAllowedHost(key);
     let client = this.discovery.discourse.get(key);
     if (!client) {
-      const discovered = await discoverDiscourse(key, this.fetchImpl);
-      if (discovered.keep) this.discovery.discourse.set(key, discovered.client);
-      client = discovered.client;
+      let keep = true;
+      try {
+        const discovery = await new DiscourseClient(key, this.fetchImpl).protocol();
+        client = new DiscourseClient(key, this.fetchImpl, discovery.endpoints);
+      } catch (error) {
+        // Discovery is optional: a host that answers without a document uses
+        // the default paths, and one that could not answer is asked again next time.
+        client = new DiscourseClient(key, this.fetchImpl);
+        keep = !isTransient(error);
+      }
+      if (keep) this.discovery.discourse.set(key, client);
     }
     this.requireAllowedHost(serviceOrigin(client.roomsUrl));
     return client;
