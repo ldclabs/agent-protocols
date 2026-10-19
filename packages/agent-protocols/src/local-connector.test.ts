@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+
+import { KNOWLEDGE_SCHEMA } from "./knowledge-schema.js";
 
 import {
   ArchiveRecord,
@@ -218,6 +221,79 @@ function plan(author: AgentSigner, host: MockHost, step: string, nonce: number):
   const head = host.head();
   return author.signEvent(discourseEvent(PLAN_TYPE.type, author.agentId(), 120, nonce, host.roomId, head.seq, head.hash, { step }));
 }
+
+/** Each tool's input members as Section 4.3's tables list them: the member, whether it is required, and its type as written there. */
+function specInputs(): Map<string, [string, boolean, string][]> {
+  const text = readFileSync(new URL("../../../docs/mcp/local-connector/1.0.md", import.meta.url), "utf8");
+  const inputs = new Map<string, [string, boolean, string][]>();
+  for (const raw of text.split("\n").filter((l) => l.startsWith("| `agent_protocols_"))) {
+    const cells = raw.replaceAll("\\|", "¦").split("|").map((c) => c.trim());
+    const body = cells[2].replace(/^`|`$/g, "").trim().replace(/^\{|\}$/g, "").trim();
+    const members: [string, boolean, string][] = body === ""
+      ? []
+      : body.split(', "').map((member) => {
+        const [, name, optional, type] = /^"?([^"]+)"(\?)?:\s*(.*)$/.exec(member)!;
+        return [name, optional === undefined, type.replaceAll("¦", "|")];
+      });
+    inputs.set(cells[1].replace(/^`|`$/g, ""), members);
+  }
+  return inputs;
+}
+
+/** Whether `schema` declares a member of the spec's type `type`. */
+function declares(type: string, schema: Record<string, unknown>): boolean {
+  if (type.startsWith('"')) {
+    return JSON.stringify(schema.enum) === JSON.stringify(type.split("|").map((v) => v.trim().replace(/^"|"$/g, "")));
+  }
+  if (type === "string") return schema.type === "string" || Array.isArray(schema.enum);
+  if (type === "number") return schema.type === "integer";
+  if (type === "boolean" || type === "object") return schema.type === type;
+  return type.endsWith("[]") && schema.type === "array";
+}
+
+test("standard tool inputs are the spec tables", () => {
+  const spec = specInputs();
+  const tools = standardToolDefinitions();
+  assert.equal(spec.size, tools.length);
+  for (const tool of tools) {
+    const members = spec.get(tool.name)!;
+    const schema = tool.input_schema as { required: string[]; properties: Record<string, Record<string, unknown>> };
+    assert.deepEqual(Object.keys(schema.properties).sort(), members.map((m) => m[0]).sort(), tool.name);
+    assert.deepEqual([...schema.required].sort(), members.filter((m) => m[1]).map((m) => m[0]).sort(), tool.name);
+    for (const [member, , type] of members) {
+      assert.ok(declares(type, schema.properties[member]), `${tool.name}.${member}: ${type}`);
+    }
+  }
+});
+
+test("no input schema combines schemas", () => {
+  const found: string[] = [];
+  const combined = (value: unknown, path: string) => {
+    if (Array.isArray(value)) value.forEach((item, i) => combined(item, `${path}/${i}`));
+    else if (value !== null && typeof value === "object") {
+      for (const [key, item] of Object.entries(value)) {
+        if (key === "oneOf" || key === "anyOf" || key === "allOf") found.push(`${path}/${key}`);
+        combined(item, `${path}/${key}`);
+      }
+    }
+  };
+  for (const tool of standardToolDefinitions()) combined(tool.input_schema, tool.name);
+  assert.deepEqual(found, []);
+});
+
+test("the knowledge payload guide names every required member", () => {
+  const submit = standardToolDefinitions().find((tool) => tool.name === TOOL_KNOWLEDGE_SUBMIT)!;
+  const guide = ((submit.input_schema.properties as Record<string, { description: string }>).payload).description;
+  const definitions = KNOWLEDGE_SCHEMA.$defs as Record<string, { required: string[] }>;
+  for (const [type, definition] of [
+    ["knowledge.publish", "publishPayload"],
+    ["knowledge.assess", "assessPayload"],
+    ["knowledge.retract", "retractPayload"],
+  ]) {
+    const listed = `${type}: required ${definitions[definition].required.join(", ")};`;
+    assert.ok(guide.includes(listed), listed);
+  }
+});
 
 test("the tool catalog is the consolidated 33-tool surface", () => {
   const names = standardToolDefinitions().map((tool) => tool.name);
@@ -519,6 +595,13 @@ test("join: direct for open roles and invitees, reviewed and approved otherwise"
   const joined = (await observer.callTool(TOOL_ROOM_JOIN, { room_id: "pub1", host: HOST, role: "observer", perspective: "watcher" })) as { status: string; member: RoomMemberView };
   assert.equal(joined.status, "joined");
   assert.equal(joined.member.perspective, "watcher");
+
+  // A room seen only in public discovery has no head yet: joining reads it.
+  const discovered = new MockHost("pub2", creator, "public", { open_roles: ["observer"] });
+  const viewer = connectorFor(signer(8), discovered);
+  viewer.observeRoom(HOST, structuredClone(discovered.room));
+  const seen = (await viewer.callTool(TOOL_ROOM_JOIN, { room_id: "pub2", host: HOST, role: "observer" })) as { status: string };
+  assert.equal(seen.status, "joined");
 
   const privateRoom = new MockHost("priv1", creator, "private", { invites: { [invitee.agentId()]: "speaker" } });
   const invited = (await connectorFor(invitee, privateRoom).callTool(TOOL_ROOM_JOIN, { room_id: "priv1", host: HOST, role: "speaker" })) as { status: string };

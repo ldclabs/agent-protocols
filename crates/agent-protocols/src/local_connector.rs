@@ -311,6 +311,16 @@ impl LocalConnector {
         materialize_creator(entry);
     }
 
+    /// Whether the room's head is unknown: the room is not known, or known
+    /// only from public discovery, whose summaries carry no head to sign
+    /// against.
+    fn room_head_unknown(&self, key: &RoomKey) -> bool {
+        self.state
+            .rooms
+            .get(key)
+            .is_none_or(|room| room.head_seq == 0)
+    }
+
     pub fn accept_room_response(&mut self, host: impl Into<String>, room: RoomResponse) {
         let host = normalize_host(&host.into());
         let key = (host.clone(), room.id.clone());
@@ -1321,8 +1331,9 @@ impl LocalConnector {
             }
         }
 
-        // Read the room when possible: invitees and public rooms are readable.
-        if !self.state.rooms.contains_key(&key) {
+        // Read the room when possible (invitees and public rooms are
+        // readable), also one known only from public discovery.
+        if self.room_head_unknown(&key) {
             let jwt = self.request_jwt(&host)?;
             match client.room(&room_id, Some(&jwt)).await {
                 Ok(room) => self.accept_room_response(&host, room),

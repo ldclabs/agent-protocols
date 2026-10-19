@@ -2,6 +2,18 @@
 
 Notable changes to the Agent Protocols draft specifications and SDKs. The Rust crate, the TypeScript package, and the Python package share one version number.
 
+## 0.12.2 — 2026-10-19
+
+### Specifications
+
+- Local connector: each tool's `inputSchema` in `tools/list` should declare every member of its Section 4.3 table, marking the required members and listing enumerated values, and should not use `oneOf`, `anyOf`, or `allOf`, which some model APIs reject in a tool's input schema. A Knowledge `payload` that does not match its type's schema is refused with `invalid_event` before signing, and the error should name each failing member in `data.errors` (`{ path, message }`, `path` a JSON Pointer into `payload`).
+
+### Local connector (Rust and TypeScript)
+
+- All 33 tools declare their full input schemas; before, 25 of them were a bare `{ "type": "object" }` and an agent learned their members one refusal at a time. The Knowledge query enumerations come from the bundled schema, and `knowledge_submit`'s `payload` describes each event type's members. Tests in both SDKs compare the catalog with the specification's tables, and a Rust test calls every tool with only its required members. `agent_protocols_profile_update` declares the profile's members, `name` required.
+- `agent_protocols_knowledge_submit` checks the payload against its event type's definition before drawing a nonce or signing, and lists every failing member with its JSON Pointer, instead of the envelope check's opaque `oneOf` failure.
+- `agent_protocols_room_join` reads a room it knows only from public discovery before joining; it failed with "current room head is not known locally" after `agent_protocols_rooms_list` with `scope: "public"`. `agent_protocols_knowledge_search` names `unsupported_search_mode` and the exact query as the alternative.
+
 ## 0.12.1 — 2026-10-17
 
 ### Specifications

@@ -809,13 +809,34 @@ fn knowledge_publish_query_search_and_status() {
         )
         .await;
         assert_eq!(error.code(), Some("permission_denied"));
+        // A payload that is not its type's is refused before anything is
+        // signed or sent, naming each failing member.
+        services.take_requests();
         let error = call_error(
             &mut alice,
             TOOL_KNOWLEDGE_SUBMIT,
-            json!({ "services": [service], "type": "knowledge.publish", "payload": { "title": "incomplete" } }),
+            json!({
+                "services": [service], "type": "knowledge.publish",
+                "payload": { "title": "incomplete", "body": "text", "license": "CC-BY-4.0" }
+            }),
         )
         .await;
         assert_eq!(error.code(), Some("invalid_event"));
+        let message = error.to_string();
+        for member in [
+            "kind",
+            "statement",
+            "language",
+            "context",
+            "basis",
+            "body",
+            "/license",
+        ] {
+            assert!(message.contains(member), "{member}: {message}");
+        }
+        let errors = error.data().unwrap()["errors"].as_array().unwrap();
+        assert!(errors.iter().any(|e| e["path"] == "/license"));
+        assert!(services.take_requests().is_empty());
     });
 }
 
@@ -924,4 +945,67 @@ fn connectors_sharing_a_cache_discover_each_origin_once() {
             "GET /adp/rooms",
         ]
     );
+}
+
+/// A value of `schema`'s type for required member `name`: the services'
+/// origin for an origin, the first value of an enumeration.
+fn placeholder(name: &str, schema: &Value, origin: &str) -> Value {
+    if let Some(values) = schema["enum"].as_array() {
+        return values[0].clone();
+    }
+    match schema["type"].as_str() {
+        Some("integer") => json!(1),
+        Some("boolean") => json!(false),
+        Some("array") => json!([placeholder(name, &schema["items"], origin)]),
+        Some("object") => required_only(schema, origin),
+        _ if name.ends_with("service") || matches!(name, "services" | "host" | "url") => {
+            json!(origin)
+        }
+        _ => json!("x"),
+    }
+}
+
+/// An input holding only the members `schema` requires.
+fn required_only(schema: &Value, origin: &str) -> Value {
+    let mut input = serde_json::Map::new();
+    for name in schema["required"].as_array().into_iter().flatten() {
+        let name = name.as_str().unwrap();
+        let member = placeholder(name, &schema["properties"][name], origin);
+        input.insert(name.to_owned(), member);
+    }
+    Value::Object(input)
+}
+
+/// The member a refused input lacked, when that was the refusal.
+fn missing_member(message: &str) -> Option<String> {
+    let rest = message.split("missing field `").nth(1)?;
+    Some(rest.split('`').next()?.to_owned())
+}
+
+#[test]
+fn every_tool_reads_the_members_it_declares_required() {
+    let services = Services::start();
+    run(async {
+        let mut connector = services.connector(5);
+        for tool in standard_tool_definitions() {
+            let name = tool.name.as_str();
+            let required: Vec<&str> = tool.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r.as_str().unwrap())
+                .collect();
+            // The required members are all the connector needs...
+            let input = required_only(&tool.input_schema, &services.origin);
+            if let Err(error) = connector.call_tool(name, input).await {
+                assert_eq!(missing_member(&error.to_string()), None, "{name}: {error}");
+            }
+            // ... and none it can do without.
+            if let Err(error) = connector.call_tool(name, json!({})).await {
+                if let Some(member) = missing_member(&error.to_string()) {
+                    assert!(required.contains(&member.as_str()), "{name}: {member}");
+                }
+            }
+        }
+    });
 }

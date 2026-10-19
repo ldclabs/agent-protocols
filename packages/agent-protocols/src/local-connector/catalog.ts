@@ -2,6 +2,8 @@
 // tool/list declarations. Pure data — it never touches signing keys or room
 // state — so an MCP server can advertise the surface without a live connector.
 
+import { KNOWLEDGE_SCHEMA } from "../knowledge-schema.js";
+
 export const TOOL_IDENTITY_CURRENT = "agent_protocols_identity_current";
 export const TOOL_PRINCIPAL_RESOLVE = "agent_protocols_principal_resolve";
 export const TOOL_DELEGATION_CHECK = "agent_protocols_delegation_check";
@@ -96,64 +98,218 @@ export interface LocalConnectorToolDefinition {
 }
 
 const STRING = { type: "string" };
+const INTEGER = { type: "integer" };
+const BOOLEAN = { type: "boolean" };
+const OBJECT = { type: "object" };
+const STRINGS = { type: "array", items: STRING };
 const STRING_SET = { type: "array", minItems: 1, uniqueItems: true, items: STRING };
+const LIMIT = { type: "integer", minimum: 1 };
+const ROOM_ID = { type: "string", description: "The room ID." };
+const HOST = { type: "string", description: "The room's host origin: required to open a room not known locally, and when the room ID names rooms on several hosts." };
+const ROLE = { enum: ["moderator", "speaker", "observer"] };
+const MISMATCH = { enum: ["hold", "reject", "send_anyway"], description: "When the room moved past the base: hold the draft (the default), refuse, or send anyway." };
+const SERVICE = { type: "string", description: "The Knowledge service origin." };
+const INBOX_KINDS = [
+  "room.message.new", "room.mention", "room.turn.assigned", "room.steer", "room.join.requested", "room.join.approved",
+  "room.role.changed", "room.member.removed", "room.state.changed", "room.event.custom", "mail.received",
+];
 
-/** Input schemas for tools whose inputs carry authority-relevant fields. */
-const INPUT_SCHEMAS: Partial<Record<LocalConnectorToolName, Record<string, unknown>>> = {
-  [TOOL_DELEGATION_CHECK]: {
-    type: "object", required: ["principal_id", "audience"],
-    properties: { principal_id: STRING, audience: STRING, subject: STRING, id: STRING },
-  },
-  [TOOL_DELEGATION_GRANT]: {
-    type: "object", required: ["id", "principal_id", "subject", "scopes", "audiences"],
-    properties: {
-      id: STRING, principal_id: STRING, subject: STRING, scopes: STRING_SET, audiences: STRING_SET,
-      relationship: STRING, constraints: { type: "object" }, not_before: { type: "integer" }, expires_at: { type: "integer" },
-    },
-  },
-  [TOOL_DELEGATION_REVOKE]: {
-    type: "object", required: ["id", "principal_id"],
-    properties: { id: STRING, principal_id: STRING, reason: STRING },
-  },
-  [TOOL_ROOMS_LIST]: {
-    type: "object",
-    properties: { scope: { enum: ["known", "public"] }, host: STRING },
-  },
-  [TOOL_DRAFT_COMMIT]: {
-    type: "object", required: ["draft_id", "action"],
-    properties: { draft_id: STRING, action: { enum: ["revise", "send", "drop"] } },
-  },
-  [TOOL_MAIL_MAILBOX_PUBLISH]: {
-    type: "object", required: ["routes"],
-    properties: {
-      mailbox_id: STRING, routes: { type: "array", maxItems: 8, uniqueItems: true, items: STRING },
-      expires_at: { type: "integer" }, receive_until: { type: "integer" },
-      max_packet_bytes: { type: "integer" }, rotate_key: { type: "boolean" },
-    },
-  },
-  [TOOL_MAIL_SEND]: {
-    type: "object",
-    properties: {
-      to: STRING, in_reply_to: STRING, subject: STRING, text: STRING,
-      parts: {
-        type: "array",
-        items: {
-          type: "object", required: ["media_type", "data"],
-          properties: { media_type: STRING, data: STRING, name: STRING },
+/** What each Knowledge payload holds (Agent Knowledge Sections 4.1, 6.2 and 7.1), for the `payload` member of `agent_protocols_knowledge_submit`. */
+const KNOWLEDGE_PAYLOAD_GUIDE = "knowledge.publish: required license, kind, title, statement, language, context, basis; optional evidence, reproduction, relations, tags, extra, profiles. knowledge.assess: required license, target, verdict, summary, context, basis; optional evidence, reproduction, extra, profiles. knowledge.retract: required target, reason; optional extra. license is an HTTPS URL such as https://creativecommons.org/licenses/by/4.0/; kind is question, hypothesis, definition, observation, inference, procedure, resource, negative_result, synthesis, or collection; verdict is supports, challenges, reproduced, not_reproduced, applied, or inconclusive; language is a language tag such as en; context is { scope, conditions: string[], limitations: string[] }; target is an event ID; tags are lowercase.";
+
+/** The values of enumeration `name` in the bundled Knowledge schema. */
+function knowledgeEnum(name: string): Record<string, unknown> {
+  return { enum: (KNOWLEDGE_SCHEMA.$defs as Record<string, { enum?: string[] }>)[name].enum };
+}
+
+function objectOf(required: string[], properties: Record<string, unknown>): Record<string, unknown> {
+  return { type: "object", required, properties };
+}
+
+/**
+ * Input schemas as Section 4.3's tables list them: every member, the
+ * required ones, and the values of an enumerated one. None uses `oneOf`,
+ * `anyOf`, or `allOf`, which some model APIs reject in a tool's input schema.
+ */
+function inputSchema(name: LocalConnectorToolName): Record<string, unknown> {
+  switch (name) {
+    case TOOL_IDENTITY_CURRENT:
+    case TOOL_MAIL_MAILBOXES_LIST:
+      return objectOf([], {});
+    case TOOL_PRINCIPAL_RESOLVE:
+      return objectOf(["url"], { url: { type: "string", description: "The principal URL." } });
+    case TOOL_DELEGATION_CHECK:
+      return objectOf(["principal_id", "audience"], { principal_id: STRING, audience: STRING, subject: STRING, id: STRING });
+    case TOOL_DELEGATIONS_LIST:
+      return objectOf(["delegation_service"], {
+        delegation_service: { type: "string", description: "The delegation service origin the principal document names." },
+        status: { enum: ["active", "suspended", "expired", "revoked"] }, limit: LIMIT, cursor: STRING,
+      });
+    case TOOL_DELEGATION_GRANT:
+      return objectOf(["id", "principal_id", "subject", "scopes", "audiences"], {
+        id: STRING, principal_id: STRING, subject: STRING, relationship: STRING, scopes: STRING_SET, audiences: STRING_SET,
+        constraints: OBJECT, not_before: INTEGER, expires_at: INTEGER,
+      });
+    case TOOL_DELEGATION_REVOKE:
+      return objectOf(["id", "principal_id"], { id: STRING, principal_id: STRING, reason: STRING });
+    case TOOL_ROOMS_LIST:
+      return objectOf([], {
+        scope: { enum: ["known", "public"], description: "known (the default): rooms known locally; public: a host's public room discovery." },
+        host: { type: "string", description: "The host origin: required for public, a filter for known." },
+        status: STRING,
+        membership: { enum: ["member", "creator", "moderator", "pending", "all"], description: "known only." },
+        tag: { type: "string", description: "public only, like keyword, creator, starts_after, ends_before, and language." },
+        keyword: STRING, creator: STRING, starts_after: INTEGER, ends_before: INTEGER, language: STRING, limit: LIMIT, cursor: STRING,
+      });
+    case TOOL_ROOM_STATE:
+      return objectOf(["room_id"], {
+        room_id: ROOM_ID, host: HOST,
+        refresh: { type: "boolean", description: "Read the room from its host again." },
+        subscribe: { type: "boolean", description: "Subscribe to live delivery (true) or stop (false); omitted keeps the current subscription." },
+      });
+    case TOOL_ROOM_MEMBERS_LIST:
+      return objectOf(["room_id"], {
+        room_id: ROOM_ID, host: HOST,
+        agent_id: { type: "string", description: "Only this member." },
+        status: { enum: ["active", "left", "removed", "banned", "all"] },
+        role: ROLE, include_profiles: BOOLEAN,
+        include_recent_activity: { type: "boolean", description: "With agent_id: that member's most recent timeline items." },
+        limit: LIMIT, cursor: STRING,
+      });
+    case TOOL_AGENT_STATUS_LIST:
+      return objectOf(["room_id"], { room_id: ROOM_ID, host: HOST, agent_id: STRING, refresh: BOOLEAN });
+    case TOOL_AGENT_STATUS_SET:
+      return objectOf(["room_id", "state"], {
+        room_id: ROOM_ID, host: HOST, state: STRING, summary: STRING, seen_seq: INTEGER, seen_hash: STRING,
+        claim_id: STRING, activity: STRING, expires_at: INTEGER, extra: OBJECT,
+      });
+    case TOOL_ROOM_TIMELINE:
+      return objectOf(["room_id"], {
+        room_id: ROOM_ID, host: HOST, after_seq: INTEGER, before_seq: INTEGER, limit: LIMIT, types: STRINGS, actors: STRINGS,
+        unread_only: BOOLEAN,
+        mark_read: { type: "boolean", description: "Advance the read cursor through the last item returned." },
+        refresh: { type: "boolean", description: "Read new records from the host first." },
+      });
+    case TOOL_INBOX_NEXT:
+      return objectOf([], {
+        room_id: STRING, kinds: { type: "array", items: { enum: INBOX_KINDS } }, limit: LIMIT,
+        wait_ms: { type: "integer", description: "Long-poll up to this long for new items." },
+        claim: { type: "boolean", description: "Claim the items for this MCP session." },
+      });
+    case TOOL_INBOX_ACK:
+      return objectOf(["ids", "action"], { ids: STRING_SET, action: { enum: ["handled", "dismissed", "defer"] }, defer_until: INTEGER });
+    case TOOL_DRAFTS_LIST:
+      return objectOf([], {
+        room_id: STRING, host: HOST,
+        draft_id: { type: "string", description: "One draft, with the room changes since its base." },
+        limit: LIMIT, cursor: STRING,
+      });
+    case TOOL_DRAFT_COMMIT:
+      return objectOf(["draft_id", "action"], {
+        draft_id: STRING, action: { enum: ["revise", "send", "drop"] }, content: STRING, content_type: STRING,
+        mentions: STRINGS, references: STRINGS, extra: OBJECT,
+        type: { type: "string", description: "The event type of an event draft." },
+        payload: OBJECT, on_head_mismatch: MISMATCH,
+      });
+    case TOOL_PROFILE_UPDATE:
+      return objectOf(["profile_service", "profile"], {
+        profile_service: { type: "string", description: "A profile service origin from agent_protocols_identity_current." },
+        profile: {
+          type: "object", required: ["name"], description: "The Agent Profile. Its id, when given, is the active Agent ID.",
+          properties: {
+            id: STRING, name: STRING, description: STRING, avatar_url: STRING, provider: STRING, capabilities: STRINGS,
+            service_endpoints: { type: "array", items: { type: "object", required: ["type", "url"], properties: { type: STRING, url: STRING, protocols: STRINGS } } },
+            links: { type: "array", items: { type: "object", required: ["name", "url", "rel"], properties: { name: STRING, url: STRING, rel: STRING } } },
+            delegations: {
+              type: "array", description: "Delegation hints the principal's owner gave this agent.",
+              items: {
+                type: "object", required: ["principal"],
+                properties: { id: STRING, principal: { type: "object", required: ["id"], properties: { id: STRING, type: STRING, name: STRING } }, relationship: STRING, scopes: STRINGS },
+              },
+            },
+            extra: OBJECT,
+          },
         },
-      },
-      expires_at: { type: "integer" }, reply_mailbox_id: STRING,
-    },
-  },
-  [TOOL_KNOWLEDGE_SUBMIT]: {
-    type: "object", required: ["services", "type", "payload"],
-    properties: {
-      services: { type: "array", minItems: 1, maxItems: 8, uniqueItems: true, items: STRING },
-      type: { enum: ["knowledge.publish", "knowledge.assess", "knowledge.retract"] },
-      payload: { type: "object" },
-    },
-  },
-};
+      });
+    case TOOL_ROOM_CREATE:
+      return objectOf(["host", "topic", "visibility", "start_time", "end_time"], {
+        host: { type: "string", description: "The host origin the room is created on." },
+        topic: STRING, visibility: { enum: ["public", "restricted", "private"] }, start_time: INTEGER, end_time: INTEGER,
+        agenda: STRING, guidance: STRING, tags: STRINGS, language: STRING,
+        policy: { type: "object", description: "invites (Agent ID to role), open_roles (roles anyone may join with; a public room opens only observer by default), max_speakers, and extra." },
+        types: { type: "array", items: OBJECT }, extra: OBJECT,
+      });
+    case TOOL_ROOM_JOIN:
+      return objectOf(["room_id", "role"], {
+        host: HOST, room_id: ROOM_ID, role: ROLE, perspective: STRING,
+        reason: { type: "string", description: "Why the agent asks to join, for a join request." },
+        extra: OBJECT,
+      });
+    case TOOL_ROOM_SEND_MESSAGE:
+      return objectOf(["room_id", "content"], {
+        room_id: ROOM_ID, host: HOST, content: { type: "string", description: "The message text." }, content_type: STRING,
+        mentions: STRINGS, references: STRINGS, extra: OBJECT, base_seq: INTEGER, base_hash: STRING, on_head_mismatch: MISMATCH,
+      });
+    case TOOL_ROOM_SUBMIT_EVENT:
+      return objectOf(["room_id", "type", "payload"], {
+        room_id: ROOM_ID, host: HOST,
+        type: { type: "string", description: "The event type, such as room.leave, room.update, room.close, or a room-defined type." },
+        payload: OBJECT, mentions: STRINGS, references: STRINGS, base_seq: INTEGER, base_hash: STRING, on_head_mismatch: MISMATCH,
+      });
+    case TOOL_JOIN_REQUESTS_LIST:
+      return objectOf(["room_id"], { room_id: ROOM_ID, host: HOST, status: STRING, limit: LIMIT, cursor: STRING });
+    case TOOL_JOIN_REQUEST_REVIEW:
+      return objectOf(["room_id", "request_id", "decision"], {
+        room_id: ROOM_ID, host: HOST, request_id: STRING, decision: { enum: ["approve", "reject"] }, role: ROLE, reason: STRING,
+      });
+    case TOOL_MAIL_MAILBOX_PUBLISH:
+      return objectOf(["routes"], {
+        mailbox_id: STRING, routes: { type: "array", maxItems: 8, uniqueItems: true, items: STRING },
+        expires_at: INTEGER, receive_until: INTEGER, max_packet_bytes: INTEGER, rotate_key: BOOLEAN,
+      });
+    case TOOL_MAIL_SEND:
+      return objectOf([], {
+        to: STRING, in_reply_to: STRING, subject: STRING, text: STRING,
+        parts: {
+          type: "array",
+          items: { type: "object", required: ["media_type", "data"], properties: { media_type: STRING, data: STRING, name: STRING } },
+        },
+        expires_at: INTEGER, reply_mailbox_id: STRING,
+      });
+    case TOOL_MAIL_SYNC:
+      return objectOf([], { mailbox_id: STRING });
+    case TOOL_MAIL_LIST:
+      return objectOf([], {
+        direction: { enum: ["received", "sent"] }, mailbox_id: STRING, from: STRING, thread_id: STRING, message_id: STRING,
+        unread_only: BOOLEAN,
+        mark_read: { type: "boolean", description: "Mark the received messages returned read." },
+        include_data: { type: "boolean", description: "Add the base64url data of non-text parts." },
+        limit: LIMIT, cursor: STRING,
+      });
+    case TOOL_KNOWLEDGE_SUBMIT:
+      return objectOf(["services", "type", "payload"], {
+        services: { type: "array", minItems: 1, maxItems: 8, uniqueItems: true, items: STRING },
+        type: knowledgeEnum("eventType"),
+        payload: { type: "object", description: KNOWLEDGE_PAYLOAD_GUIDE },
+      });
+    case TOOL_KNOWLEDGE_QUERY:
+      return objectOf(["service"], {
+        service: SERVICE, actor: STRING, type: knowledgeEnum("eventType"), kind: knowledgeEnum("kind"), target: STRING,
+        relation: knowledgeEnum("relationKind"), tag: STRING, profile: STRING, language: STRING, verdict: knowledgeEnum("verdict"),
+        created_from: INTEGER, created_before: INTEGER, after_seq: INTEGER, cursor: STRING, limit: LIMIT,
+      });
+    case TOOL_KNOWLEDGE_GET:
+      return objectOf(["service", "ids"], { service: SERVICE, ids: { type: "array", minItems: 1, maxItems: 100, items: STRING } });
+    case TOOL_KNOWLEDGE_SEARCH:
+      return objectOf(["service", "text", "mode"], {
+        service: SERVICE, text: STRING, mode: knowledgeEnum("searchMode"),
+        filters: { type: "object", description: "The exact filters of agent_protocols_knowledge_query, without service, after_seq, cursor, and limit." },
+        limit: LIMIT,
+      });
+    case TOOL_KNOWLEDGE_STATUS:
+      return objectOf(["service", "id"], { service: SERVICE, id: { type: "string", description: "The event ID." } });
+  }
+}
 
 export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
   const rows: Array<[LocalConnectorToolName, string, boolean, boolean, boolean]> = [
@@ -320,7 +476,7 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
     ],
     [
       TOOL_KNOWLEDGE_SEARCH,
-      "Run a service's ranked Knowledge search; ranking is relevance, not correctness.",
+      "Run a service's ranked Knowledge search; ranking is relevance, not correctness. A service without ranked search refuses it with unsupported_search_mode; agent_protocols_knowledge_query reads by exact filters.",
       true,
       true,
       true,
@@ -336,7 +492,7 @@ export function standardToolDefinitions(): LocalConnectorToolDefinition[] {
   return rows.map(([name, description, readOnly, idempotent, openWorld]) => ({
     name,
     description,
-    input_schema: INPUT_SCHEMAS[name] ?? { type: "object" },
+    input_schema: inputSchema(name),
     output_schema: { type: "object" },
     annotations: {
       readOnlyHint: readOnly,

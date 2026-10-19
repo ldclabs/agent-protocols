@@ -106,6 +106,8 @@ import {
   ProfileUpdatePayload,
   profileUpdateEvent,
 } from "../profile.js";
+import { Validator, type Schema } from "@cfworker/json-schema";
+import { KNOWLEDGE_SCHEMA } from "../knowledge-schema.js";
 
 import {
   TOOL_AGENT_STATUS_LIST,
@@ -258,6 +260,44 @@ const MAX_KNOWLEDGE_SERVICES = 8;
 /** Reverse-link query pages a status check reads before reporting `complete: false`. */
 const STATUS_MAX_PAGES = 10;
 const STATUS_PAGE_LIMIT = 1000;
+/** Most payload errors one refusal lists. */
+const MAX_PAYLOAD_ERRORS = 16;
+const PAYLOAD_DEFINITIONS: Record<string, string> = {
+  "knowledge.publish": "publishPayload",
+  "knowledge.assess": "assessPayload",
+  "knowledge.retract": "retractPayload",
+};
+/** Keywords that only report errors found below them. */
+const WRAPPER_KEYWORDS = new Set(["$ref", "properties", "items", "prefixItems", "allOf", "anyOf", "oneOf", "if", "then", "else", "false"]);
+const payloadValidators = new Map<string, Validator>();
+
+/**
+ * Checks `payload` against the schema of `type`'s payload before anything
+ * is signed, refusing with every failing member at its JSON Pointer: the
+ * envelope check that follows tests the `oneOf` of the three event types,
+ * whose failure names no member.
+ */
+function validatePayload(type: string, payload: unknown): void {
+  const definition = PAYLOAD_DEFINITIONS[type];
+  let validator = payloadValidators.get(definition);
+  if (!validator) {
+    validator = new Validator({ $ref: `#/$defs/${definition}`, $defs: KNOWLEDGE_SCHEMA.$defs } as Schema, "2020-12", false);
+    payloadValidators.set(definition, validator);
+  }
+  const reported = validator.validate(payload).errors;
+  // A declared member that fails its own schema is also reported as an
+  // additional property; only an undeclared one is.
+  const member = (error: { instanceLocation: string; error: string }) => `${error.instanceLocation} ${/"(.*)"/.exec(error.error)?.[1]}`;
+  const failed = new Set(reported.filter((e) => e.keyword === "properties").map(member));
+  const errors = reported
+    .filter((e) => !WRAPPER_KEYWORDS.has(e.keyword))
+    .filter((e) => e.keyword !== "additionalProperties" || !failed.has(member(e)))
+    .slice(0, MAX_PAYLOAD_ERRORS)
+    .map((e) => ({ path: e.instanceLocation.replace(/^#/, ""), message: e.error }));
+  if (errors.length === 0) return;
+  const listed = errors.map((e) => (e.path ? `${e.path}: ${e.message}` : e.message)).join("; ");
+  throw protocolError("invalid_event", `${type} payload: ${listed}`, { errors });
+}
 
 function roomKeyString(key: RoomKey): string {
   return `${key.host} ${key.roomId}`;
@@ -1450,8 +1490,10 @@ export class LocalConnector {
       }
     }
 
-    // Read the room when possible: invitees and public rooms are readable.
-    if (!this.state.rooms.has(keyStr)) {
+    // Read the room when possible (invitees and public rooms are readable),
+    // also one known only from public discovery, which carries no head.
+    const known = this.state.rooms.get(keyStr);
+    if (!known || known.headSeq === 0) {
       try {
         const room = await (await this.discourse(host)).room(roomId, this.requestJwt(host));
         this.acceptRoomResponse(host, room);
@@ -2440,6 +2482,7 @@ export class LocalConnector {
     if (!(KNOWLEDGE_EVENT_TYPES as readonly string[]).includes(input.type)) {
       throw invalidPayload(`unknown Knowledge event type: ${input.type}`);
     }
+    validatePayload(input.type, input.payload);
     const createdAt = unixTimeMillis();
     const envelope = this.signer.signEvent(
       createEvent(KNOWLEDGE_PROTOCOL, input.type, this.agentId(), createdAt, this.nonces.nextNonce(createdAt), input.payload),

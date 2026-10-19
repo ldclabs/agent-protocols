@@ -13,6 +13,61 @@ const MAX_SERVICES: usize = 8;
 /// Reverse-link query pages a status check reads before reporting `complete: false`.
 const STATUS_MAX_PAGES: usize = 10;
 const STATUS_PAGE_LIMIT: u64 = 1000;
+/// Most payload errors one refusal lists.
+const MAX_PAYLOAD_ERRORS: usize = 16;
+
+/// Checks `payload` against the schema of `event_type`'s payload before
+/// anything is signed, refusing with every failing member at its JSON
+/// Pointer: the envelope check that follows tests the `oneOf` of the three
+/// event types, whose failure names no member.
+fn validate_payload(event_type: &str, payload: &Value) -> Result<()> {
+    static VALIDATORS: std::sync::OnceLock<Vec<jsonschema::Validator>> = std::sync::OnceLock::new();
+    let validators = VALIDATORS.get_or_init(|| {
+        let schema: Value =
+            serde_json::from_str(crate::knowledge::SCHEMA_JSON).expect("bundled schema is JSON");
+        ["publishPayload", "assessPayload", "retractPayload"]
+            .iter()
+            .map(|definition| {
+                jsonschema::options()
+                    .with_draft(jsonschema::Draft::Draft202012)
+                    .should_validate_formats(true)
+                    .build(
+                        &json!({"$ref": format!("#/$defs/{definition}"), "$defs": schema["$defs"]}),
+                    )
+                    .expect("bundled schema compiles")
+            })
+            .collect()
+    });
+    let index = match event_type {
+        "knowledge.publish" => 0,
+        "knowledge.assess" => 1,
+        _ => 2,
+    };
+    let errors: Vec<Value> = validators[index]
+        .iter_errors(payload)
+        .take(MAX_PAYLOAD_ERRORS)
+        .map(|e| json!({"path": e.instance_path().to_string(), "message": e.to_string()}))
+        .collect();
+    if errors.is_empty() {
+        return Ok(());
+    }
+    let listed = errors
+        .iter()
+        .map(|e| {
+            let message = e["message"].as_str().unwrap_or_default();
+            match e["path"].as_str().unwrap_or_default() {
+                "" => message.to_owned(),
+                path => format!("{path}: {message}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(SdkError::protocol_with_data(
+        "invalid_event",
+        format!("{event_type} payload: {listed}"),
+        json!({ "errors": errors }),
+    ))
+}
 
 impl LocalConnector {
     pub(super) async fn knowledge_submit(&mut self, input: KnowledgeSubmitInput) -> Result<Value> {
@@ -35,6 +90,7 @@ impl LocalConnector {
                 input.event_type
             )));
         }
+        validate_payload(&input.event_type, &input.payload)?;
         let created_at = unix_ms();
         let event = Event::new(
             KNOWLEDGE_PROTOCOL,

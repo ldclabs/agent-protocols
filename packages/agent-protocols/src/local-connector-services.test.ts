@@ -541,16 +541,32 @@ test("knowledge publish, query, search, and status", async () => {
     { service: "https://knowledge.elsewhere.example" },
     "permission_denied",
   );
-  await rejects(
-    alice,
+  // A payload that is not its type's is refused before anything is signed
+  // or sent, naming each failing member.
+  const unreached = new LocalConnector(
+    AgentSigner.fromSeed(new Uint8Array(32).fill(7)),
+    {
+      fetchImpl: (async () => {
+        throw new Error("no request expected");
+      }) as typeof fetch,
+    },
+  );
+  unreached.addHost({ host: ORIGIN, allowed: true, features: [] });
+  const refused = await rejects(
+    unreached,
     TOOL_KNOWLEDGE_SUBMIT,
     {
       services: [ORIGIN],
       type: "knowledge.publish",
-      payload: { title: "incomplete" },
+      payload: { title: "incomplete", body: "text", license: "CC-BY-4.0" },
     },
     "invalid_event",
   );
+  for (const member of ["kind", "statement", "language", "context", "basis", "body", "/license"]) {
+    assert.ok(refused.message.includes(member), `${member}: ${refused.message}`);
+  }
+  const errors = refused.data?.errors as { path: string }[];
+  assert.ok(errors.some((e) => e.path === "/license"));
 });
 
 test("one nonce sequence spans mail and knowledge", async () => {

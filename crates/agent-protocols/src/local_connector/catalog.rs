@@ -329,7 +329,7 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
         ),
         (
             TOOL_KNOWLEDGE_SEARCH,
-            "Run a service's ranked Knowledge search; ranking is relevance, not correctness.",
+            "Run a service's ranked Knowledge search; ranking is relevance, not correctness. A service without ranked search refuses it with unsupported_search_mode; agent_protocols_knowledge_query reads by exact filters.",
             true,
             true,
             true,
@@ -360,62 +360,309 @@ pub fn standard_tool_definitions() -> Vec<LocalConnectorToolDefinition> {
     .collect()
 }
 
-/// Input schemas for tools whose inputs carry authority-relevant fields.
+/// What each Knowledge payload holds (Agent Knowledge Sections 4.1, 6.2 and
+/// 7.1), for the `payload` member of `agent_protocols_knowledge_submit`.
+const KNOWLEDGE_PAYLOAD_GUIDE: &str = "knowledge.publish: required license, kind, title, statement, language, context, basis; optional evidence, reproduction, relations, tags, extra, profiles. knowledge.assess: required license, target, verdict, summary, context, basis; optional evidence, reproduction, extra, profiles. knowledge.retract: required target, reason; optional extra. license is an HTTPS URL such as https://creativecommons.org/licenses/by/4.0/; kind is question, hypothesis, definition, observation, inference, procedure, resource, negative_result, synthesis, or collection; verdict is supports, challenges, reproduced, not_reproduced, applied, or inconclusive; language is a language tag such as en; context is { scope, conditions: string[], limitations: string[] }; target is an event ID; tags are lowercase.";
+
+/// The values of enumeration `name` in the bundled Knowledge schema.
+fn knowledge_enum(name: &str) -> Value {
+    let schema: Value =
+        serde_json::from_str(crate::knowledge::SCHEMA_JSON).expect("bundled schema is JSON");
+    json!({ "enum": schema["$defs"][name]["enum"] })
+}
+
+/// Input schemas as Section 4.3's tables list them: every member, the
+/// required ones, and the values of an enumerated one. None uses `oneOf`,
+/// `anyOf`, or `allOf`, which some model APIs reject in a tool's input
+/// schema.
 fn input_schema(name: &str) -> Value {
     let string = json!({"type": "string"});
+    let integer = json!({"type": "integer"});
+    let boolean = json!({"type": "boolean"});
+    let object = json!({"type": "object"});
+    let strings = json!({"type": "array", "items": {"type": "string"}});
     let string_set =
         json!({"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}});
+    let limit = json!({"type": "integer", "minimum": 1});
+    let room_id = json!({"type": "string", "description": "The room ID."});
+    let host = json!({"type": "string", "description": "The room's host origin: required to open a room not known locally, and when the room ID names rooms on several hosts."});
+    let role = json!({"enum": ["moderator", "speaker", "observer"]});
+    let mismatch = json!({"enum": ["hold", "reject", "send_anyway"], "description": "When the room moved past the base: hold the draft (the default), refuse, or send anyway."});
+    let service = json!({"type": "string", "description": "The Knowledge service origin."});
+    let object_of = |required: &[&str], properties: Value| json!({"type": "object", "required": required, "properties": properties});
     match name {
-        TOOL_DELEGATION_CHECK => json!({
-            "type": "object", "required": ["principal_id", "audience"],
-            "properties": {"principal_id": string, "audience": string, "subject": string, "id": string}
-        }),
-        TOOL_DELEGATION_GRANT => json!({
-            "type": "object", "required": ["id", "principal_id", "subject", "scopes", "audiences"],
-            "properties": {
-                "id": string, "principal_id": string, "subject": string, "scopes": string_set, "audiences": string_set,
-                "relationship": string, "constraints": {"type": "object"}, "not_before": {"type": "integer"}, "expires_at": {"type": "integer"}
-            }
-        }),
-        TOOL_DELEGATION_REVOKE => json!({
-            "type": "object", "required": ["id", "principal_id"],
-            "properties": {"id": string, "principal_id": string, "reason": string}
-        }),
-        TOOL_ROOMS_LIST => json!({
-            "type": "object",
-            "properties": {"scope": {"enum": ["known", "public"]}, "host": string}
-        }),
-        TOOL_DRAFT_COMMIT => json!({
-            "type": "object", "required": ["draft_id", "action"],
-            "properties": {"draft_id": string, "action": {"enum": ["revise", "send", "drop"]}}
-        }),
-        TOOL_MAIL_MAILBOX_PUBLISH => json!({
-            "type": "object", "required": ["routes"],
-            "properties": {
-                "mailbox_id": string, "routes": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": string},
-                "expires_at": {"type": "integer"}, "receive_until": {"type": "integer"},
-                "max_packet_bytes": {"type": "integer"}, "rotate_key": {"type": "boolean"}
-            }
-        }),
-        TOOL_MAIL_SEND => json!({
-            "type": "object",
-            "properties": {
+        TOOL_IDENTITY_CURRENT | TOOL_MAIL_MAILBOXES_LIST => object_of(&[], json!({})),
+        TOOL_PRINCIPAL_RESOLVE => object_of(
+            &["url"],
+            json!({"url": {"type": "string", "description": "The principal URL."}}),
+        ),
+        TOOL_DELEGATION_CHECK => object_of(
+            &["principal_id", "audience"],
+            json!({"principal_id": string, "audience": string, "subject": string, "id": string}),
+        ),
+        TOOL_DELEGATIONS_LIST => object_of(
+            &["delegation_service"],
+            json!({
+                "delegation_service": {"type": "string", "description": "The delegation service origin the principal document names."},
+                "status": {"enum": ["active", "suspended", "expired", "revoked"]},
+                "limit": limit, "cursor": string,
+            }),
+        ),
+        TOOL_DELEGATION_GRANT => object_of(
+            &["id", "principal_id", "subject", "scopes", "audiences"],
+            json!({
+                "id": string, "principal_id": string, "subject": string, "relationship": string,
+                "scopes": string_set, "audiences": string_set, "constraints": object,
+                "not_before": integer, "expires_at": integer,
+            }),
+        ),
+        TOOL_DELEGATION_REVOKE => object_of(
+            &["id", "principal_id"],
+            json!({"id": string, "principal_id": string, "reason": string}),
+        ),
+        TOOL_ROOMS_LIST => object_of(
+            &[],
+            json!({
+                "scope": {"enum": ["known", "public"], "description": "known (the default): rooms known locally; public: a host's public room discovery."},
+                "host": {"type": "string", "description": "The host origin: required for public, a filter for known."},
+                "status": string,
+                "membership": {"enum": ["member", "creator", "moderator", "pending", "all"], "description": "known only."},
+                "tag": {"type": "string", "description": "public only, like keyword, creator, starts_after, ends_before, and language."},
+                "keyword": string, "creator": string, "starts_after": integer, "ends_before": integer,
+                "language": string, "limit": limit, "cursor": string,
+            }),
+        ),
+        TOOL_ROOM_STATE => object_of(
+            &["room_id"],
+            json!({
+                "room_id": room_id, "host": host,
+                "refresh": {"type": "boolean", "description": "Read the room from its host again."},
+                "subscribe": {"type": "boolean", "description": "Subscribe to live delivery (true) or stop (false); omitted keeps the current subscription."},
+            }),
+        ),
+        TOOL_ROOM_MEMBERS_LIST => object_of(
+            &["room_id"],
+            json!({
+                "room_id": room_id, "host": host,
+                "agent_id": {"type": "string", "description": "Only this member."},
+                "status": {"enum": ["active", "left", "removed", "banned", "all"]},
+                "role": role, "include_profiles": boolean,
+                "include_recent_activity": {"type": "boolean", "description": "With agent_id: that member's most recent timeline items."},
+                "limit": limit, "cursor": string,
+            }),
+        ),
+        TOOL_AGENT_STATUS_LIST => object_of(
+            &["room_id"],
+            json!({"room_id": room_id, "host": host, "agent_id": string, "refresh": boolean}),
+        ),
+        TOOL_AGENT_STATUS_SET => object_of(
+            &["room_id", "state"],
+            json!({
+                "room_id": room_id, "host": host, "state": string, "summary": string,
+                "seen_seq": integer, "seen_hash": string, "claim_id": string, "activity": string,
+                "expires_at": integer, "extra": object,
+            }),
+        ),
+        TOOL_ROOM_TIMELINE => object_of(
+            &["room_id"],
+            json!({
+                "room_id": room_id, "host": host, "after_seq": integer, "before_seq": integer,
+                "limit": limit, "types": strings, "actors": strings, "unread_only": boolean,
+                "mark_read": {"type": "boolean", "description": "Advance the read cursor through the last item returned."},
+                "refresh": {"type": "boolean", "description": "Read new records from the host first."},
+            }),
+        ),
+        TOOL_INBOX_NEXT => object_of(
+            &[],
+            json!({
+                "room_id": string,
+                "kinds": {"type": "array", "items": {"enum": [
+                    "room.message.new", "room.mention", "room.turn.assigned", "room.steer",
+                    "room.join.requested", "room.join.approved", "room.role.changed",
+                    "room.member.removed", "room.state.changed", "room.event.custom", "mail.received",
+                ]}},
+                "limit": limit,
+                "wait_ms": {"type": "integer", "description": "Long-poll up to this long for new items."},
+                "claim": {"type": "boolean", "description": "Claim the items for this MCP session."},
+            }),
+        ),
+        TOOL_INBOX_ACK => object_of(
+            &["ids", "action"],
+            json!({
+                "ids": string_set,
+                "action": {"enum": ["handled", "dismissed", "defer"]},
+                "defer_until": integer,
+            }),
+        ),
+        TOOL_DRAFTS_LIST => object_of(
+            &[],
+            json!({
+                "room_id": string, "host": host,
+                "draft_id": {"type": "string", "description": "One draft, with the room changes since its base."},
+                "limit": limit, "cursor": string,
+            }),
+        ),
+        TOOL_DRAFT_COMMIT => object_of(
+            &["draft_id", "action"],
+            json!({
+                "draft_id": string,
+                "action": {"enum": ["revise", "send", "drop"]},
+                "content": string, "content_type": string, "mentions": strings,
+                "references": strings, "extra": object,
+                "type": {"type": "string", "description": "The event type of an event draft."},
+                "payload": object, "on_head_mismatch": mismatch,
+            }),
+        ),
+        TOOL_PROFILE_UPDATE => object_of(
+            &["profile_service", "profile"],
+            json!({
+                "profile_service": {"type": "string", "description": "A profile service origin from agent_protocols_identity_current."},
+                "profile": {
+                    "type": "object", "required": ["name"],
+                    "description": "The Agent Profile. Its id, when given, is the active Agent ID.",
+                    "properties": {
+                        "id": string, "name": string, "description": string, "avatar_url": string,
+                        "provider": string, "capabilities": strings,
+                        "service_endpoints": {"type": "array", "items": {
+                            "type": "object", "required": ["type", "url"],
+                            "properties": {"type": string, "url": string, "protocols": strings}
+                        }},
+                        "links": {"type": "array", "items": {
+                            "type": "object", "required": ["name", "url", "rel"],
+                            "properties": {"name": string, "url": string, "rel": string}
+                        }},
+                        "delegations": {"type": "array", "description": "Delegation hints the principal's owner gave this agent.", "items": {
+                            "type": "object", "required": ["principal"],
+                            "properties": {
+                                "id": string,
+                                "principal": {"type": "object", "required": ["id"], "properties": {"id": string, "type": string, "name": string}},
+                                "relationship": string, "scopes": strings,
+                            }
+                        }},
+                        "extra": object,
+                    },
+                },
+            }),
+        ),
+        TOOL_ROOM_CREATE => object_of(
+            &["host", "topic", "visibility", "start_time", "end_time"],
+            json!({
+                "host": {"type": "string", "description": "The host origin the room is created on."},
+                "topic": string,
+                "visibility": {"enum": ["public", "restricted", "private"]},
+                "start_time": integer, "end_time": integer, "agenda": string, "guidance": string,
+                "tags": strings, "language": string,
+                "policy": {"type": "object", "description": "invites (Agent ID to role), open_roles (roles anyone may join with; a public room opens only observer by default), max_speakers, and extra."},
+                "types": {"type": "array", "items": object},
+                "extra": object,
+            }),
+        ),
+        TOOL_ROOM_JOIN => object_of(
+            &["room_id", "role"],
+            json!({
+                "host": host, "room_id": room_id, "role": role, "perspective": string,
+                "reason": {"type": "string", "description": "Why the agent asks to join, for a join request."},
+                "extra": object,
+            }),
+        ),
+        TOOL_ROOM_SEND_MESSAGE => object_of(
+            &["room_id", "content"],
+            json!({
+                "room_id": room_id, "host": host,
+                "content": {"type": "string", "description": "The message text."},
+                "content_type": string, "mentions": strings, "references": strings, "extra": object,
+                "base_seq": integer, "base_hash": string, "on_head_mismatch": mismatch,
+            }),
+        ),
+        TOOL_ROOM_SUBMIT_EVENT => object_of(
+            &["room_id", "type", "payload"],
+            json!({
+                "room_id": room_id, "host": host,
+                "type": {"type": "string", "description": "The event type, such as room.leave, room.update, room.close, or a room-defined type."},
+                "payload": object, "mentions": strings, "references": strings,
+                "base_seq": integer, "base_hash": string, "on_head_mismatch": mismatch,
+            }),
+        ),
+        TOOL_JOIN_REQUESTS_LIST => object_of(
+            &["room_id"],
+            json!({"room_id": room_id, "host": host, "status": string, "limit": limit, "cursor": string}),
+        ),
+        TOOL_JOIN_REQUEST_REVIEW => object_of(
+            &["room_id", "request_id", "decision"],
+            json!({
+                "room_id": room_id, "host": host, "request_id": string,
+                "decision": {"enum": ["approve", "reject"]},
+                "role": role, "reason": string,
+            }),
+        ),
+        TOOL_MAIL_MAILBOX_PUBLISH => object_of(
+            &["routes"],
+            json!({
+                "mailbox_id": string,
+                "routes": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string"}},
+                "expires_at": integer, "receive_until": integer,
+                "max_packet_bytes": integer, "rotate_key": boolean,
+            }),
+        ),
+        TOOL_MAIL_SEND => object_of(
+            &[],
+            json!({
                 "to": string, "in_reply_to": string, "subject": string, "text": string,
                 "parts": {"type": "array", "items": {
                     "type": "object", "required": ["media_type", "data"],
                     "properties": {"media_type": string, "data": string, "name": string}
                 }},
-                "expires_at": {"type": "integer"}, "reply_mailbox_id": string
-            }
-        }),
-        TOOL_KNOWLEDGE_SUBMIT => json!({
-            "type": "object", "required": ["services", "type", "payload"],
-            "properties": {
-                "services": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": string},
-                "type": {"enum": ["knowledge.publish", "knowledge.assess", "knowledge.retract"]},
-                "payload": {"type": "object"}
-            }
-        }),
-        _ => json!({"type": "object"}),
+                "expires_at": integer, "reply_mailbox_id": string,
+            }),
+        ),
+        TOOL_MAIL_SYNC => object_of(&[], json!({"mailbox_id": string})),
+        TOOL_MAIL_LIST => object_of(
+            &[],
+            json!({
+                "direction": {"enum": ["received", "sent"]},
+                "mailbox_id": string, "from": string, "thread_id": string, "message_id": string,
+                "unread_only": boolean,
+                "mark_read": {"type": "boolean", "description": "Mark the received messages returned read."},
+                "include_data": {"type": "boolean", "description": "Add the base64url data of non-text parts."},
+                "limit": limit, "cursor": string,
+            }),
+        ),
+        TOOL_KNOWLEDGE_SUBMIT => object_of(
+            &["services", "type", "payload"],
+            json!({
+                "services": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"type": "string"}},
+                "type": knowledge_enum("eventType"),
+                "payload": {"type": "object", "description": KNOWLEDGE_PAYLOAD_GUIDE},
+            }),
+        ),
+        TOOL_KNOWLEDGE_QUERY => object_of(
+            &["service"],
+            json!({
+                "service": service, "actor": string, "type": knowledge_enum("eventType"),
+                "kind": knowledge_enum("kind"), "target": string,
+                "relation": knowledge_enum("relationKind"), "tag": string, "profile": string,
+                "language": string, "verdict": knowledge_enum("verdict"),
+                "created_from": integer, "created_before": integer, "after_seq": integer,
+                "cursor": string, "limit": limit,
+            }),
+        ),
+        TOOL_KNOWLEDGE_GET => object_of(
+            &["service", "ids"],
+            json!({"service": service, "ids": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}}}),
+        ),
+        TOOL_KNOWLEDGE_SEARCH => object_of(
+            &["service", "text", "mode"],
+            json!({
+                "service": service, "text": string,
+                "mode": knowledge_enum("searchMode"),
+                "filters": {"type": "object", "description": "The exact filters of agent_protocols_knowledge_query, without service, after_seq, cursor, and limit."},
+                "limit": limit,
+            }),
+        ),
+        TOOL_KNOWLEDGE_STATUS => object_of(
+            &["service", "id"],
+            json!({"service": service, "id": {"type": "string", "description": "The event ID."}}),
+        ),
+        _ => object_of(&[], json!({})),
     }
 }

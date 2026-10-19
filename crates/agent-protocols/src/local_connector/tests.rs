@@ -16,7 +16,7 @@ use crate::identity::AgentSigner;
 use crate::profile::{materialize_profile, ProfileUpdatePayload};
 
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const HOST: &str = "https://api.example.test";
 const HEAD: &str = "room-create-head";
@@ -248,6 +248,155 @@ fn standard_tool_definitions_list_every_tool() {
         find(TOOL_KNOWLEDGE_SUBMIT).input_schema["properties"]["type"]["enum"],
         json!(["knowledge.publish", "knowledge.assess", "knowledge.retract"])
     );
+}
+
+/// Each tool's input members as Section 4.3's tables list them: the
+/// member, whether it is required, and its type as written there.
+fn spec_inputs() -> BTreeMap<String, Vec<(String, bool, String)>> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/mcp/local-connector/1.0.md"
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut inputs = BTreeMap::new();
+    for line in text
+        .lines()
+        .filter(|l| l.starts_with("| `agent_protocols_"))
+    {
+        let line = line.replace("\\|", "¦");
+        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+        let body = cells[2].trim_matches('`').trim();
+        let body = body.trim_start_matches('{').trim_end_matches('}').trim();
+        let members = match body {
+            "" => Vec::new(),
+            body => body
+                .split(", \"")
+                .map(|member| {
+                    let (name, rest) = member.trim_start_matches('"').split_once('"').unwrap();
+                    let ty = rest.trim_start_matches('?').trim_start_matches(':').trim();
+                    (
+                        name.to_owned(),
+                        !rest.starts_with('?'),
+                        ty.replace('¦', "|"),
+                    )
+                })
+                .collect(),
+        };
+        inputs.insert(cells[1].trim_matches('`').to_owned(), members);
+    }
+    inputs
+}
+
+/// Whether `schema` declares a member of the spec's type `ty`.
+fn declares(ty: &str, schema: &Value) -> bool {
+    if ty.starts_with('"') {
+        let literals: Vec<&str> = ty.split('|').map(|v| v.trim().trim_matches('"')).collect();
+        return schema["enum"] == json!(literals);
+    }
+    match ty {
+        "string" => schema["type"] == "string" || schema["enum"].is_array(),
+        "number" => schema["type"] == "integer",
+        "boolean" => schema["type"] == "boolean",
+        "object" => schema["type"] == "object",
+        ty if ty.ends_with("[]") => schema["type"] == "array",
+        _ => false,
+    }
+}
+
+#[test]
+fn standard_tool_inputs_are_the_spec_tables() {
+    let spec = spec_inputs();
+    let tools = standard_tool_definitions();
+    assert_eq!(spec.len(), tools.len());
+    for tool in &tools {
+        let name = &tool.name;
+        let members = &spec[name];
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        let declared: BTreeSet<&str> = properties.keys().map(String::as_str).collect();
+        let listed: BTreeSet<&str> = members.iter().map(|m| m.0.as_str()).collect();
+        assert_eq!(declared, listed, "{name}");
+        let required: BTreeSet<&str> = tool.input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        let listed: BTreeSet<&str> = members
+            .iter()
+            .filter(|m| m.1)
+            .map(|m| m.0.as_str())
+            .collect();
+        assert_eq!(required, listed, "{name}");
+        for (member, _, ty) in members {
+            assert!(declares(ty, &properties[member]), "{name}.{member}: {ty}");
+        }
+    }
+}
+
+#[test]
+fn no_input_schema_combines_schemas() {
+    fn combined(value: &Value, path: String, found: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    if matches!(key.as_str(), "oneOf" | "anyOf" | "allOf") {
+                        found.push(format!("{path}/{key}"));
+                    }
+                    combined(value, format!("{path}/{key}"), found);
+                }
+            }
+            Value::Array(items) => {
+                for (i, value) in items.iter().enumerate() {
+                    combined(value, format!("{path}/{i}"), found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for tool in standard_tool_definitions() {
+        combined(&tool.input_schema, tool.name, &mut found);
+    }
+    assert_eq!(found, Vec::<String>::new());
+}
+
+#[test]
+fn the_knowledge_payload_guide_names_every_required_member() {
+    let tools = standard_tool_definitions();
+    let submit = tools
+        .iter()
+        .find(|tool| tool.name == TOOL_KNOWLEDGE_SUBMIT)
+        .unwrap();
+    let guide = submit.input_schema["properties"]["payload"]["description"]
+        .as_str()
+        .unwrap();
+    let schema: Value = serde_json::from_str(crate::knowledge::SCHEMA_JSON).unwrap();
+    for (event_type, definition) in [
+        ("knowledge.publish", "publishPayload"),
+        ("knowledge.assess", "assessPayload"),
+        ("knowledge.retract", "retractPayload"),
+    ] {
+        let required: Vec<&str> = schema["$defs"][definition]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        let listed = format!("{event_type}: required {};", required.join(", "));
+        assert!(guide.contains(&listed), "{listed}");
+    }
+}
+
+#[test]
+fn a_room_seen_only_in_public_discovery_has_no_head_to_sign_against() {
+    let mut connector = LocalConnector::new(signer(1));
+    connector.add_host(allowed(HOST));
+    // Public discovery observes a room; joining must read it first.
+    connector.observe_room(HOST, room_response("room1", &signer(5)));
+    assert!(connector.room_head_unknown(&key()));
+    connector.accept_room_response(HOST, room_response("room1", &signer(5)));
+    assert!(!connector.room_head_unknown(&key()));
+    assert!(connector.room_head_unknown(&(HOST.to_owned(), "room2".to_owned())));
 }
 
 #[test]
