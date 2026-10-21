@@ -57,7 +57,7 @@ export interface RoomSubmitEventInput {
 }
 
 /** Source of `agent_protocols_rooms_list`: locally known rooms, or a host's public room discovery. */
-export type RoomsListScope = "known" | "public";
+export type RoomsListScope = "known" | "public" | "mine";
 
 export interface RoomsListInput {
   scope?: RoomsListScope;
@@ -80,15 +80,33 @@ export interface RoomsListInput {
 /** Rejects a filter that belongs to the other scope. */
 export function validateRoomsListScope(input: RoomsListInput): void {
   const scope = input.scope ?? "known";
-  if (scope !== "known" && scope !== "public") throw invalidPayload(`invalid rooms list scope: ${String(scope)}`);
-  if (scope === "known") {
-    const publicOnly = [input.tag, input.keyword, input.creator, input.starts_after, input.ends_before, input.language];
+  if (scope !== "known" && scope !== "public" && scope !== "mine")
+    throw invalidPayload(`invalid rooms list scope: ${String(scope)}`);
+  if (
+    scope !== "mine" &&
+    (input.membership === "invited" || input.membership === "left")
+  )
+    throw invalidPayload("invited and left membership require scope mine");
+  if (scope !== "public") {
+    const publicOnly = [
+      input.tag,
+      input.keyword,
+      input.creator,
+      input.starts_after,
+      input.ends_before,
+      input.language,
+    ];
     if (publicOnly.some((value) => value !== undefined)) {
-      throw invalidPayload("tag, keyword, creator, starts_after, ends_before, and language require scope public");
+      throw invalidPayload(
+        "tag, keyword, creator, starts_after, ends_before, and language require scope public",
+      );
     }
-  } else {
-    if (input.membership !== undefined) throw invalidPayload("membership requires scope known");
-    if (input.host === undefined) throw invalidPayload("scope public requires host");
+  }
+  if (scope !== "known") {
+    if (scope === "public" && input.membership !== undefined)
+      throw invalidPayload("membership requires scope known");
+    if (input.host === undefined)
+      throw invalidPayload("scope public or mine requires host");
   }
 }
 
@@ -135,6 +153,7 @@ export interface AgentStatusSetInput {
 }
 
 export interface RoomTimelineInput {
+  source?: "local" | "remote";
   room_id: string;
   host?: string;
   after_seq?: number;
@@ -229,6 +248,8 @@ export interface PrincipalResolveInput {
 }
 
 export interface DelegationCheckInput {
+  cursor?: string;
+  limit?: number;
   principal_id: string;
   /** The relying application's origin the delegation must be usable for. */
   audience: string;
@@ -237,7 +258,8 @@ export interface DelegationCheckInput {
 }
 
 export interface DelegationsListInput {
-  delegation_service: string;
+  delegation_service?: string;
+  principal_id?: string;
   status?: DelegationStatus;
   limit?: number;
   cursor?: string;
@@ -333,4 +355,45 @@ export type KnowledgeSearchInput = { service: string } & KnowledgeSearchRequest;
 export interface KnowledgeStatusInput {
   service: string;
   id: string;
+}
+
+export interface ServicesListInput {
+  host?: string;
+  protocol?: string;
+}
+export interface ProfilesGetInput {
+  profile_service: string;
+  ids?: AgentId[];
+}
+export interface ProfileHistoryInput {
+  profile_service: string;
+  agent_id?: AgentId;
+  limit?: number;
+  cursor?: string;
+}
+export interface DelegationHistoryInput {
+  principal_id: string;
+  id: string;
+  cursor?: string;
+}
+export interface MailResolveInput {
+  agent_id: AgentId;
+  address?: string;
+  card_url?: string;
+  profile_service?: string;
+}
+export interface SchemaGetInput {
+  protocol: string;
+  type?: string;
+  room_id?: string;
+  host?: string;
+}
+export interface RoomArchiveInput {
+  room_id: string;
+  host?: string;
+}
+export interface RoomWatchInput {
+  room_id: string;
+  host?: string;
+  types?: string[];
 }

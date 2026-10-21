@@ -202,7 +202,7 @@ export class DiscourseClient {
    */
   readonly roomsUrl: string;
   private readonly baseUrl: string;
-  private readonly myRoomsUrl: string;
+  readonly myRoomsUrl: string;
 
   constructor(
     baseUrl: string,

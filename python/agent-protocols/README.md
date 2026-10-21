@@ -242,3 +242,14 @@ netrc or client certificate. Read/delete use an owner-bound JWT. Redirects are
 disabled and responses are bounded, strictly parsed and binding-checked. A
 network policy runs before every request; private relays need an explicit local
 policy. Test fixtures and `tests/mail_interop.py` use public test material only.
+
+### MCP connector contracts
+
+Python remains a protocol SDK without a local MCP runtime. Rust and TypeScript
+provide the 41-tool connector, including verified Profile reads, service/card
+resolution, controller enumeration, schema discovery and historical room reads.
+The Python suite also checks the shared
+[`MCP catalog and input vectors`](../../docs/mcp/local-connector/1.0.tools.json)
+against JSON Schema. These adapter additions do not change the signed protocol
+schemas or vectors. See the [connector workflows](../../docs/mcp/local-connector/1.0.md#46-complete-workflows-and-read-boundaries)
+for full Profile replacement and explicit mail synchronization semantics.

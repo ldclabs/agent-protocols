@@ -56,7 +56,8 @@ export interface AgentProtocolsHost {
 }
 
 /** `removed` and `banned` are produced by accepted `room.member.remove` records. */
-export type RoomMemberStatus = "active" | "left" | "removed" | "banned" | "unknown";
+export type RoomMemberStatus =
+  "active" | "left" | "removed" | "banned" | "unknown";
 
 export interface RoomMemberProfile {
   name?: string;
@@ -198,11 +199,7 @@ export interface RoomStateView {
 }
 
 export type RoomsListMembership =
-  | "member"
-  | "creator"
-  | "moderator"
-  | "pending"
-  | "all";
+  "member" | "creator" | "moderator" | "pending" | "invited" | "left" | "all";
 
 export interface RoomWriteResult {
   status: "sent" | "held" | "rejected";
@@ -294,7 +291,10 @@ export function timelineItemFromRecord(
   }
   const event = record.envelope.event;
   const payload = event.payload;
-  const message = event.type === eventType.MESSAGE_CREATE ? messagePayload(payload) : undefined;
+  const message =
+    event.type === eventType.MESSAGE_CREATE
+      ? messagePayload(payload)
+      : undefined;
   return {
     room_id: record.room_id,
     seq: record.seq,
@@ -315,7 +315,15 @@ export function timelineItemFromRecord(
 
 /** Maximum summary length in Unicode code points. */
 export const SUMMARY_MAX_CHARS = 160;
-const SUMMARY_FIELDS = ["summary", "title", "instruction", "intent", "question", "reason", "state"];
+const SUMMARY_FIELDS = [
+  "summary",
+  "title",
+  "instruction",
+  "intent",
+  "question",
+  "reason",
+  "state",
+];
 
 /**
  * Informative summary shared by the SDK connectors: a string message body, or
@@ -340,7 +348,9 @@ export function summarizePayload(type: string, payload: unknown): string {
   return type;
 }
 
-function messagePayload(payload: unknown): { content_type: string; content: unknown } | undefined {
+function messagePayload(
+  payload: unknown,
+): { content_type: string; content: unknown } | undefined {
   if (!isRecord(payload)) return undefined;
   if (typeof payload.content_type !== "string") return undefined;
   return { content_type: payload.content_type, content: payload.content };
@@ -348,12 +358,16 @@ function messagePayload(payload: unknown): { content_type: string; content: unkn
 
 function referencesOf(payload: unknown): string[] {
   if (!isRecord(payload) || !Array.isArray(payload.references)) return [];
-  return payload.references.filter((value): value is string => typeof value === "string");
+  return payload.references.filter(
+    (value): value is string => typeof value === "string",
+  );
 }
 
 export function truncate(value: string, maxChars: number): string {
   const chars = [...value];
-  return chars.length <= maxChars ? value : `${chars.slice(0, maxChars - 1).join("")}…`;
+  return chars.length <= maxChars
+    ? value
+    : `${chars.slice(0, maxChars - 1).join("")}…`;
 }
 
 /** `open` while the card has routes and has not expired, `closed` when its routes are empty, `expired` otherwise. */

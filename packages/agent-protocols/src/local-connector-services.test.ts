@@ -2,6 +2,7 @@
 // reference relay and Knowledge store, behind an injected fetch. Two
 // connectors play sender and recipient.
 
+import { Validator, type Schema } from "@cfworker/json-schema";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -18,6 +19,7 @@ import {
 import {
   LOCAL_CONNECTOR_SNAPSHOT_VERSION,
   LocalConnector,
+  standardToolDefinitions,
   TOOL_INBOX_NEXT,
   TOOL_KNOWLEDGE_GET,
   TOOL_KNOWLEDGE_QUERY,
@@ -198,7 +200,21 @@ async function call(
   tool: string,
   input: unknown,
 ): Promise<Json> {
-  return (await connector.callTool(tool, input)) as Json;
+  const result = JSON.parse(
+    JSON.stringify(await connector.callTool(tool, input)),
+  ) as Json;
+  const schema = standardToolDefinitions().find(
+    (t) => t.name === tool,
+  )!.output_schema;
+  const validation = new Validator(schema as Schema, "2020-12", false).validate(
+    result,
+  );
+  assert.equal(
+    validation.valid,
+    true,
+    `${tool}: ${JSON.stringify(validation.errors)}`,
+  );
+  return result;
 }
 
 async function rejects(
@@ -562,8 +578,19 @@ test("knowledge publish, query, search, and status", async () => {
     },
     "invalid_event",
   );
-  for (const member of ["kind", "statement", "language", "context", "basis", "body", "/license"]) {
-    assert.ok(refused.message.includes(member), `${member}: ${refused.message}`);
+  for (const member of [
+    "kind",
+    "statement",
+    "language",
+    "context",
+    "basis",
+    "body",
+    "/license",
+  ]) {
+    assert.ok(
+      refused.message.includes(member),
+      `${member}: ${refused.message}`,
+    );
   }
   const errors = refused.data?.errors as { path: string }[];
   assert.ok(errors.some((e) => e.path === "/license"));

@@ -62,7 +62,7 @@ ADP room writes carry a signed `base_seq` / `base_hash`. Message and control wri
 agent-protocols = { path = "crates/agent-protocols", features = ["local-connector"] }
 ```
 
-The local connector feature builds on `http-client` and exposes the 33 standard MCP tool definitions, each with the full input schema of its local connector Section 4.3 table (required members and enumerated values, no `oneOf`, `anyOf`, or `allOf`), a JSON tool dispatcher, local room, member, timeline, inbox, and draft projections, presented-head tracking, held drafts for message and control writes, and internal signing for Agent Protocols writes. It does not expose raw signing tools or private key material to agents. It reads each Discourse host's and Knowledge service's discovery document on first use and keeps the client in its `DiscoveryCache` (after a network error, 429, or 5xx the next call reads it again), reads each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed. A host that restores a connector for every call shares one cache through `with_discovery_cache(cache.clone())`, set after `with_http_client` and only among connectors with the same HTTP client.
+The local connector feature builds on `http-client` and exposes the 41 standard MCP tool definitions, each with the full input schema of its local connector Section 4.3 table (required members and enumerated values, no `oneOf`, `anyOf`, or `allOf`), a JSON tool dispatcher, local room, member, timeline, inbox, and draft projections, presented-head tracking, held drafts for message and control writes, and internal signing for Agent Protocols writes. It does not expose raw signing tools or private key material to agents. It reads each Discourse host's and Knowledge service's discovery document on first use and keeps the client in its `DiscoveryCache` (after a network error, 429, or 5xx the next call reads it again), reads each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed. A host that restores a connector for every call shares one cache through `with_discovery_cache(cache.clone())`, set after `with_http_client` and only among connectors with the same HTTP client.
 
 The Mail tools create and rotate the agent's mailboxes, send letters with pinned and refreshed cards, retry queued packets byte-for-byte, and sync new mail into the inbox; a sync deletes a relay copy only in a later call, after the host has saved the state that stored the message. The Knowledge tools sign and submit contributions (a payload that does not match its type is refused before signing, with each failing member in `data.errors`), read verified query, batch, and search pages, and check an event's lifecycle status. Mail relays and Knowledge services must be allowed hosts, and `with_http_client` sets the transport for them too; like the default client, it must not follow redirects. `set_mail_sender_blocked` is the operator's sender policy, and `set_mail_blocked_senders` replaces the whole list.
 
@@ -260,3 +260,39 @@ ambient credentials, and accepts explicit private CA roots through
 cache. Use `card_at` for an explicit clock, `card_cache_snapshot` for persistence,
 and `with_card_cache` for a shared restored cache. Applications enforce local
 network/DNS policy. No hosted relay is supplied.
+
+### Complete MCP workflows
+
+The local connector exposes 41 tools with shared input/output contracts from
+[`1.0.tools.json`](../../docs/mcp/local-connector/1.0.tools.json). Run
+`python3 scripts/sync_connector_catalog.py --check` from the repository root to
+check bundled contracts and protocol schemas. The signed wire protocols and SDK
+version are unchanged.
+
+Start with `agent_protocols_identity_current` and `agent_protocols_services_list`.
+Use `agent_protocols_profiles_get` before editing: `profile_update` replaces the
+whole profile, so preserve desired optional fields and remove `updated_at` and
+`event_id`. Omit `mailbox_id` in `mail_mailbox_publish` to create a mailbox; use
+`mail_resolve` with an expected Agent ID and a profile service, card URL, or
+contact address to discover verified candidates. Explicitly choose a reply
+mailbox when sending.
+
+`rooms_list` with `scope: "mine"` discovers invitations and memberships on the
+host. `schema_get` supplies exact built-in payloads, registered packs, and
+installed custom schemas; `room_watch` persists custom event interests.
+`room_timeline` with `source: "remote"` reads older verified history independently
+of the live read/presented heads. `room_archive` verifies an archive and reports
+redactions and incomplete state replay. `profile_history` and
+`delegation_history` expose signed histories. `delegations_list` with
+`principal_id` enumerates the active Controller's management scope;
+`delegation_check` exposes `next_cursor` and `complete`, so callers must finish
+pagination before concluding no usable grant exists.
+
+The transport-neutral core reports `sync_mode: "explicit"`: inbox reads do not
+poll relays or open SSE connections. Hosts drive SSE/background polling and
+persist state and mail keys after calls; otherwise call `mail_sync` and refresh
+rooms before reading the inbox. Input-schema validation errors include field paths in `data.errors`.
+Transport adapters should publish both `inputSchema` and `outputSchema`, refresh
+their tool inventory, and extend their own capability mappings for the new read
+and local watch tools. Consumers pinned to an older SDK must update their
+integration before the new surface is available.

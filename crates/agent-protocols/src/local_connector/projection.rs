@@ -228,6 +228,19 @@ pub(crate) fn apply_record_projection(
     };
     let event = &signed.envelope.event;
     let seq = signed.seq;
+    if room
+        .watch_types
+        .as_ref()
+        .is_some_and(|types| types.contains(&event.kind))
+    {
+        inbox.push(inbox_from_item(
+            InboxKind::RoomEventCustom,
+            InboxPriority::Normal,
+            item,
+            "watched_type",
+            false,
+        ));
+    }
     match event.kind.as_str() {
         event_type::ROOM_JOIN => {
             let payload: RoomJoinPayload = serde_json::from_value(event.payload.clone())?;
@@ -510,6 +523,7 @@ pub(crate) fn membership_filter(
 ) -> bool {
     let member = room.members.get(agent_id);
     match membership.unwrap_or(RoomsListMembership::All) {
+        RoomsListMembership::Invited | RoomsListMembership::Left => false,
         RoomsListMembership::All => true,
         RoomsListMembership::Member => {
             member.is_some_and(|member| member.status == RoomMemberStatus::Active)

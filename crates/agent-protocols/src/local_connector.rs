@@ -23,10 +23,12 @@
 //! form one body of behaviour rather than a seam something varies across.
 
 mod catalog;
+mod history;
 mod inputs;
 mod knowledge_tools;
 mod mail_tools;
 mod projection;
+mod read_tools;
 mod state;
 mod views;
 
@@ -432,7 +434,17 @@ impl LocalConnector {
     }
 
     pub async fn call_tool(&mut self, name: &str, input: Value) -> Result<Value> {
+        let input = if input.is_null() { json!({}) } else { input };
+        catalog::validate_tool_input(name, &input)?;
         match name {
+            TOOL_SERVICES_LIST => self.services_list(parse_input(input)?).await,
+            TOOL_PROFILES_GET => self.profiles_get(parse_input(input)?).await,
+            TOOL_PROFILE_HISTORY => self.profile_history(parse_input(input)?).await,
+            TOOL_DELEGATION_HISTORY => self.delegation_history(parse_input(input)?).await,
+            TOOL_MAIL_RESOLVE => self.mail_resolve(parse_input(input)?).await,
+            TOOL_SCHEMA_GET => self.schema_get(parse_input(input)?),
+            TOOL_ROOM_ARCHIVE => self.room_archive(parse_input(input)?).await,
+            TOOL_ROOM_WATCH => self.room_watch(parse_input(input)?),
             TOOL_IDENTITY_CURRENT => self.identity_current(),
             TOOL_PRINCIPAL_RESOLVE => self.principal_resolve(parse_input(input)?).await,
             TOOL_DELEGATION_CHECK => self.delegation_check(parse_input(input)?).await,
@@ -484,7 +496,9 @@ impl LocalConnector {
         Ok(json!({
             "agent_id": agent_id,
             "public_key": public_key,
-            "profiles": self.state.profiles.keys().collect::<Vec<_>>(),
+            "profiles": self.state.hosts.values().filter(|h| h.allowed).filter_map(|h| h.profile_service.clone()).collect::<std::collections::BTreeSet<_>>(),
+            "sync_mode": "explicit",
+            "tools": TOOL_NAMES.as_slice(),
             "hosts": self.state.hosts.values().collect::<Vec<_>>()
         }))
     }
@@ -494,6 +508,7 @@ impl LocalConnector {
         match input.scope {
             RoomsListScope::Known => self.known_rooms(input),
             RoomsListScope::Public => self.public_rooms(input).await,
+            RoomsListScope::Mine => self.my_rooms(input).await,
         }
     }
 
@@ -610,11 +625,14 @@ impl LocalConnector {
             present_head(room, head_seq);
         }
         let room = self.local_room(&key)?;
-        Ok(json!({
+        let mut result = json!({
             "room": self.room_state_view(room),
-            "sync": self.sync_state(&key)?,
-            "active_turn": room.active_turn
-        }))
+            "sync": self.sync_state(&key)?
+        });
+        if let Some(turn) = &room.active_turn {
+            result["active_turn"] = json!(turn);
+        }
+        Ok(result)
     }
 
     fn room_members_list(&self, input: RoomMembersListInput) -> Result<Value> {
@@ -765,6 +783,9 @@ impl LocalConnector {
     }
 
     async fn room_timeline(&mut self, input: RoomTimelineInput) -> Result<Value> {
+        if input.source.as_deref() == Some("remote") {
+            return self.remote_timeline(input).await;
+        }
         let key = self.resolve_room_key(input.host.as_deref(), &input.room_id)?;
         if input.refresh {
             self.sync_room(&key).await?;
@@ -814,6 +835,7 @@ impl LocalConnector {
         let unread_count = room.unread_count();
         let mut result = json!({
             "items": items,
+            "history": {"source":"local","first_seq":room.timeline.first().map_or(0,|i|i.seq),"last_seq":room.timeline.last().map_or(0,|i|i.seq),"truncated":room.timeline.first().is_some_and(|i|i.seq>1)},
             "sync": self.sync_state(&key)?,
             "unread_count": unread_count
         });
@@ -1004,7 +1026,9 @@ impl LocalConnector {
     /// origin can redirect to any principal, so an unlisted URL is never
     /// presented as a name for it.
     async fn resolve_principal(&self, url: &str) -> Result<(PrincipalDocument, bool)> {
-        let document = DelegationClient::new(url).principal(Some(url)).await?;
+        let document = DelegationClient::with_client(url, self.http.clone())
+            .principal(Some(url))
+            .await?;
         let alias = document.id != url && is_principal_alias(&document, url);
         Ok((document, alias))
     }
@@ -1022,7 +1046,7 @@ impl LocalConnector {
             ))
         })?;
         self.require_allowed_host(&origin)?;
-        Ok(DelegationClient::discover(&origin).await)
+        Ok(DelegationClient::discover_with_client(&origin, self.http.clone()).await)
     }
 
     /// Resolves the principal and refuses when the active Agent ID is not one
@@ -1063,6 +1087,8 @@ impl LocalConnector {
             subject: Some(input.subject.unwrap_or_else(|| self.agent_id())),
             principal_id: Some(document.id.clone()),
             id: input.id,
+            cursor: input.cursor,
+            limit: input.limit,
             ..DelegationQueryRequest::default()
         };
         let response = service.query_delegations(&request, None).await?;
@@ -1087,27 +1113,69 @@ impl LocalConnector {
             };
             delegations.push(verdict);
         }
-        Ok(json!({
-            "canonical_id": document.id,
-            "query_url": service.query_url(),
-            "delegations": delegations,
-        }))
+        Ok(with_cursor(
+            json!({
+                "canonical_id": document.id,
+                "query_url": service.query_url(),
+                "delegations": delegations,
+                "complete": response.next_cursor.is_none(),
+            }),
+            response.next_cursor,
+        ))
     }
 
     async fn delegations_list(&self, input: DelegationsListInput) -> Result<Value> {
-        // Enumerating one subject requires authorization; the connector proves
-        // the active identity and never enumerates anyone else.
-        let origin = service_origin(&input.delegation_service)?;
+        if input.principal_id.is_some() && input.delegation_service.is_some() {
+            return Err(SdkError::InvalidPayload(
+                "choose principal_id or delegation_service".into(),
+            ));
+        }
+        let principal = match input.principal_id {
+            Some(id) => Some(self.controller_principal(&id).await?),
+            None => None,
+        };
+        let origin = match &principal {
+            Some(p) => p.delegation_service.clone().ok_or_else(|| {
+                SdkError::InvalidPayload("principal has no delegation service".into())
+            })?,
+            None => service_origin(input.delegation_service.as_deref().ok_or_else(|| {
+                SdkError::InvalidPayload("delegation_service or principal_id is required".into())
+            })?)?,
+        };
         let jwt = self.request_jwt(&origin)?;
-        let service = DelegationClient::discover(&origin).await;
+        let service = match &principal {
+            Some(p) => self.principal_delegation_service(p).await?,
+            None => DelegationClient::discover_with_client(&origin, self.http.clone()).await,
+        };
         let request = DelegationQueryRequest {
-            subject: Some(self.agent_id()),
+            subject: if principal.is_none() {
+                Some(self.agent_id())
+            } else {
+                None
+            },
+            principal_id: principal.as_ref().map(|p| p.id.clone()),
             status: input.status,
             limit: input.limit,
             cursor: input.cursor,
-            ..DelegationQueryRequest::default()
+            ..Default::default()
         };
         let response = service.query_delegations(&request, Some(&jwt)).await?;
+        for credential in &response.result {
+            if let Some(principal) = &principal {
+                let controller = principal
+                    .controllers
+                    .iter()
+                    .find(|c| c.id == self.agent_id())
+                    .unwrap();
+                if credential.principal_id != principal.id
+                    || !crate::delegation::controller_covers_credential(controller, credential)
+                {
+                    return Err(SdkError::PermissionDenied);
+                }
+            } else if credential.subject != self.agent_id() {
+                return Err(SdkError::PermissionDenied);
+            }
+        }
         Ok(with_cursor(
             json!({ "delegations": response.result }),
             response.next_cursor,

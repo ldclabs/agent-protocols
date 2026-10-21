@@ -63,6 +63,8 @@ pub(crate) struct LocalRoomState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) synced_hash: Option<String>,
     pub(crate) subscribed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) watch_types: Option<Vec<String>>,
     pub(crate) members: BTreeMap<AgentId, RoomMemberView>,
     pub(crate) timeline: Vec<TimelineItem>,
     pub(crate) records: Vec<ArchiveRecord>,
@@ -83,6 +85,7 @@ impl LocalRoomState {
             synced_seq: 0,
             synced_hash: None,
             subscribed: false,
+            watch_types: None,
             members: BTreeMap::new(),
             timeline: Vec::new(),
             records: Vec::new(),

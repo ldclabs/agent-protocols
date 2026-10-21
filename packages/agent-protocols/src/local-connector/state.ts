@@ -46,6 +46,7 @@ export interface LocalRoomState {
   syncedSeq: number;
   syncedHash?: string;
   subscribed: boolean;
+  watch_types?: string[];
   members: Map<AgentId, RoomMemberView>;
   timeline: TimelineItem[];
   records: ArchiveRecord[];
@@ -135,6 +136,7 @@ export interface LocalRoomSnapshot {
   synced_seq: number;
   synced_hash?: string;
   subscribed: boolean;
+  watch_types?: string[];
   members: Record<AgentId, RoomMemberView>;
   timeline: TimelineItem[];
   records: ArchiveRecord[];

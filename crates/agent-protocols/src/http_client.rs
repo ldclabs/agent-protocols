@@ -286,6 +286,10 @@ impl DiscourseClient {
         Ok(Self::with_endpoints(base, inner, &discovery.endpoints))
     }
 
+    pub(crate) fn my_rooms_url(&self) -> &str {
+        &self.my_rooms_url
+    }
+
     /// The `rooms` endpoint: `POST` creates rooms, `GET` lists discoverable
     /// rooms, and each room URL extends it with `/{room_id}` (ADP Section 15.1).
     pub fn rooms_url(&self) -> &str {

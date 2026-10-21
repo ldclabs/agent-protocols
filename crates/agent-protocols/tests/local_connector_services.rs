@@ -51,6 +51,9 @@ struct Services {
     packets_deleted: AtomicUsize,
     /// Every request as `METHOD /path`.
     requests: Mutex<Vec<String>>,
+    fixtures: Mutex<std::collections::BTreeMap<String, (u16, String)>>,
+    profiles: Mutex<Vec<Value>>,
+    queries: Mutex<Vec<Value>>,
 }
 
 impl Services {
@@ -68,6 +71,9 @@ impl Services {
             failing_discoveries: AtomicUsize::new(0),
             packets_deleted: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
+            fixtures: Mutex::new(Default::default()),
+            profiles: Mutex::new(Vec::new()),
+            queries: Mutex::new(Vec::new()),
         });
         let provider = rustls::crypto::aws_lc_rs::default_provider();
         let config = Arc::new(
@@ -118,8 +124,47 @@ impl Services {
                 .unwrap_or_default()
                 .to_owned()
         };
+        let cursor = query(&request, "cursor")
+            .map(str::to_owned)
+            .or_else(|| body()["cursor"].as_str().map(str::to_owned));
+        let fixture_key = cursor.map_or_else(
+            || request.path.clone(),
+            |cursor| format!("{}?cursor={cursor}", request.path),
+        );
+        if request.path == "/v1/delegations/query" {
+            self.queries.lock().unwrap().push(body());
+        }
+        if let Some((status, body)) = self.fixtures.lock().unwrap().get(&fixture_key).cloned() {
+            if request.path.contains("/rooms") {
+                assert!(
+                    request.authorization.is_some(),
+                    "private room reads need JWT"
+                );
+            }
+            return (status, body, String::new());
+        }
         let result: Result<(u16, Value), SdkError> = match (request.method.as_str(), &segments[..])
         {
+            ("GET", [".well-known", "agent-profile"]) => Ok((
+                200,
+                json!({"protocol":"agent-profile/1.0","service":self.origin,"endpoints":{"profiles":format!("{}/v1/profiles",self.origin)}}),
+            )),
+            ("GET", [".well-known", "agent-mail"]) => Ok((
+                200,
+                json!({"protocol":"agent-mail/1.0","service":self.origin}),
+            )),
+            ("POST", ["v1", "profiles"]) => {
+                let envelope: agent_protocols::identity::Envelope<
+                    agent_protocols::profile::ProfileUpdatePayload,
+                > = serde_json::from_value(body()).unwrap();
+                let profile = agent_protocols::profile::materialize_profile(&envelope).unwrap();
+                self.profiles.lock().unwrap().insert(0, json!(envelope));
+                Ok((200, json!(profile)))
+            }
+            ("GET", ["v1", "profiles", id, "events"]) => Ok((
+                200,
+                json!({"result":self.profiles.lock().unwrap().iter().filter(|e|e["event"]["actor"].as_str()==Some(id)).take(query(&request,"limit").and_then(|l|l.parse().ok()).unwrap_or(1)).cloned().collect::<Vec<_>>()}),
+            )),
             ("POST", ["v1", "mailboxes"]) => self
                 .relay
                 .lock()
@@ -274,6 +319,13 @@ impl Services {
         std::mem::take(&mut *self.requests.lock().unwrap())
     }
 
+    fn fixture(&self, path: &str, value: Value) {
+        self.fixtures
+            .lock()
+            .unwrap()
+            .insert(path.into(), (200, value.to_string()));
+    }
+
     fn connector(&self, seed: u8) -> LocalConnector {
         let mut connector =
             LocalConnector::new(AgentSigner::from_seed([seed; 32])).with_http_client(tls_client());
@@ -387,10 +439,20 @@ fn run<F: std::future::Future>(future: F) -> F::Output {
 }
 
 async fn call(connector: &mut LocalConnector, tool: &str, input: Value) -> Value {
-    connector
+    let value = connector
         .call_tool(tool, input)
         .await
-        .unwrap_or_else(|error| panic!("{tool}: {error}"))
+        .unwrap_or_else(|error| panic!("{tool}: {error}"));
+    let schema = standard_tool_definitions()
+        .into_iter()
+        .find(|t| t.name == tool)
+        .unwrap()
+        .output_schema;
+    jsonschema::validator_for(&schema)
+        .unwrap()
+        .validate(&value)
+        .unwrap_or_else(|error| panic!("{tool} output: {error}"));
+    value
 }
 
 async fn call_error(connector: &mut LocalConnector, tool: &str, input: Value) -> SdkError {
@@ -1007,5 +1069,418 @@ fn every_tool_reads_the_members_it_declares_required() {
                 }
             }
         }
+    });
+}
+
+#[test]
+fn profile_and_mail_discovery_support_complete_agent_workflows() {
+    run(async {
+        let services = Services::start();
+        let mut agent = services.connector(11);
+        let mut host = allowed(&services.origin);
+        host.profile_service = Some(services.origin.clone());
+        agent.add_host(host);
+        let identity = call(&mut agent, TOOL_IDENTITY_CURRENT, json!({})).await;
+        assert_eq!(identity["profiles"], json!([services.origin]));
+        let discovery = call(
+            &mut agent,
+            TOOL_SERVICES_LIST,
+            json!({"protocol":"agent-mail/1.0"}),
+        )
+        .await;
+        assert_eq!(discovery["services"][0]["service"], services.origin);
+        let mailbox = call(
+            &mut agent,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"routes":[services.origin]}),
+        )
+        .await;
+        let id = mailbox["mailbox"]["mailbox_id"].as_str().unwrap();
+        let profile = json!({"name":"Before","capabilities":["research"],"service_endpoints":[{"type":"agent-mail","url":format!("{}/v1/mailboxes/{id}/card",services.origin),"protocols":["agent-mail/1.0"]}]});
+        call(
+            &mut agent,
+            TOOL_PROFILE_UPDATE,
+            json!({"profile_service":services.origin,"profile":profile}),
+        )
+        .await;
+        let read = call(
+            &mut agent,
+            TOOL_PROFILES_GET,
+            json!({"profile_service":services.origin}),
+        )
+        .await;
+        let mut edit = read["profiles"][0].clone();
+        edit.as_object_mut().unwrap().remove("updated_at");
+        edit.as_object_mut().unwrap().remove("event_id");
+        edit["name"] = json!("After");
+        call(
+            &mut agent,
+            TOOL_PROFILE_UPDATE,
+            json!({"profile_service":services.origin,"profile":edit}),
+        )
+        .await;
+        let current = call(
+            &mut agent,
+            TOOL_PROFILES_GET,
+            json!({"profile_service":services.origin}),
+        )
+        .await;
+        assert_eq!(
+            current["profiles"][0]["capabilities"],
+            profile["capabilities"]
+        );
+        assert_eq!(
+            call(
+                &mut agent,
+                TOOL_PROFILE_HISTORY,
+                json!({"profile_service":services.origin})
+            )
+            .await["envelopes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let mut sender = services.connector(12);
+        let resolved = call(
+            &mut sender,
+            TOOL_MAIL_RESOLVE,
+            json!({"agent_id":agent.agent_id(),"profile_service":services.origin}),
+        )
+        .await;
+        assert_eq!(resolved["mailboxes"][0]["usable"], true);
+        assert_eq!(
+            resolved["mailboxes"][0]["address"],
+            mailbox["mailbox"]["address"]
+        );
+        call(
+            &mut sender,
+            TOOL_MAIL_SEND,
+            json!({"to":resolved["mailboxes"][0]["address"],"text":"Hello"}),
+        )
+        .await;
+        assert!(call(
+            &mut agent,
+            TOOL_INBOX_NEXT,
+            json!({"kinds":["mail.received"]})
+        )
+        .await["items"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let synced = call(&mut agent, TOOL_MAIL_SYNC, json!({})).await;
+        assert!(synced["synced_at"].as_i64().unwrap() > 0);
+        assert_eq!(synced["received"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            call(
+                &mut agent,
+                TOOL_INBOX_NEXT,
+                json!({"kinds":["mail.received"]})
+            )
+            .await["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    });
+}
+
+#[test]
+fn private_invitation_history_archive_and_watch_workflows() {
+    run(async {
+        use agent_protocols::discourse::{
+            build_server_record, discourse_event, redact_server_record, room_create_event,
+            RoomCreatePayload, Visibility,
+        };
+        let services = Services::start();
+        let signer = AgentSigner::from_seed([11; 32]);
+        let mut agent = services.connector(11);
+        let room_id = "room1";
+        let mut payload =
+            RoomCreatePayload::new(&services.origin, "Review", Visibility::Private, 1, 10000);
+        payload.types=Some(vec![serde_json::from_value(json!({"type":"review.signal","kind":"signal","title":"Review","schema":{"type":"object","required":["note"],"properties":{"note":{"type":"string"}}}})).unwrap()]);
+        let envelope = signer
+            .sign_event(room_create_event(signer.agent_id(), 100, 1, payload))
+            .unwrap();
+        let first = build_server_record(room_id, 1, None, 100, envelope.clone()).unwrap();
+        let mut records = vec![json!(first)];
+        for (index, (kind, payload)) in [
+            ("review.signal", json!({"note":"one"})),
+            ("room.close", json!({"reason":"done"})),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let seq = index as u64 + 2;
+            let e = signer
+                .sign_event(discourse_event(
+                    kind,
+                    signer.agent_id(),
+                    100 + seq as i64,
+                    seq,
+                    room_id,
+                    1,
+                    &first.hash,
+                    payload,
+                ))
+                .unwrap();
+            let r = build_server_record(
+                room_id,
+                seq,
+                Some(records.last().unwrap()["hash"].as_str().unwrap().into()),
+                100 + seq as i64,
+                e,
+            )
+            .unwrap();
+            records.push(json!(r));
+        }
+        let last = records.last().unwrap();
+        let room = json!({"id":room_id,"status":"ended","url":format!("{}/adp/rooms/{room_id}",services.origin),"creator":signer.agent_id(),"types":envelope.event.payload.types,"seq":last["seq"],"hash":last["hash"],"pre_hash":last["pre_hash"],"accepted_at":last["accepted_at"],"head":{"seq":last["seq"],"hash":last["hash"]},"envelope":envelope,"membership":"invited","role":"observer"});
+        services.fixture("/v1/me/rooms", json!({"result":[room]}));
+        services.fixture("/adp/rooms/room1", room.clone());
+        services.fixture("/adp/rooms/room1/events", json!({"result":records}));
+        let manifest = json!({"protocol":"agent-discourse/1.0","type":"room.archive","room_id":room_id,"url":room["url"],"generated_at":200,"last_seq":3,"last_hash":last["hash"],"formats":{"jsonl":format!("{}/adp/rooms/room1/archive.jsonl",services.origin)}});
+        services.fixture("/adp/rooms/room1/archive", manifest.clone());
+        let log = records
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        services
+            .fixtures
+            .lock()
+            .unwrap()
+            .insert("/adp/rooms/room1/archive.jsonl".into(), (200, log));
+        let mine = call(
+            &mut agent,
+            TOOL_ROOMS_LIST,
+            json!({"scope":"mine","host":services.origin,"membership":"invited"}),
+        )
+        .await;
+        assert_eq!(mine["rooms"][0]["membership"], "invited");
+        call(
+            &mut agent,
+            TOOL_ROOM_STATE,
+            json!({"host":services.origin,"room_id":room_id}),
+        )
+        .await;
+        call(
+            &mut agent,
+            TOOL_ROOM_WATCH,
+            json!({"room_id":room_id,"types":["review.signal"]}),
+        )
+        .await;
+        let mut snapshot = agent.snapshot().unwrap();
+        snapshot["rooms"][0]["records"] = json!([records[2]]);
+        snapshot["rooms"][0]["timeline"] = json!([snapshot["rooms"][0]["timeline"][2]]);
+        let mut restored = LocalConnector::from_snapshot(signer, &snapshot)
+            .unwrap()
+            .with_http_client(tls_client());
+        assert_eq!(
+            call(&mut restored, TOOL_ROOM_WATCH, json!({"room_id":room_id})).await["types"],
+            json!(["review.signal"])
+        );
+        assert_eq!(
+            call(
+                &mut restored,
+                TOOL_ROOM_TIMELINE,
+                json!({"room_id":room_id})
+            )
+            .await["history"]["truncated"],
+            true
+        );
+        let before = restored.snapshot().unwrap();
+        let history = call(
+            &mut restored,
+            TOOL_ROOM_TIMELINE,
+            json!({"room_id":room_id,"source":"remote","before_seq":3}),
+        )
+        .await;
+        assert_eq!(history["items"].as_array().unwrap().len(), 2);
+        assert_eq!(restored.snapshot().unwrap(), before);
+        assert_eq!(
+            call(&mut restored, TOOL_ROOM_ARCHIVE, json!({"room_id":room_id})).await
+                ["state_verified"],
+            true
+        );
+        let signed = serde_json::from_value(records[1].clone()).unwrap();
+        let mut redacted = records.clone();
+        redacted[1] = json!(redact_server_record(&signed).unwrap());
+        services.fixtures.lock().unwrap().insert(
+            "/adp/rooms/room1/archive.jsonl".into(),
+            (
+                200,
+                redacted
+                    .iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        );
+        assert_eq!(
+            call(&mut restored, TOOL_ROOM_ARCHIVE, json!({"room_id":room_id})).await
+                ["state_verified"],
+            false
+        );
+        let mut wrong = manifest;
+        wrong["last_hash"] = json!("bad");
+        services.fixture("/adp/rooms/room1/archive", wrong);
+        assert!(restored
+            .call_tool(TOOL_ROOM_ARCHIVE, json!({"room_id":room_id}))
+            .await
+            .is_err());
+    });
+}
+
+#[test]
+fn delegation_pagination_and_controller_enumeration() {
+    run(async {
+        use agent_protocols::delegation::{
+            delegation_grant_event, materialize_delegation_credential, DelegationGrantPayload,
+            DelegationPayload, DelegationStatus,
+        };
+        let services = Services::start();
+        let controller = AgentSigner::from_seed([11; 32]);
+        let subject = AgentSigner::from_seed([12; 32]);
+        let mut agent = services.connector(11);
+        let principal_id = format!("{}/principal", services.origin);
+        services.fixture("/principal",json!({"protocol":"agent-delegation/1.0","id":principal_id,"type":"organization","updated_at":100,"controllers":[{"id":controller.agent_id(),"source":"local","valid_from":0,"delegation":{"scopes":["read"],"audiences":[services.origin]}}],"delegation_service":services.origin}));
+        let payload = DelegationGrantPayload::new(
+            "del",
+            &principal_id,
+            subject.agent_id(),
+            vec!["read".into()],
+            vec![services.origin.clone()],
+        );
+        let grant = controller
+            .sign_event(delegation_grant_event(
+                controller.agent_id(),
+                100,
+                1,
+                payload,
+            ))
+            .unwrap();
+        let envelope: agent_protocols::identity::Envelope<DelegationPayload> =
+            serde_json::from_value(json!(grant)).unwrap();
+        let credential =
+            materialize_delegation_credential(&envelope, DelegationStatus::Active, 101, None)
+                .unwrap();
+        services.fixture(
+            "/v1/delegations/query",
+            json!({"result":[],"next_cursor":"second"}),
+        );
+        services.fixture(
+            "/v1/delegations/query?cursor=second",
+            json!({"result":[credential]}),
+        );
+        services.fixture("/v1/delegations/del", json!(credential));
+        services.fixture(
+            "/v1/delegations/del/events",
+            json!({"result":[{"envelope":envelope,"accepted_at":101}]}),
+        );
+        let mut input = json!({"principal_id":principal_id,"subject":subject.agent_id(),"audience":services.origin});
+        let first = call(&mut agent, TOOL_DELEGATION_CHECK, input.clone()).await;
+        assert_eq!(first["complete"], false);
+        input["cursor"] = first["next_cursor"].clone();
+        let second = call(&mut agent, TOOL_DELEGATION_CHECK, input).await;
+        assert_eq!(second["complete"], true);
+        assert_eq!(second["delegations"][0]["usable"], true);
+        services.fixture("/v1/delegations/query", json!({"result":[credential]}));
+        let listed = call(
+            &mut agent,
+            TOOL_DELEGATIONS_LIST,
+            json!({"principal_id":principal_id}),
+        )
+        .await;
+        assert_eq!(
+            listed["delegations"][0]["subject"],
+            json!(subject.agent_id())
+        );
+        let query = services.queries.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(query["principal_id"], principal_id);
+        assert!(query.get("subject").is_none());
+        assert_eq!(
+            call(
+                &mut agent,
+                TOOL_DELEGATION_HISTORY,
+                json!({"principal_id":principal_id,"id":"del"})
+            )
+            .await["signatures_verified"],
+            true
+        );
+        let mut outside = json!(credential);
+        outside["scopes"] = json!(["admin"]);
+        services.fixture("/v1/delegations/query", json!({"result":[outside]}));
+        assert_eq!(
+            call_error(
+                &mut agent,
+                TOOL_DELEGATIONS_LIST,
+                json!({"principal_id":principal_id})
+            )
+            .await
+            .code(),
+            Some("permission_denied")
+        );
+    });
+}
+
+#[test]
+fn archive_pack_metadata_cannot_replace_signed_import_digest() {
+    run(async {
+        use agent_protocols::discourse::{
+            build_server_record, discourse_event, room_create_event, RoomCreatePayload, Visibility,
+        };
+        let services = Services::start();
+        let signer = AgentSigner::from_seed([11; 32]);
+        let mut agent = services.connector(11);
+        let pack = format!("{}/pack.json", services.origin);
+        let mut payload =
+            RoomCreatePayload::new(&services.origin, "Pack", Visibility::Public, 1, 10000);
+        payload.types = Some(vec![serde_json::from_value(
+            json!({"pack":pack,"digest":"A".repeat(43)}),
+        )
+        .unwrap()]);
+        let envelope = signer
+            .sign_event(room_create_event(signer.agent_id(), 100, 1, payload))
+            .unwrap();
+        let first = build_server_record("room1", 1, None, 100, envelope).unwrap();
+        let last = build_server_record(
+            "room1",
+            2,
+            Some(first.hash.clone()),
+            101,
+            signer
+                .sign_event(discourse_event(
+                    "room.close",
+                    signer.agent_id(),
+                    101,
+                    2,
+                    "room1",
+                    1,
+                    &first.hash,
+                    json!({}),
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+        services.fixture("/adp/rooms/room1/archive",json!({"protocol":"agent-discourse/1.0","type":"room.archive","room_id":"room1","url":format!("{}/adp/rooms/room1",services.origin),"generated_at":102,"last_seq":2,"last_hash":last.hash,"formats":{"jsonl":format!("{}/log",services.origin)},"packs":[{"pack":pack,"digest":"B".repeat(43),"url":format!("{}/forged-pack",services.origin)}]}));
+        services.fixtures.lock().unwrap().insert(
+            "/log".into(),
+            (200, format!("{}\n{}", json!(first), json!(last))),
+        );
+        let error = call_error(
+            &mut agent,
+            TOOL_ROOM_ARCHIVE,
+            json!({"room_id":"room1","host":services.origin}),
+        )
+        .await;
+        assert!(error.to_string().contains("signed import"));
+        assert!(!services
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.ends_with("/forged-pack")));
     });
 }

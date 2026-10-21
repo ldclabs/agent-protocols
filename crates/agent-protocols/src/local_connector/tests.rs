@@ -160,6 +160,7 @@ fn members_input(status: Option<MemberStatusFilter>) -> RoomMembersListInput {
 
 fn timeline_input() -> RoomTimelineInput {
     RoomTimelineInput {
+        source: None,
         room_id: "room1".to_owned(),
         host: None,
         after_seq: None,
@@ -1204,4 +1205,60 @@ fn blocked_senders_are_replaced_as_a_whole() {
         connector.snapshot().unwrap()["mail"]["blocked_senders"],
         json!([signer(3).agent_id()])
     );
+}
+
+#[test]
+fn catalog_and_shared_input_vectors_match_the_normative_artifacts() {
+    let catalog: Value = serde_json::from_str(include_str!(
+        "../../../../docs/mcp/local-connector/1.0.tools.json"
+    ))
+    .unwrap();
+    assert_eq!(super::catalog::catalog_data()["tools"], catalog);
+    let vectors: Value = serde_json::from_str(include_str!(
+        "../../../../docs/mcp/local-connector/1.0.vectors.json"
+    ))
+    .unwrap();
+    for case in vectors["cases"].as_array().unwrap() {
+        assert_eq!(
+            super::catalog::validate_tool_input(case["tool"].as_str().unwrap(), &case["input"])
+                .is_ok(),
+            case["valid"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+    }
+    for tool in standard_tool_definitions() {
+        assert!(
+            !tool.output_schema["properties"]
+                .as_object()
+                .unwrap()
+                .is_empty(),
+            "{}",
+            tool.name
+        );
+    }
+}
+
+#[test]
+fn custom_watch_survives_restart_and_enqueues_only_matching_records() {
+    let creator = signer(1);
+    let mut connector = connector_with_room(2, &creator);
+    define_type(&mut connector, signal_type("review.signal"));
+    block_on(connector.call_tool(
+        TOOL_ROOM_WATCH,
+        json!({"room_id":"room1","types":["review.signal"]}),
+    ))
+    .unwrap();
+    let snapshot = connector.snapshot().unwrap();
+    let mut restored = LocalConnector::from_snapshot(signer(2), &snapshot).unwrap();
+    assert_eq!(
+        block_on(restored.call_tool(TOOL_ROOM_WATCH, json!({"room_id":"room1"}))).unwrap()["types"],
+        json!(["review.signal"])
+    );
+    let r = record(&creator, "review.signal", 2, 1, HEAD, 2, HEAD, json!({}));
+    restored.apply_record(r).unwrap();
+    let inbox =
+        block_on(restored.call_tool(TOOL_INBOX_NEXT, json!({"kinds":["room.event.custom"]})))
+            .unwrap();
+    assert_eq!(inbox["items"].as_array().unwrap().len(), 1);
 }

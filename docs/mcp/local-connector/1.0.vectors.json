@@ -1,0 +1,232 @@
+{
+  "description": "Local Connector tool input schema cases. Conditional workflow and cryptographic requirements are verified by SDK integration tests.",
+  "cases": [
+    {
+      "name": "profile complete writable fields",
+      "tool": "agent_protocols_profile_update",
+      "input": {
+        "profile_service": "https://profiles.example",
+        "profile": {
+          "name": "Agent",
+          "capabilities": [
+            "research"
+          ],
+          "links": [
+            {
+              "name": "Home",
+              "url": "https://example.com",
+              "rel": "homepage"
+            }
+          ]
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "profile name required",
+      "tool": "agent_protocols_profile_update",
+      "input": {
+        "profile_service": "https://profiles.example",
+        "profile": {
+          "description": "Only a patch"
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "profile derived fields refused",
+      "tool": "agent_protocols_profile_update",
+      "input": {
+        "profile_service": "https://profiles.example",
+        "profile": {
+          "name": "Agent",
+          "updated_at": 100
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "profile nested endpoint required members",
+      "tool": "agent_protocols_profile_update",
+      "input": {
+        "profile_service": "https://profiles.example",
+        "profile": {
+          "name": "Agent",
+          "service_endpoints": [
+            {
+              "type": "agent-mail"
+            }
+          ]
+        }
+      },
+      "valid": false
+    },
+    {
+      "name": "profile self read",
+      "tool": "agent_protocols_profiles_get",
+      "input": {
+        "profile_service": "https://profiles.example"
+      },
+      "valid": true
+    },
+    {
+      "name": "empty explicit profile batch refused",
+      "tool": "agent_protocols_profiles_get",
+      "input": {
+        "profile_service": "https://profiles.example",
+        "ids": []
+      },
+      "valid": false
+    },
+    {
+      "name": "service discovery",
+      "tool": "agent_protocols_services_list",
+      "input": {
+        "protocol": "agent-mail/1.0"
+      },
+      "valid": true
+    },
+    {
+      "name": "unknown service protocol",
+      "tool": "agent_protocols_services_list",
+      "input": {
+        "protocol": "smtp"
+      },
+      "valid": false
+    },
+    {
+      "name": "mailbox create",
+      "tool": "agent_protocols_mail_mailbox_publish",
+      "input": {
+        "routes": [
+          "https://relay.example"
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "mailbox close shape",
+      "tool": "agent_protocols_mail_mailbox_publish",
+      "input": {
+        "mailbox_id": "AAECAwQFBgcICQoLDA0ODw",
+        "routes": []
+      },
+      "valid": true
+    },
+    {
+      "name": "mailbox packet limit",
+      "tool": "agent_protocols_mail_mailbox_publish",
+      "input": {
+        "routes": [
+          "https://relay.example"
+        ],
+        "max_packet_bytes": 1
+      },
+      "valid": false
+    },
+    {
+      "name": "my invitations",
+      "tool": "agent_protocols_rooms_list",
+      "input": {
+        "scope": "mine",
+        "host": "https://rooms.example",
+        "membership": "invited"
+      },
+      "valid": true
+    },
+    {
+      "name": "remote old history",
+      "tool": "agent_protocols_room_timeline",
+      "input": {
+        "room_id": "room1",
+        "source": "remote",
+        "before_seq": 20
+      },
+      "valid": true
+    },
+    {
+      "name": "unknown history source",
+      "tool": "agent_protocols_room_timeline",
+      "input": {
+        "room_id": "room1",
+        "source": "other"
+      },
+      "valid": false
+    },
+    {
+      "name": "controller enumeration",
+      "tool": "agent_protocols_delegations_list",
+      "input": {
+        "principal_id": "https://principal.example/alice"
+      },
+      "valid": true
+    },
+    {
+      "name": "delegation pagination",
+      "tool": "agent_protocols_delegation_check",
+      "input": {
+        "principal_id": "https://principal.example/alice",
+        "audience": "https://app.example",
+        "cursor": "page2",
+        "limit": 20
+      },
+      "valid": true
+    },
+    {
+      "name": "watch custom events",
+      "tool": "agent_protocols_room_watch",
+      "input": {
+        "room_id": "room1",
+        "types": [
+          "review.signal"
+        ]
+      },
+      "valid": true
+    },
+    {
+      "name": "duplicate watch",
+      "tool": "agent_protocols_room_watch",
+      "input": {
+        "room_id": "room1",
+        "types": [
+          "review.signal",
+          "review.signal"
+        ]
+      },
+      "valid": false
+    },
+    {
+      "name": "knowledge nested complete",
+      "tool": "agent_protocols_knowledge_submit",
+      "input": {
+        "services": [
+          "https://knowledge.example"
+        ],
+        "type": "knowledge.publish",
+        "payload": {
+          "license": "https://creativecommons.org/licenses/by/4.0/",
+          "kind": "observation",
+          "title": "A",
+          "statement": "B",
+          "language": "en",
+          "context": {
+            "scope": "test",
+            "conditions": [],
+            "limitations": []
+          },
+          "basis": "Observed"
+        }
+      },
+      "valid": true
+    },
+    {
+      "name": "schema lookup",
+      "tool": "agent_protocols_schema_get",
+      "input": {
+        "protocol": "agent-discourse/1.0",
+        "type": "room.update"
+      },
+      "valid": true
+    }
+  ]
+}

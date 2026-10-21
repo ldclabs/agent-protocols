@@ -318,6 +318,7 @@ impl LocalConnector {
             "expired": expired,
             "queued": queued,
             "errors": errors,
+            "synced_at": unix_ms(),
             "pending_inbox_count": self.pending_inbox_count(None)
         }))
     }

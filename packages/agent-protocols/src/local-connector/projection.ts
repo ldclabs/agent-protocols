@@ -36,7 +36,9 @@ import type {
 
 /** Type of a record's event, including a redacted record's kept type. */
 export function recordType(record: ArchiveRecord): string {
-  return isRedactedRecord(record) ? record.envelope.type : record.envelope.event.type;
+  return isRedactedRecord(record)
+    ? record.envelope.type
+    : record.envelope.event.type;
 }
 
 export function recordAdvancesRoomHead(
@@ -67,8 +69,14 @@ export function eventTypeRequiresRoomHead(
  * Section 5.1 head check against the verified local head: the base is the
  * head itself or a later record.
  */
-export function baseIsCurrent(room: LocalRoomState, base: readonly [number, string]): boolean {
-  return base[0] > room.headSeq || (base[0] === room.headSeq && base[1] === room.headHash);
+export function baseIsCurrent(
+  room: LocalRoomState,
+  base: readonly [number, string],
+): boolean {
+  return (
+    base[0] > room.headSeq ||
+    (base[0] === room.headSeq && base[1] === room.headHash)
+  );
 }
 
 export function materializeCreator(room: LocalRoomState): void {
@@ -186,7 +194,9 @@ export function validateRecordBasePrecondition(
   }
   if (baseSeq === room.headSeq) {
     if (room.headHash !== baseHash) {
-      throw invalidPayload("record base_hash does not match the anchored record");
+      throw invalidPayload(
+        "record base_hash does not match the anchored record",
+      );
     }
     return;
   }
@@ -205,6 +215,10 @@ export function applyRecordProjection(
 ): void {
   if (isRedactedRecord(record)) return;
   const event = record.envelope.event;
+  if ((room.watch_types ?? []).includes(event.type))
+    inbox.push(
+      inboxFromItem("room.event.custom", "normal", item, "watched_type", false),
+    );
   switch (event.type) {
     case eventType.ROOM_JOIN: {
       const payload = event.payload as RoomJoinPayload;
@@ -423,7 +437,8 @@ function activeTurnFromItem(item: TimelineItem): ActiveTurn | undefined {
   if (!isRecord(payload)) return undefined;
   const speaker = payload.speaker;
   const turnId = payload.turn_id;
-  if (typeof speaker !== "string" || typeof turnId !== "number") return undefined;
+  if (typeof speaker !== "string" || typeof turnId !== "number")
+    return undefined;
   return {
     turn_id: turnId,
     speaker,
@@ -437,7 +452,10 @@ function activeTurnFromItem(item: TimelineItem): ActiveTurn | undefined {
 }
 
 /** A steer addresses every member when its `mentions` are empty, and otherwise only the mentioned agents. */
-function steerTargetsAgent(mentions: readonly AgentId[], activeAgent: AgentId): boolean {
+function steerTargetsAgent(
+  mentions: readonly AgentId[],
+  activeAgent: AgentId,
+): boolean {
   return mentions.length === 0 || mentions.includes(activeAgent);
 }
 

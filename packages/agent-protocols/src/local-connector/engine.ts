@@ -9,6 +9,12 @@
 // sibling submodules.
 
 import {
+  packMap,
+  verifyPackDigest,
+  verifyArchiveRecords,
+  type ArchiveManifest,
+  type Pack,
+  type PackDocument,
   AgentStatus,
   AgentStatusInput,
   ArchiveRecord,
@@ -78,6 +84,7 @@ import {
   mailboxPublishEvent,
   mailTextPart,
   newMailId,
+  formatMailAddress,
   parseMailAddress,
   sealMailPacket,
   validateMailboxCard,
@@ -98,18 +105,34 @@ import {
   delegationGrantEvent,
   delegationRevokeEvent,
   isPrincipalAlias,
+  controllerCoversCredential,
+  validateDelegationEnvelope,
   validateDelegationEventAuthority,
   verifyDelegationCredential,
 } from "../delegation.js";
 import {
   AgentProfile,
   ProfileUpdatePayload,
+  materializeProfile,
   profileUpdateEvent,
 } from "../profile.js";
 import { Validator, type Schema } from "@cfworker/json-schema";
+import { replayHistory, referencedPacks } from "./history.js";
+import { CONNECTOR_CATALOG } from "./catalog-data.js";
 import { KNOWLEDGE_SCHEMA } from "../knowledge-schema.js";
 
 import {
+  standardToolDefinitions,
+  validateToolInput,
+  payloadSchema,
+  TOOL_SERVICES_LIST,
+  TOOL_PROFILES_GET,
+  TOOL_PROFILE_HISTORY,
+  TOOL_DELEGATION_HISTORY,
+  TOOL_MAIL_RESOLVE,
+  TOOL_SCHEMA_GET,
+  TOOL_ROOM_ARCHIVE,
+  TOOL_ROOM_WATCH,
   TOOL_AGENT_STATUS_LIST,
   TOOL_AGENT_STATUS_SET,
   TOOL_DELEGATIONS_LIST,
@@ -151,6 +174,14 @@ import {
   permissionDenied,
 } from "./internal.js";
 import {
+  ServicesListInput,
+  ProfilesGetInput,
+  ProfileHistoryInput,
+  DelegationHistoryInput,
+  MailResolveInput,
+  SchemaGetInput,
+  RoomArchiveInput,
+  RoomWatchInput,
   AgentStatusListInput,
   AgentStatusSetInput,
   DelegationCheckInput,
@@ -268,7 +299,19 @@ const PAYLOAD_DEFINITIONS: Record<string, string> = {
   "knowledge.retract": "retractPayload",
 };
 /** Keywords that only report errors found below them. */
-const WRAPPER_KEYWORDS = new Set(["$ref", "properties", "items", "prefixItems", "allOf", "anyOf", "oneOf", "if", "then", "else", "false"]);
+const WRAPPER_KEYWORDS = new Set([
+  "$ref",
+  "properties",
+  "items",
+  "prefixItems",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "if",
+  "then",
+  "else",
+  "false",
+]);
 const payloadValidators = new Map<string, Validator>();
 
 /**
@@ -281,22 +324,41 @@ function validatePayload(type: string, payload: unknown): void {
   const definition = PAYLOAD_DEFINITIONS[type];
   let validator = payloadValidators.get(definition);
   if (!validator) {
-    validator = new Validator({ $ref: `#/$defs/${definition}`, $defs: KNOWLEDGE_SCHEMA.$defs } as Schema, "2020-12", false);
+    validator = new Validator(
+      {
+        $ref: `#/$defs/${definition}`,
+        $defs: KNOWLEDGE_SCHEMA.$defs,
+      } as Schema,
+      "2020-12",
+      false,
+    );
     payloadValidators.set(definition, validator);
   }
   const reported = validator.validate(payload).errors;
   // A declared member that fails its own schema is also reported as an
   // additional property; only an undeclared one is.
-  const member = (error: { instanceLocation: string; error: string }) => `${error.instanceLocation} ${/"(.*)"/.exec(error.error)?.[1]}`;
-  const failed = new Set(reported.filter((e) => e.keyword === "properties").map(member));
+  const member = (error: { instanceLocation: string; error: string }) =>
+    `${error.instanceLocation} ${/"(.*)"/.exec(error.error)?.[1]}`;
+  const failed = new Set(
+    reported.filter((e) => e.keyword === "properties").map(member),
+  );
   const errors = reported
     .filter((e) => !WRAPPER_KEYWORDS.has(e.keyword))
-    .filter((e) => e.keyword !== "additionalProperties" || !failed.has(member(e)))
+    .filter(
+      (e) => e.keyword !== "additionalProperties" || !failed.has(member(e)),
+    )
     .slice(0, MAX_PAYLOAD_ERRORS)
-    .map((e) => ({ path: e.instanceLocation.replace(/^#/, ""), message: e.error }));
+    .map((e) => ({
+      path: e.instanceLocation.replace(/^#/, ""),
+      message: e.error,
+    }));
   if (errors.length === 0) return;
-  const listed = errors.map((e) => (e.path ? `${e.path}: ${e.message}` : e.message)).join("; ");
-  throw protocolError("invalid_event", `${type} payload: ${listed}`, { errors });
+  const listed = errors
+    .map((e) => (e.path ? `${e.path}: ${e.message}` : e.message))
+    .join("; ");
+  throw protocolError("invalid_event", `${type} payload: ${listed}`, {
+    errors,
+  });
 }
 
 function roomKeyString(key: RoomKey): string {
@@ -333,6 +395,7 @@ function roomToSnapshot(room: LocalRoomState): LocalRoomSnapshot {
     synced_seq: room.syncedSeq,
     synced_hash: room.syncedHash,
     subscribed: room.subscribed,
+    watch_types: room.watch_types,
     members: Object.fromEntries(room.members),
     timeline: room.timeline,
     records: room.records,
@@ -352,6 +415,7 @@ function roomFromSnapshot(room: LocalRoomSnapshot): LocalRoomState {
     syncedSeq: room.synced_seq,
     syncedHash: room.synced_hash,
     subscribed: room.subscribed,
+    watch_types: room.watch_types,
     members: new Map(Object.entries(room.members)),
     timeline: room.timeline,
     records: room.records,
@@ -367,16 +431,23 @@ function unreadCount(room: LocalRoomState): number {
 /** Forgets the oldest records and timeline items beyond {@link ROOM_HISTORY_LIMIT}. The synced and head positions stay. */
 function trimHistory(room: LocalRoomState): void {
   room.records.splice(0, Math.max(0, room.records.length - ROOM_HISTORY_LIMIT));
-  room.timeline.splice(0, Math.max(0, room.timeline.length - ROOM_HISTORY_LIMIT));
+  room.timeline.splice(
+    0,
+    Math.max(0, room.timeline.length - ROOM_HISTORY_LIMIT),
+  );
 }
 
 /** Forgets inbox entries beyond {@link INBOX_LIMIT}: acknowledged ones first, then the oldest. */
 function trimInbox(inbox: Map<string, InboxEntry>): void {
   const excess = inbox.size - INBOX_LIMIT;
   if (excess <= 0) return;
-  const open = (entry: InboxEntry) => Number(entry.state.kind !== "acknowledged");
+  const open = (entry: InboxEntry) =>
+    Number(entry.state.kind !== "acknowledged");
   const order = [...inbox].sort(
-    ([aId, a], [bId, b]) => open(a) - open(b) || a.item.created_at - b.item.created_at || compareStrings(aId, bId),
+    ([aId, a], [bId, b]) =>
+      open(a) - open(b) ||
+      a.item.created_at - b.item.created_at ||
+      compareStrings(aId, bId),
   );
   for (const [id] of order.slice(0, excess)) inbox.delete(id);
 }
@@ -484,7 +555,11 @@ function parseCursor(cursor: string | undefined): number {
 }
 
 /** Offset-cursor page over a sorted list, with `next_cursor` when more follow. */
-function page<T>(items: T[], cursor: string | undefined, limit: number): { items: T[]; next_cursor?: string } {
+function page<T>(
+  items: T[],
+  cursor: string | undefined,
+  limit: number,
+): { items: T[]; next_cursor?: string } {
   const offset = parseCursor(cursor);
   const slice = items.slice(offset, offset + limit);
   return offset + limit < items.length
@@ -556,16 +631,39 @@ export class LocalConnector {
   ): LocalConnector {
     const doc = JSON.parse(JSON.stringify(snapshot)) as LocalConnectorSnapshot;
     if (!isRecord(doc) || doc.version !== LOCAL_CONNECTOR_SNAPSHOT_VERSION) {
-      throw protocolError("invalid_request", "unsupported local connector snapshot version");
+      throw protocolError(
+        "invalid_request",
+        "unsupported local connector snapshot version",
+      );
     }
     if (doc.agent_id !== signer.agentId()) {
-      throw protocolError("invalid_request", "local connector snapshot belongs to another Agent ID");
+      throw protocolError(
+        "invalid_request",
+        "local connector snapshot belongs to another Agent ID",
+      );
     }
     const maps = [doc.hosts, doc.profiles, doc.inbox, doc.drafts, doc.mail];
-    const lists = [doc.rooms, doc.join_requests, doc.own_join_requests, doc.agent_statuses];
-    const mail = [doc.mail?.mailboxes, doc.mail?.pins, doc.mail?.blocked_senders, doc.mail?.messages];
-    if (!maps.every(isRecord) || !lists.every(Array.isArray) || !mail.every(Array.isArray)) {
-      throw protocolError("invalid_request", "malformed local connector snapshot");
+    const lists = [
+      doc.rooms,
+      doc.join_requests,
+      doc.own_join_requests,
+      doc.agent_statuses,
+    ];
+    const mail = [
+      doc.mail?.mailboxes,
+      doc.mail?.pins,
+      doc.mail?.blocked_senders,
+      doc.mail?.messages,
+    ];
+    if (
+      !maps.every(isRecord) ||
+      !lists.every(Array.isArray) ||
+      !mail.every(Array.isArray)
+    ) {
+      throw protocolError(
+        "invalid_request",
+        "malformed local connector snapshot",
+      );
     }
     const nonces = new ClientNonceManager(doc.next_nonce);
     const state = new LocalConnectorState();
@@ -573,14 +671,23 @@ export class LocalConnector {
     for (const room of doc.rooms) {
       const restored = roomFromSnapshot(room);
       trimHistory(restored);
-      state.rooms.set(roomKeyString({ host: room.host, roomId: room.room.id }), restored);
+      state.rooms.set(
+        roomKeyString({ host: room.host, roomId: room.room.id }),
+        restored,
+      );
     }
     state.profiles = new Map(Object.entries(doc.profiles));
     for (const entry of doc.join_requests) {
-      state.joinRequests.set(roomKeyString({ host: entry.host, roomId: entry.room_id }), entry.requests);
+      state.joinRequests.set(
+        roomKeyString({ host: entry.host, roomId: entry.room_id }),
+        entry.requests,
+      );
     }
     for (const entry of doc.own_join_requests) {
-      state.ownJoinRequests.set(roomKeyString({ host: entry.host, roomId: entry.room_id }), entry.request);
+      state.ownJoinRequests.set(
+        roomKeyString({ host: entry.host, roomId: entry.room_id }),
+        entry.request,
+      );
     }
     for (const entry of doc.agent_statuses) {
       state.agentStatuses.set(
@@ -591,7 +698,8 @@ export class LocalConnector {
     state.inbox = new Map(Object.entries(doc.inbox));
     trimInbox(state.inbox);
     state.drafts = new Map(Object.entries(doc.drafts));
-    for (const box of doc.mail.mailboxes) state.mail.mailboxes.set(box.mailbox_id, box.cards);
+    for (const box of doc.mail.mailboxes)
+      state.mail.mailboxes.set(box.mailbox_id, box.cards);
     state.mail.pins = new MailCardCache({ version: 1, pins: doc.mail.pins });
     state.mail.blockedSenders = new Set(doc.mail.blocked_senders);
     state.mail.messages = doc.mail.messages;
@@ -617,8 +725,13 @@ export class LocalConnector {
       hosts: Object.fromEntries(this.state.hosts),
       rooms: [...this.state.rooms.values()].map(roomToSnapshot),
       profiles: Object.fromEntries(this.state.profiles),
-      join_requests: [...this.state.joinRequests].map(([key, requests]) => ({ ...roomKeyFromString(key), requests })),
-      own_join_requests: [...this.state.ownJoinRequests].map(([key, request]) => ({ ...roomKeyFromString(key), request })),
+      join_requests: [...this.state.joinRequests].map(([key, requests]) => ({
+        ...roomKeyFromString(key),
+        requests,
+      })),
+      own_join_requests: [...this.state.ownJoinRequests].map(
+        ([key, request]) => ({ ...roomKeyFromString(key), request }),
+      ),
       agent_statuses: [...this.state.agentStatuses].map(([key, statuses]) => ({
         ...roomKeyFromString(key),
         statuses: Object.fromEntries(statuses),
@@ -630,7 +743,9 @@ export class LocalConnector {
           .sort((a, b) => compareStrings(a[0], b[0]))
           .map(([mailbox_id, cards]) => ({ mailbox_id, cards })),
         pins: this.state.mail.pins.snapshot().pins,
-        blocked_senders: [...this.state.mail.blockedSenders].sort(compareStrings),
+        blocked_senders: [...this.state.mail.blockedSenders].sort(
+          compareStrings,
+        ),
         messages: this.state.mail.messages,
       },
     };
@@ -643,26 +758,51 @@ export class LocalConnector {
    * the key store, apart from {@link LocalConnector.snapshot}; save it after a
    * mailbox publish and restore it with {@link LocalConnector.restoreMailKeys}.
    */
-  mailKeysSnapshot(): { version: 1; agent_id: AgentId; keys: Record<string, string> } {
+  mailKeysSnapshot(): {
+    version: 1;
+    agent_id: AgentId;
+    keys: Record<string, string>;
+  } {
     const keys: Record<string, string> = {};
-    for (const [publicKey, key] of [...this.mailKeys.entries()].sort((a, b) => compareStrings(a[0], b[0]))) {
+    for (const [publicKey, key] of [...this.mailKeys.entries()].sort((a, b) =>
+      compareStrings(a[0], b[0]),
+    )) {
       keys[publicKey] = base64UrlEncode(key.exportSecret());
     }
     return { version: 1, agent_id: this.agentId(), keys };
   }
 
   /** Restores {@link LocalConnector.mailKeysSnapshot}; every secret must match its public key. */
-  restoreMailKeys(value: { version: number; agent_id: AgentId; keys: Record<string, string> }): void {
-    if (!isRecord(value) || value.version !== 1 || value.agent_id !== this.agentId() || !isRecord(value.keys)) {
-      throw protocolError("invalid_request", "mail keys belong to another version or Agent ID");
+  restoreMailKeys(value: {
+    version: number;
+    agent_id: AgentId;
+    keys: Record<string, string>;
+  }): void {
+    if (
+      !isRecord(value) ||
+      value.version !== 1 ||
+      value.agent_id !== this.agentId() ||
+      !isRecord(value.keys)
+    ) {
+      throw protocolError(
+        "invalid_request",
+        "mail keys belong to another version or Agent ID",
+      );
     }
     for (const [publicKey, secret] of Object.entries(value.keys)) {
-      const bytes = typeof secret === "string" ? base64UrlDecodeCanonical(secret) : undefined;
-      if (bytes === undefined) throw protocolError("invalid_private_key", "malformed mail key");
+      const bytes =
+        typeof secret === "string"
+          ? base64UrlDecodeCanonical(secret)
+          : undefined;
+      if (bytes === undefined)
+        throw protocolError("invalid_private_key", "malformed mail key");
       const key = MailEncryptionKey.fromBytes(bytes);
       bytes.fill(0);
       if (key.publicKey() !== publicKey) {
-        throw protocolError("invalid_private_key", "mail key does not match its public key");
+        throw protocolError(
+          "invalid_private_key",
+          "mail key does not match its public key",
+        );
       }
       this.mailKeys.set(publicKey, key);
     }
@@ -750,7 +890,10 @@ export class LocalConnector {
     applyRecordProjection(room, record, item, activeAgent, newInbox);
 
     let clearedStatus: AgentId | undefined;
-    if (!isRedactedRecord(record) && record.envelope.event.type === eventType.ROOM_MEMBER_REMOVE) {
+    if (
+      !isRedactedRecord(record) &&
+      record.envelope.event.type === eventType.ROOM_MEMBER_REMOVE
+    ) {
       const payload = record.envelope.event.payload as RoomMemberRemovePayload;
       clearedStatus = payload?.member;
     }
@@ -772,10 +915,7 @@ export class LocalConnector {
     for (const inboxItem of newInbox) this.insertInbox(inboxItem);
   }
 
-  private resolveRoomKey(
-    host: string | undefined,
-    roomId: string,
-  ): RoomKey {
+  private resolveRoomKey(host: string | undefined, roomId: string): RoomKey {
     if (host !== undefined) return { host: normalizeHost(host), roomId };
     const hosts = [...this.state.rooms.values()]
       .filter((room) => room.room.id === roomId)
@@ -790,7 +930,25 @@ export class LocalConnector {
   }
 
   async callTool(name: string, input: unknown): Promise<unknown> {
+    input ??= {};
+    validateToolInput(name, input);
     switch (name) {
+      case TOOL_SERVICES_LIST:
+        return this.servicesList(input as ServicesListInput);
+      case TOOL_PROFILES_GET:
+        return this.profilesGet(input as ProfilesGetInput);
+      case TOOL_PROFILE_HISTORY:
+        return this.profileHistory(input as ProfileHistoryInput);
+      case TOOL_DELEGATION_HISTORY:
+        return this.delegationHistory(input as DelegationHistoryInput);
+      case TOOL_MAIL_RESOLVE:
+        return this.mailResolve(input as MailResolveInput);
+      case TOOL_SCHEMA_GET:
+        return this.schemaGet(input as SchemaGetInput);
+      case TOOL_ROOM_ARCHIVE:
+        return this.roomArchive(input as RoomArchiveInput);
+      case TOOL_ROOM_WATCH:
+        return this.roomWatch(input as RoomWatchInput);
       case TOOL_IDENTITY_CURRENT:
         return this.identityCurrent();
       case TOOL_PRINCIPAL_RESOLVE:
@@ -862,25 +1020,517 @@ export class LocalConnector {
     }
   }
 
+  private async servicesList(input: ServicesListInput): Promise<unknown> {
+    const origins = input.host
+      ? [input.host]
+      : [
+          ...new Set(
+            this.sortedHosts()
+              .filter((h) => h.allowed)
+              .flatMap((h) => [
+                h.host,
+                ...(h.profile_service ? [h.profile_service] : []),
+              ]),
+          ),
+        ].sort();
+    const protocols = input.protocol
+      ? [input.protocol]
+      : [
+          "agent-profile/1.0",
+          "agent-discourse/1.0",
+          "agent-delegation/1.0",
+          "agent-mail/1.0",
+          "agent-knowledge/1.0",
+        ];
+    const services: unknown[] = [],
+      errors: unknown[] = [];
+    for (const origin of origins) {
+      validateOrigin(origin);
+      this.requireAllowedOrigin(origin);
+      for (const protocol of protocols) {
+        try {
+          const doc = await this.connectorJson(
+            `${origin}/.well-known/${protocol.split("/")[0]}`,
+          );
+          if (
+            !isRecord(doc) ||
+            doc.protocol !== protocol ||
+            doc.service !== origin
+          )
+            throw invalidPayload("discovery protocol/service mismatch");
+          if (isRecord(doc.endpoints))
+            for (const endpoint of Object.values(doc.endpoints)) {
+              if (
+                typeof endpoint !== "string" ||
+                serviceOrigin(endpoint) !== origin
+              )
+                throw invalidPayload("discovery endpoint origin mismatch");
+            }
+          services.push(doc);
+        } catch (error) {
+          if (!(error instanceof HttpResponseError && error.status === 404))
+            errors.push({ service: origin, protocol, ...errorJson(error) });
+        }
+      }
+    }
+    return { services, errors };
+  }
+
+  private async connectorResponse(
+    url: string,
+    jwt?: string,
+  ): Promise<Response> {
+    this.requireAllowedOrigin(url);
+    const response = await this.fetchImpl(url, {
+      redirect: "error",
+      ...(jwt ? { headers: { authorization: `Bearer ${jwt}` } } : {}),
+    });
+    if (!response.ok)
+      throw new HttpResponseError(response.status, await response.text());
+    return response;
+  }
+
+  private async connectorJson(url: string, jwt?: string): Promise<unknown> {
+    return (await this.connectorResponse(url, jwt)).json();
+  }
+
+  private async profilesGet(input: ProfilesGetInput): Promise<{
+    profiles: AgentProfile[];
+    missing: AgentId[];
+    profile_service: string;
+  }> {
+    this.requireAllowedOrigin(input.profile_service);
+    const client = await this.profileClient(input.profile_service);
+    const profiles: AgentProfile[] = [],
+      missing: AgentId[] = [];
+    for (const id of input.ids ?? [this.agentId()]) {
+      publicKeyBytes(id);
+      try {
+        const page = await client.profileEvents(id, 1);
+        if (!page.result.length) {
+          missing.push(id);
+          continue;
+        }
+        const profile = materializeProfile(page.result[0]);
+        if (profile.id !== id)
+          throw invalidPayload("profile response belongs to another Agent ID");
+        profiles.push(profile);
+      } catch (error) {
+        if (error instanceof HttpResponseError && error.status === 404)
+          missing.push(id);
+        else throw error;
+      }
+    }
+    return { profiles, missing, profile_service: input.profile_service };
+  }
+
+  private async profileHistory(input: ProfileHistoryInput): Promise<unknown> {
+    this.requireAllowedOrigin(input.profile_service);
+    const id = input.agent_id ?? this.agentId();
+    const page = await (
+      await this.profileClient(input.profile_service)
+    ).profileEvents(id, input.limit ?? 20, input.cursor);
+    let previous = Infinity;
+    for (const envelope of page.result) {
+      const profile = materializeProfile(envelope);
+      if (profile.id !== id || envelope.event.nonce >= previous)
+        throw invalidPayload("profile history identity/order mismatch");
+      previous = envelope.event.nonce;
+    }
+    return {
+      envelopes: page.result,
+      profile_service: input.profile_service,
+      agent_id: id,
+      ...(page.next_cursor ? { next_cursor: page.next_cursor } : {}),
+    };
+  }
+
+  private async delegationHistory(
+    input: DelegationHistoryInput,
+  ): Promise<unknown> {
+    const { document } = await this.resolvePrincipal(input.principal_id);
+    const client = await this.principalDelegationService(document);
+    const credential = await client.delegation(input.id);
+    if (credential.principal_id !== document.id)
+      throw invalidPayload("credential belongs to another principal");
+    const page = await client.delegationEvents(input.id, input.cursor);
+    for (const record of page.result) {
+      validateDelegationEnvelope(record.envelope);
+      const payload = record.envelope.event.payload;
+      if (payload.id !== input.id || payload.principal_id !== document.id)
+        throw invalidPayload("delegation history binding mismatch");
+    }
+    return {
+      credential,
+      records: page.result,
+      signatures_verified: true,
+      ...(page.next_cursor ? { next_cursor: page.next_cursor } : {}),
+    };
+  }
+
+  private async mailResolve(input: MailResolveInput): Promise<unknown> {
+    publicKeyBytes(input.agent_id);
+    if (
+      [input.address, input.card_url, input.profile_service].filter(
+        (v) => v !== undefined,
+      ).length !== 1
+    )
+      throw invalidPayload(
+        "supply exactly one of address, card_url or profile_service",
+      );
+    const contacts: { mailboxId: string; routes: string[] }[] = [];
+    const cardUrl = (value: string) => {
+      const url = new URL(value);
+      const match = /^\/v1\/mailboxes\/([A-Za-z0-9_-]{22})\/card$/.exec(
+        url.pathname,
+      );
+      if (url.search || url.hash || !match)
+        throw invalidPayload("invalid mailbox card URL");
+      validateOrigin(url.origin);
+      contacts.push({ mailboxId: match[1], routes: [url.origin] });
+    };
+    if (input.address) {
+      const address = parseMailAddress(input.address);
+      if (address.owner !== input.agent_id)
+        throw invalidPayload("mailbox address owner mismatch");
+      const routes = address.routes.length
+        ? address.routes
+        : (this.state.mail.pins.get(input.agent_id, address.mailbox_id)?.event
+            .payload.routes ?? []);
+      contacts.push({ mailboxId: address.mailbox_id, routes });
+    } else if (input.card_url) cardUrl(input.card_url);
+    else {
+      const result = await this.profilesGet({
+        profile_service: input.profile_service!,
+        ids: [input.agent_id],
+      });
+      for (const endpoint of result.profiles[0]?.service_endpoints ?? [])
+        if (endpoint.type === "agent-mail") cardUrl(endpoint.url);
+    }
+    const mailboxes: unknown[] = [],
+      errors: unknown[] = [];
+    const seen = new Set<string>();
+    for (const contact of contacts) {
+      let card: MailboxCard | undefined;
+      for (const route of contact.routes) {
+        try {
+          const record = await this.mailClient(route).card(
+            contact.mailboxId,
+            input.agent_id,
+          );
+          card = this.state.mail.pins.observe(
+            record.envelope,
+            input.agent_id,
+            unixTimeMillis(),
+            false,
+          );
+          break;
+        } catch (error) {
+          errors.push({
+            mailbox_id: contact.mailboxId,
+            ...routeError(route, error),
+          });
+        }
+      }
+      if (!card)
+        card = this.state.mail.pins.get(input.agent_id, contact.mailboxId);
+      if (!card || seen.has(card.hash)) continue;
+      seen.add(card.hash);
+      let usable = card.event.payload.routes.some((route) =>
+        this.isAllowedHost(route),
+      );
+      try {
+        validateMailSenderCard(card, input.agent_id, unixTimeMillis());
+      } catch {
+        usable = false;
+      }
+      mailboxes.push({
+        address: formatMailAddress(
+          input.agent_id,
+          contact.mailboxId,
+          card.event.payload.routes,
+        ),
+        card,
+        usable,
+      });
+    }
+    return { agent_id: input.agent_id, mailboxes, errors };
+  }
+
+  private schemaGet(input: SchemaGetInput): unknown {
+    const schema = (
+      CONNECTOR_CATALOG.schemas as Record<string, Record<string, unknown>>
+    )[input.protocol];
+    if (!schema) throw invalidPayload("unsupported protocol");
+    const mappings: Record<string, Record<string, string>> = {
+      "agent-profile/1.0": { "profile.update": "profileUpdatePayload" },
+      "agent-knowledge/1.0": {
+        "knowledge.publish": "publishPayload",
+        "knowledge.assess": "assessPayload",
+        "knowledge.retract": "retractPayload",
+      },
+      "agent-discourse/1.0": {
+        "room.create": "roomCreatePayload",
+        "room.update": "roomUpdatePayload",
+        "room.join": "roomJoinPayload",
+        "room.join.request": "roomJoinRequestPayload",
+        "room.join.review": "roomJoinReviewPayload",
+        "room.leave": "reasonPayload",
+        "room.close": "reasonPayload",
+        "room.cancel": "reasonPayload",
+        "room.member.role.update": "roomMemberRoleUpdatePayload",
+        "room.member.remove": "roomMemberRemovePayload",
+        "message.create": "messageCreatePayload",
+        "type.define": "typeDeclaration",
+      },
+    };
+    const schemas: { type: string; schema: unknown }[] = Object.entries(
+      mappings[input.protocol],
+    )
+      .filter(([type]) => !input.type || type === input.type)
+      .map(([type, definition]) => ({
+        type,
+        schema: payloadSchema(schema, definition),
+      }));
+    if (input.room_id) {
+      if (input.protocol !== "agent-discourse/1.0")
+        throw invalidPayload("room_id requires agent-discourse/1.0");
+      const room = this.localRoom(
+        this.resolveRoomKey(input.host, input.room_id),
+      );
+      for (const type of room.room.types ?? [])
+        if (!input.type || type.type === input.type)
+          schemas.push({ type: type.type, schema: type.schema });
+    }
+    if (input.type && !schemas.length)
+      throw invalidPayload(
+        "unknown event type; open the room for custom schemas",
+      );
+    return {
+      protocol: input.protocol,
+      schemas,
+      ...(input.protocol === "agent-discourse/1.0"
+        ? { registered_packs: CONNECTOR_CATALOG.packs.packs }
+        : {}),
+    };
+  }
+
+  private roomWatch(input: RoomWatchInput): unknown {
+    const key = this.resolveRoomKey(input.host, input.room_id);
+    const room = this.localRoom(key);
+    if (input.types !== undefined) {
+      for (const type of input.types)
+        if (!(room.room.types ?? []).some((def) => def.type === type))
+          throw invalidPayload(`unknown custom event type: ${type}`);
+      room.watch_types = [...input.types];
+    }
+    return { types: room.watch_types ?? [], sync: this.syncState(key) };
+  }
+
+  private async remoteTimeline(input: RoomTimelineInput): Promise<unknown> {
+    if (input.mark_read || input.unread_only)
+      throw invalidPayload(
+        "remote history does not mark read or filter unread",
+      );
+    const key = this.resolveRoomKey(input.host, input.room_id);
+    this.requireAllowedHost(key.host);
+    const client = await this.discourse(key.host);
+    const records: ArchiveRecord[] = [];
+    let cursor: string | undefined;
+    const cursors = new Set<string>();
+    do {
+      const page = await client.events(key.roomId, {
+        afterSeq: 0,
+        cursor,
+        limit: 1000,
+        jwt: this.requestJwt(key.host),
+      });
+      records.push(...page.result);
+      cursor = page.next_cursor;
+      if (cursor && cursors.has(cursor))
+        throw invalidPayload("history cursor did not advance");
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    const packs = packMap(CONNECTOR_CATALOG.packs as PackDocument);
+    for (const [url, digest] of referencedPacks(records)) {
+      const bytes = new Uint8Array(
+        await (await this.connectorResponse(url)).arrayBuffer(),
+      );
+      verifyPackDigest(bytes, digest);
+      const document = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      ) as PackDocument;
+      const pack = document.packs.find((p) => p.id === url);
+      if (!pack) throw invalidPayload("external pack identity mismatch");
+      packs[url] = pack;
+    }
+    const replay = replayHistory(records, key.host, packs);
+    const items = replay.items
+      .filter(
+        (item) =>
+          (input.after_seq === undefined || item.seq > input.after_seq) &&
+          (input.before_seq === undefined || item.seq < input.before_seq) &&
+          (!input.types || input.types.includes(item.type)) &&
+          (!input.actors ||
+            (item.actor !== undefined && input.actors.includes(item.actor))),
+      )
+      .slice(0, input.limit ?? 50);
+    return {
+      items,
+      sync: this.state.rooms.has(roomKeyString(key))
+        ? this.syncState(key)
+        : {
+            host: key.host,
+            room_id: key.roomId,
+            head_seq: replay.room.headSeq,
+            head_hash: replay.room.headHash,
+            synced_seq: replay.room.syncedSeq,
+            remote_seq: replay.room.syncedSeq,
+            subscribed: false,
+            unread_count: 0,
+            pending_inbox_count: 0,
+          },
+      unread_count: this.state.rooms.has(roomKeyString(key))
+        ? unreadCount(this.localRoom(key))
+        : 0,
+      history: {
+        source: "remote",
+        first_seq: records[0]?.seq ?? 0,
+        last_seq: records.at(-1)?.seq ?? 0,
+        truncated: false,
+      },
+      ...(items.length ? { next_after_seq: items.at(-1)!.seq } : {}),
+    };
+  }
+
+  private async roomArchive(input: RoomArchiveInput): Promise<unknown> {
+    const key = this.resolveRoomKey(input.host, input.room_id);
+    this.requireAllowedHost(key.host);
+    const client = await this.discourse(key.host);
+    const jwt = this.requestJwt(key.host);
+    const manifest = (await this.connectorJson(
+      `${client.roomsUrl}/${key.roomId}/archive`,
+      jwt,
+    )) as ArchiveManifest;
+    if (
+      manifest.protocol !== "agent-discourse/1.0" ||
+      manifest.type !== "room.archive" ||
+      manifest.room_id !== key.roomId ||
+      !manifest.formats?.jsonl
+    )
+      throw invalidPayload("invalid archive manifest");
+    const sameOrigin = (url: string) => {
+      if (serviceOrigin(url) !== key.host) throw permissionDenied();
+      return url;
+    };
+    const log = await (
+      await this.connectorResponse(sameOrigin(manifest.formats.jsonl), jwt)
+    ).text();
+    const records = log
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as ArchiveRecord);
+    const redacted = verifyArchiveRecords(manifest, records);
+    const packs = packMap(CONNECTOR_CATALOG.packs as PackDocument),
+      documents: unknown[] = [];
+    const references = referencedPacks(records);
+    for (const entry of manifest.packs ?? []) {
+      if (
+        references.has(entry.pack) &&
+        references.get(entry.pack) !== entry.digest
+      )
+        throw invalidPayload(
+          "archive pack digest differs from the signed import",
+        );
+      const bytes = new Uint8Array(
+        await (
+          await this.connectorResponse(sameOrigin(entry.url), jwt)
+        ).arrayBuffer(),
+      );
+      verifyPackDigest(bytes, entry.digest);
+      const document = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      ) as PackDocument;
+      const pack = document.packs.find((p) => p.id === entry.pack);
+      if (!pack) throw invalidPayload("archived pack identity mismatch");
+      packs[entry.pack] = pack;
+      documents.push(document);
+    }
+    for (const [url, digest] of references)
+      if (
+        !(manifest.packs ?? []).some(
+          (p) => p.pack === url && p.digest === digest,
+        )
+      )
+        throw invalidPayload("archive is missing a referenced pack");
+    const stateVerified = redacted.includes(1)
+      ? false
+      : replayHistory(records, key.host, packs).stateVerified;
+    return {
+      manifest,
+      records,
+      verified: true,
+      redacted,
+      state_verified: stateVerified,
+      packs: documents,
+    };
+  }
+
+  private async myRooms(input: RoomsListInput): Promise<unknown> {
+    const host = normalizeHost(input.host!);
+    this.requireAllowedHost(host);
+    const client = await this.discourse(host);
+    if (serviceOrigin(client.myRoomsUrl) !== host) throw permissionDenied();
+    const page = await client.myRooms(this.requestJwt(host), {
+      status: input.status,
+      membership: input.membership,
+      limit: input.limit,
+      cursor: input.cursor,
+    });
+    for (const room of page.result) this.observeRoom(host, room);
+    return {
+      rooms: page.result.map((room) => ({
+        ...this.summaryForResponse(host, room),
+        ...("membership" in room ? { membership: room.membership } : {}),
+        ...("role" in room ? { role: room.role } : {}),
+      })),
+      ...(page.next_cursor ? { next_cursor: page.next_cursor } : {}),
+    };
+  }
+
   private identityCurrent(): unknown {
     const agentId = this.agentId();
     return {
       agent_id: agentId,
       public_key: base64UrlEncode(publicKeyBytes(agentId)),
-      profiles: [...this.state.profiles.keys()].sort(compareStrings),
+      profiles: [
+        ...new Set(
+          this.sortedHosts()
+            .filter((h) => h.allowed && h.profile_service)
+            .map((h) => h.profile_service!),
+        ),
+      ].sort(compareStrings),
+      sync_mode: "explicit",
+      tools: standardToolDefinitions().map((t) => t.name),
       hosts: this.sortedHosts(),
     };
   }
 
   private async roomsList(input: RoomsListInput): Promise<unknown> {
     validateRoomsListScope(input);
-    return (input.scope ?? "known") === "public" ? this.publicRooms(input) : this.knownRooms(input);
+    return input.scope === "mine"
+      ? this.myRooms(input)
+      : (input.scope ?? "known") === "public"
+        ? this.publicRooms(input)
+        : this.knownRooms(input);
   }
 
   private async publicRooms(input: RoomsListInput): Promise<unknown> {
     const host = normalizeHost(input.host!);
     this.requireAllowedHost(host);
-    const response = await (await this.discourse(host)).publicRooms({
+    const response = await (
+      await this.discourse(host)
+    ).publicRooms({
       status: input.status,
       tag: input.tag,
       keyword: input.keyword,
@@ -892,7 +1542,9 @@ export class LocalConnector {
       cursor: input.cursor,
     });
     for (const room of response.result) this.observeRoom(host, room);
-    const rooms = response.result.map((room) => this.summaryForResponse(host, room));
+    const rooms = response.result.map((room) =>
+      this.summaryForResponse(host, room),
+    );
     return response.next_cursor !== undefined
       ? { rooms, next_cursor: response.next_cursor }
       : { rooms };
@@ -900,7 +1552,8 @@ export class LocalConnector {
 
   private knownRooms(input: RoomsListInput): unknown {
     const agentId = this.agentId();
-    const host = input.host === undefined ? undefined : normalizeHost(input.host);
+    const host =
+      input.host === undefined ? undefined : normalizeHost(input.host);
     const rooms = [...this.state.rooms.entries()]
       .filter(([, room]) => host === undefined || room.host === host)
       .sort(
@@ -921,7 +1574,10 @@ export class LocalConnector {
       )
       .map(([, room]) => this.summaryForRoom(room));
     const result = page(rooms, input.cursor, input.limit ?? 50);
-    return { rooms: result.items, ...(result.next_cursor ? { next_cursor: result.next_cursor } : {}) };
+    return {
+      rooms: result.items,
+      ...(result.next_cursor ? { next_cursor: result.next_cursor } : {}),
+    };
   }
 
   /** Reads the room resource and every record after the local tip, then verifies and applies them. */
@@ -939,7 +1595,8 @@ export class LocalConnector {
         cursor,
         jwt,
       });
-      for (const record of response.result) this.applyHostRecord(key.host, record);
+      for (const record of response.result)
+        this.applyHostRecord(key.host, record);
       cursor = response.next_cursor;
       if (cursor === undefined) break;
     }
@@ -953,7 +1610,8 @@ export class LocalConnector {
       key = this.resolveRoomKey(undefined, input.room_id);
     }
     this.requireAllowedHost(key.host);
-    const known = (this.state.rooms.get(roomKeyString(key))?.syncedSeq ?? 0) > 0;
+    const known =
+      (this.state.rooms.get(roomKeyString(key))?.syncedSeq ?? 0) > 0;
     if (!known || input.refresh) await this.syncRoom(key);
     const room = this.localRoom(key);
     if (input.subscribe !== undefined) room.subscribed = input.subscribe;
@@ -972,7 +1630,9 @@ export class LocalConnector {
     const members = [...room.members.values()]
       .sort((a, b) => compareStrings(a.agent_id, b.agent_id))
       .filter((member) =>
-        input.agent_id !== undefined ? member.agent_id === input.agent_id : true,
+        input.agent_id !== undefined
+          ? member.agent_id === input.agent_id
+          : true,
       )
       .filter((member) =>
         input.status !== undefined && input.status !== "all"
@@ -1020,23 +1680,34 @@ export class LocalConnector {
       const host = this.allowedRoomHost(key);
       let status: AgentStatus;
       try {
-        status = await (await this.discourse(host)).agentStatus(input.room_id, input.agent_id, this.requestJwt(host));
+        status = await (
+          await this.discourse(host)
+        ).agentStatus(input.room_id, input.agent_id, this.requestJwt(host));
       } catch (error) {
-        if (isHttpError(error, "agent_status_not_found")) return { statuses: [], sync: this.syncState(key) };
+        if (isHttpError(error, "agent_status_not_found"))
+          return { statuses: [], sync: this.syncState(key) };
         throw error;
       }
       this.cacheAgentStatus(keyStr, status);
       return { statuses: [status], sync: this.syncState(key) };
     }
     if (!input.refresh && cached) {
-      return { statuses: sortedAgentStatuses(cached), sync: this.syncState(key) };
+      return {
+        statuses: sortedAgentStatuses(cached),
+        sync: this.syncState(key),
+      };
     }
     const host = this.allowedRoomHost(key);
-    const response = await (await this.discourse(host)).agentStatuses(input.room_id, this.requestJwt(host));
+    const response = await (
+      await this.discourse(host)
+    ).agentStatuses(input.room_id, this.requestJwt(host));
     const statuses = new Map<AgentId, AgentStatus>();
     for (const status of response.result) statuses.set(status.agent_id, status);
     this.state.agentStatuses.set(keyStr, statuses);
-    return { statuses: sortedAgentStatuses(statuses), sync: this.syncState(key) };
+    return {
+      statuses: sortedAgentStatuses(statuses),
+      sync: this.syncState(key),
+    };
   }
 
   private async agentStatusSet(input: AgentStatusSetInput): Promise<unknown> {
@@ -1047,18 +1718,19 @@ export class LocalConnector {
     const request: AgentStatusInput = {
       state: input.state,
       summary: input.summary,
-      seen_seq: input.seen_seq ?? (room.syncedSeq > 0 ? room.syncedSeq : undefined),
-      seen_hash: input.seen_hash ?? (input.seen_seq === undefined ? room.syncedHash : undefined),
+      seen_seq:
+        input.seen_seq ?? (room.syncedSeq > 0 ? room.syncedSeq : undefined),
+      seen_hash:
+        input.seen_hash ??
+        (input.seen_seq === undefined ? room.syncedHash : undefined),
       claim_id: input.claim_id,
       activity: input.activity,
       expires_at: input.expires_at,
       extra: input.extra,
     };
-    const status = await (await this.discourse(host)).setAgentStatus(
-      input.room_id,
-      this.requestJwt(host),
-      request,
-    );
+    const status = await (
+      await this.discourse(host)
+    ).setAgentStatus(input.room_id, this.requestJwt(host), request);
     if (status.expires_at <= unixTimeMillis()) {
       this.state.agentStatuses.get(keyStr)?.delete(status.agent_id);
     } else {
@@ -1077,6 +1749,7 @@ export class LocalConnector {
   }
 
   private async roomTimeline(input: RoomTimelineInput): Promise<unknown> {
+    if (input.source === "remote") return this.remoteTimeline(input);
     const key = this.resolveRoomKey(input.host, input.room_id);
     if (input.refresh) await this.syncRoom(key);
     const room = this.localRoom(key);
@@ -1103,13 +1776,26 @@ export class LocalConnector {
     }
     // An unfiltered, gap-free read from the presented head presents the latest
     // head it reaches (local connector Section 4.2).
-    if (input.types === undefined && input.actors === undefined && items.length > 0) {
+    if (
+      input.types === undefined &&
+      input.actors === undefined &&
+      items.length > 0
+    ) {
       const base = room.presentedSeq ?? 0;
-      const contiguous = items.every((item, index) => index === 0 || item.seq === items[index - 1].seq + 1);
-      if (contiguous && items[0].seq <= base + 1) this.presentThrough(room, lastSeq!);
+      const contiguous = items.every(
+        (item, index) => index === 0 || item.seq === items[index - 1].seq + 1,
+      );
+      if (contiguous && items[0].seq <= base + 1)
+        this.presentThrough(room, lastSeq!);
     }
     return {
       items,
+      history: {
+        source: "local",
+        first_seq: room.timeline[0]?.seq ?? 0,
+        last_seq: room.timeline.at(-1)?.seq ?? 0,
+        truncated: (room.timeline[0]?.seq ?? 1) > 1,
+      },
       sync: this.syncState(key),
       ...(lastSeq !== undefined ? { next_after_seq: lastSeq } : {}),
       unread_count: unreadCount(room),
@@ -1140,7 +1826,8 @@ export class LocalConnector {
       if (entry) {
         items.push(entry.item);
         // A claim is a lease, so a crashed session cannot hold the item forever.
-        if (input.claim) entry.state = { kind: "claimed", until: now + INBOX_CLAIM_LEASE_MS };
+        if (input.claim)
+          entry.state = { kind: "claimed", until: now + INBOX_CLAIM_LEASE_MS };
       }
     }
     return { items, pending_count: this.pendingInboxCount() };
@@ -1175,7 +1862,8 @@ export class LocalConnector {
       this.presentHead(room, room.headSeq);
       return { drafts: [entry.draft], changes, sync: this.syncState(key) };
     }
-    const host = input.host !== undefined ? normalizeHost(input.host) : undefined;
+    const host =
+      input.host !== undefined ? normalizeHost(input.host) : undefined;
     const drafts = [...this.state.drafts.values()]
       .sort((a, b) => compareStrings(a.draft.id, b.draft.id))
       .filter((entry) =>
@@ -1188,7 +1876,10 @@ export class LocalConnector {
       )
       .map((entry) => entry.draft);
     const result = page(drafts, input.cursor, input.limit ?? 50);
-    return { drafts: result.items, ...(result.next_cursor ? { next_cursor: result.next_cursor } : {}) };
+    return {
+      drafts: result.items,
+      ...(result.next_cursor ? { next_cursor: result.next_cursor } : {}),
+    };
   }
 
   private async draftCommit(input: DraftCommitInput): Promise<unknown> {
@@ -1208,9 +1899,11 @@ export class LocalConnector {
       const message: RoomSendMessageInput = { ...entry.request.input };
       if (input.action === "revise") {
         if (input.content !== undefined) message.content = input.content;
-        if (input.content_type !== undefined) message.content_type = input.content_type;
+        if (input.content_type !== undefined)
+          message.content_type = input.content_type;
         if (input.mentions !== undefined) message.mentions = input.mentions;
-        if (input.references !== undefined) message.references = input.references;
+        if (input.references !== undefined)
+          message.references = input.references;
         if (input.extra !== undefined) message.extra = input.extra;
       }
       message.base_seq = undefined;
@@ -1246,7 +1939,9 @@ export class LocalConnector {
   private async resolvePrincipal(
     url: string,
   ): Promise<{ document: PrincipalDocument; alias: boolean }> {
-    const document = await new DelegationClient(url, this.fetchImpl).principal(url);
+    const document = await new DelegationClient(url, this.fetchImpl).principal(
+      url,
+    );
     return {
       document,
       alias: document.id !== url && isPrincipalAlias(document, url),
@@ -1254,10 +1949,14 @@ export class LocalConnector {
   }
 
   /** The principal's authoritative delegation service, located from its `delegation_service` origin. */
-  private async principalDelegationService(document: PrincipalDocument): Promise<DelegationClient> {
+  private async principalDelegationService(
+    document: PrincipalDocument,
+  ): Promise<DelegationClient> {
     const origin = document.delegation_service;
     if (origin === undefined) {
-      throw invalidPayload(`principal ${document.id} publishes no delegation_service`);
+      throw invalidPayload(
+        `principal ${document.id} publishes no delegation_service`,
+      );
     }
     this.requireAllowedHost(origin);
     return DelegationClient.discover(origin, this.fetchImpl);
@@ -1273,7 +1972,14 @@ export class LocalConnector {
   ): Promise<PrincipalDocument> {
     const { document } = await this.resolvePrincipal(principalId);
     const active = this.agentId();
-    if (!document.controllers.some(c => c.id === active && c.delegation !== undefined && c.valid_from <= unixTimeMillis())) {
+    if (
+      !document.controllers.some(
+        (c) =>
+          c.id === active &&
+          c.delegation !== undefined &&
+          c.valid_from <= unixTimeMillis(),
+      )
+    ) {
       throw invalidPayload(
         `active agent ${active} is not a controller key of ${document.id}`,
       );
@@ -1294,7 +2000,8 @@ export class LocalConnector {
   }
 
   private async delegationCheck(input: DelegationCheckInput): Promise<unknown> {
-    if (typeof input.audience !== "string") throw invalidPayload("audience is required");
+    if (typeof input.audience !== "string")
+      throw invalidPayload("audience is required");
     const { document } = await this.resolvePrincipal(input.principal_id);
     // The authoritative service is the one the principal names, never one
     // supplied by whoever presented a credential.
@@ -1303,58 +2010,128 @@ export class LocalConnector {
       subject: input.subject ?? this.agentId(),
       principal_id: document.id,
       id: input.id,
+      cursor: input.cursor,
+      limit: input.limit,
     });
     const now = unixTimeMillis();
     const delegations: DelegationVerdict[] = [];
     for (const credential of response.result) {
-      let records: Awaited<ReturnType<DelegationClient["allDelegationEvents"]>> = [];
+      let records: Awaited<
+        ReturnType<DelegationClient["allDelegationEvents"]>
+      > = [];
       try {
         records = await service.allDelegationEvents(credential.id);
       } catch (error) {
-        delegations.push({ credential, verified: false, usable: false, reasons: [`history unavailable: ${error instanceof Error ? error.message : error}`] });
+        delegations.push({
+          credential,
+          verified: false,
+          usable: false,
+          reasons: [
+            `history unavailable: ${error instanceof Error ? error.message : error}`,
+          ],
+        });
         continue;
       }
-      delegations.push(verifyDelegationCredential(credential, records, document, document.id, input.audience, now));
+      delegations.push(
+        verifyDelegationCredential(
+          credential,
+          records,
+          document,
+          document.id,
+          input.audience,
+          now,
+        ),
+      );
     }
-    return { canonical_id: document.id, query_url: service.queryUrl, delegations };
+    return {
+      canonical_id: document.id,
+      query_url: service.queryUrl,
+      delegations,
+      complete: response.next_cursor === undefined,
+      ...(response.next_cursor ? { next_cursor: response.next_cursor } : {}),
+    };
   }
 
   private async delegationsList(input: DelegationsListInput): Promise<unknown> {
-    // Enumerating one subject requires authorization; the connector proves the
-    // active identity and never enumerates anyone else.
-    const origin = serviceOrigin(input.delegation_service);
+    if (
+      input.principal_id !== undefined &&
+      input.delegation_service !== undefined
+    )
+      throw invalidPayload("choose principal_id or delegation_service");
+    const principal =
+      input.principal_id === undefined
+        ? undefined
+        : await this.controllerPrincipal(input.principal_id);
+    if (!principal && !input.delegation_service)
+      throw invalidPayload("delegation_service or principal_id is required");
+    const origin =
+      principal?.delegation_service ?? serviceOrigin(input.delegation_service!);
     const jwt = this.requestJwt(origin);
-    const service = await DelegationClient.discover(origin, this.fetchImpl);
+    const service = principal
+      ? await this.principalDelegationService(principal)
+      : await DelegationClient.discover(origin, this.fetchImpl);
     const response = await service.queryDelegations(
       {
-        subject: this.agentId(),
+        ...(principal
+          ? { principal_id: principal.id }
+          : { subject: this.agentId() }),
         status: input.status,
         limit: input.limit,
         cursor: input.cursor,
       },
       jwt,
     );
+    for (const credential of response.result) {
+      if (principal) {
+        const controller = principal.controllers.find(
+          (c) => c.id === this.agentId(),
+        )!;
+        if (
+          credential.principal_id !== principal.id ||
+          !controllerCoversCredential(controller, credential)
+        )
+          throw permissionDenied();
+      } else if (credential.subject !== this.agentId())
+        throw permissionDenied();
+    }
     return response.next_cursor !== undefined
       ? { delegations: response.result, next_cursor: response.next_cursor }
       : { delegations: response.result };
   }
 
-  private async delegationPrevious(service: DelegationClient, id: string): Promise<DelegationCredential | undefined> {
-    try { return await service.delegation(id); }
-    catch (error) { if (error instanceof HttpResponseError && error.status === 404) return undefined; throw error; }
+  private async delegationPrevious(
+    service: DelegationClient,
+    id: string,
+  ): Promise<DelegationCredential | undefined> {
+    try {
+      return await service.delegation(id);
+    } catch (error) {
+      if (error instanceof HttpResponseError && error.status === 404)
+        return undefined;
+      throw error;
+    }
   }
 
   private async submitDelegation(
     service: DelegationClient,
     sign: () => Envelope<DelegationPayload>,
-  ): Promise<{ credential: DelegationCredential; envelope: Envelope<DelegationPayload> }> {
+  ): Promise<{
+    credential: DelegationCredential;
+    envelope: Envelope<DelegationPayload>;
+  }> {
     let envelope = sign();
     try {
-      return { credential: await service.submitDelegationEvent(envelope), envelope };
+      return {
+        credential: await service.submitDelegationEvent(envelope),
+        envelope,
+      };
     } catch (error) {
       if (!this.resyncNonce(error)) throw error;
       envelope = sign();
-      return { credential: await service.submitDelegationEvent(envelope), envelope };
+      return {
+        credential: await service.submitDelegationEvent(envelope),
+        envelope,
+      };
     }
   }
 
@@ -1363,30 +2140,55 @@ export class LocalConnector {
     const service = await this.principalDelegationService(principal);
     const previous = await this.delegationPrevious(service, input.id);
     const payload: DelegationGrantPayload = {
-      id: input.id, principal_id: principal.id, subject: input.subject,
-      relationship: input.relationship, scopes: input.scopes, audiences: input.audiences,
-      constraints: input.constraints, not_before: input.not_before, expires_at: input.expires_at,
+      id: input.id,
+      principal_id: principal.id,
+      subject: input.subject,
+      relationship: input.relationship,
+      scopes: input.scopes,
+      audiences: input.audiences,
+      constraints: input.constraints,
+      not_before: input.not_before,
+      expires_at: input.expires_at,
     };
-    for (const field of ["relationship", "constraints", "not_before", "expires_at"] as const) {
+    for (const field of [
+      "relationship",
+      "constraints",
+      "not_before",
+      "expires_at",
+    ] as const) {
       if (payload[field] === undefined) delete payload[field];
     }
     return this.submitDelegation(service, () => {
       const createdAt = unixTimeMillis();
-      const event = delegationGrantEvent(this.agentId(), createdAt, this.nonces.nextNonce(createdAt), payload);
+      const event = delegationGrantEvent(
+        this.agentId(),
+        createdAt,
+        this.nonces.nextNonce(createdAt),
+        payload,
+      );
       validateDelegationEventAuthority(event, principal, createdAt, previous);
       return this.signer.signEvent(event) as Envelope<DelegationPayload>;
     });
   }
 
-  private async delegationRevoke(input: DelegationRevokeInput): Promise<unknown> {
+  private async delegationRevoke(
+    input: DelegationRevokeInput,
+  ): Promise<unknown> {
     const principal = await this.controllerPrincipal(input.principal_id);
     const service = await this.principalDelegationService(principal);
     const previous = await this.delegationPrevious(service, input.id);
     return this.submitDelegation(service, () => {
       const createdAt = unixTimeMillis();
-      const event = delegationRevokeEvent(this.agentId(), createdAt, this.nonces.nextNonce(createdAt), {
-        id: input.id, principal_id: principal.id, ...(input.reason !== undefined ? { reason: input.reason } : {}),
-      });
+      const event = delegationRevokeEvent(
+        this.agentId(),
+        createdAt,
+        this.nonces.nextNonce(createdAt),
+        {
+          id: input.id,
+          principal_id: principal.id,
+          ...(input.reason !== undefined ? { reason: input.reason } : {}),
+        },
+      );
       validateDelegationEventAuthority(event, principal, createdAt, previous);
       return this.signer.signEvent(event) as Envelope<DelegationPayload>;
     });
@@ -1407,13 +2209,17 @@ export class LocalConnector {
       throw invalidPayload("profile.id must be the active Agent ID");
     }
     const client = await this.profileClient(input.profile_service);
-    let envelope = this.signProfileUpdate(profile as unknown as ProfileUpdatePayload);
+    let envelope = this.signProfileUpdate(
+      profile as unknown as ProfileUpdatePayload,
+    );
     let materialized: AgentProfile;
     try {
       materialized = await client.submitProfileUpdate(envelope);
     } catch (error) {
       if (!this.resyncNonce(error)) throw error;
-      envelope = this.signProfileUpdate(profile as unknown as ProfileUpdatePayload);
+      envelope = this.signProfileUpdate(
+        profile as unknown as ProfileUpdatePayload,
+      );
       materialized = await client.submitProfileUpdate(envelope);
     }
     this.state.profiles.set(materialized.id, materialized);
@@ -1438,7 +2244,15 @@ export class LocalConnector {
       types: input.types,
       extra: input.extra,
     };
-    for (const field of ["agenda", "guidance", "tags", "language", "policy", "types", "extra"] as const) {
+    for (const field of [
+      "agenda",
+      "guidance",
+      "tags",
+      "language",
+      "policy",
+      "types",
+      "extra",
+    ] as const) {
       if (payload[field] === undefined) delete payload[field];
     }
     const client = await this.discourse(host);
@@ -1466,9 +2280,10 @@ export class LocalConnector {
 
   private async roomJoin(input: RoomJoinInput): Promise<unknown> {
     const roomId = input.room_id;
-    const key: RoomKey = input.host !== undefined
-      ? { host: normalizeHost(input.host), roomId }
-      : this.resolveRoomKey(undefined, roomId);
+    const key: RoomKey =
+      input.host !== undefined
+        ? { host: normalizeHost(input.host), roomId }
+        : this.resolveRoomKey(undefined, roomId);
     const host = key.host;
     this.requireAllowedHost(host);
     const keyStr = roomKeyString(key);
@@ -1477,16 +2292,34 @@ export class LocalConnector {
     // A stored request decides the outcome until it resolves.
     const own = this.state.ownJoinRequests.get(keyStr);
     if (own && own.status === "pending") {
-      const current = await (await this.discourse(host)).joinRequest(roomId, own.id, this.requestJwt(host));
+      const current = await (
+        await this.discourse(host)
+      ).joinRequest(roomId, own.id, this.requestJwt(host));
       this.state.ownJoinRequests.set(keyStr, current);
-      if (current.status === "pending") return { status: "approval_required", join_request: current, sync: this.maybeSync(key) };
-      if (current.status === "rejected") return { status: "rejected", join_request: current, sync: this.maybeSync(key) };
+      if (current.status === "pending")
+        return {
+          status: "approval_required",
+          join_request: current,
+          sync: this.maybeSync(key),
+        };
+      if (current.status === "rejected")
+        return {
+          status: "rejected",
+          join_request: current,
+          sync: this.maybeSync(key),
+        };
       if (current.status === "approved") {
         // The approving review record is the membership event.
         await this.syncRoom(key);
         const member = this.localRoom(key).members.get(agentId);
-        if (member?.status !== "active") throw invalidPayload("approved membership is not yet visible");
-        return { status: "joined", member, join_request: current, sync: this.syncState(key) };
+        if (member?.status !== "active")
+          throw invalidPayload("approved membership is not yet visible");
+        return {
+          status: "joined",
+          member,
+          join_request: current,
+          sync: this.syncState(key),
+        };
       }
     }
 
@@ -1495,7 +2328,9 @@ export class LocalConnector {
     const known = this.state.rooms.get(keyStr);
     if (!known || known.headSeq === 0) {
       try {
-        const room = await (await this.discourse(host)).room(roomId, this.requestJwt(host));
+        const room = await (
+          await this.discourse(host)
+        ).room(roomId, this.requestJwt(host));
         this.acceptRoomResponse(host, room);
       } catch (error) {
         if (!(error instanceof HttpResponseError)) throw error;
@@ -1510,12 +2345,22 @@ export class LocalConnector {
       canJoinDirectly(visibility, roomPolicy(local.room), agentId, input.role);
     if (direct) {
       const payload: RoomJoinPayload = { role: input.role };
-      if (input.perspective !== undefined) payload.perspective = input.perspective;
+      if (input.perspective !== undefined)
+        payload.perspective = input.perspective;
       let record: ServerRecord<RoomJoinPayload> | undefined;
       try {
         record = await this.submitSigned(
-          () => this.signRoomEvent(eventType.ROOM_JOIN, key, undefined, undefined, [], payload),
-          async (envelope) => (await this.discourse(host)).joinRoom(roomId, envelope),
+          () =>
+            this.signRoomEvent(
+              eventType.ROOM_JOIN,
+              key,
+              undefined,
+              undefined,
+              [],
+              payload,
+            ),
+          async (envelope) =>
+            (await this.discourse(host)).joinRoom(roomId, envelope),
         );
       } catch (error) {
         // A ban may have arrived since the local snapshot; request review below.
@@ -1530,15 +2375,21 @@ export class LocalConnector {
     }
 
     const requestPayload: RoomJoinRequestPayload = { role: input.role };
-    if (input.perspective !== undefined) requestPayload.perspective = input.perspective;
+    if (input.perspective !== undefined)
+      requestPayload.perspective = input.perspective;
     if (input.reason !== undefined) requestPayload.reason = input.reason;
     if (input.extra !== undefined) requestPayload.extra = input.extra;
     const request = await this.submitSigned(
       () => this.signJoinRequest(roomId, requestPayload),
-      async (envelope) => (await this.discourse(host)).requestJoin(roomId, envelope),
+      async (envelope) =>
+        (await this.discourse(host)).requestJoin(roomId, envelope),
     );
     this.state.ownJoinRequests.set(keyStr, request);
-    return { status: "approval_required", join_request: request, sync: this.maybeSync(key) };
+    return {
+      status: "approval_required",
+      join_request: request,
+      sync: this.maybeSync(key),
+    };
   }
 
   private async roomSendMessage(
@@ -1559,16 +2410,25 @@ export class LocalConnector {
    * Message and control writes apply `on_head_mismatch` when the local head
    * moved past their base or the host returns `room_head_mismatch`.
    */
-  private async submitRoomWrite(request: HeldDraftRequest): Promise<RoomWriteResult> {
+  private async submitRoomWrite(
+    request: HeldDraftRequest,
+  ): Promise<RoomWriteResult> {
     const input = request.input;
     const key = this.resolveRoomKey(input.host, input.room_id);
     const host = this.allowedRoomHost(key);
-    const type = request.kind === "message" ? eventType.MESSAGE_CREATE : request.input.type;
+    const type =
+      request.kind === "message"
+        ? eventType.MESSAGE_CREATE
+        : request.input.type;
     const headBound = eventTypeRequiresRoomHead(this.localRoom(key), type);
     if ((input.base_seq === undefined) !== (input.base_hash === undefined)) {
       throw invalidPayload("base_seq and base_hash must be provided together");
     }
-    let base: [number, string] = this.writeBase(key, input.base_seq, input.base_hash);
+    let base: [number, string] = this.writeBase(
+      key,
+      input.base_seq,
+      input.base_hash,
+    );
     const policy: HeadMismatchPolicy = input.on_head_mismatch ?? "hold";
     for (let attempts = 0; ; attempts++) {
       if (headBound) {
@@ -1588,13 +2448,17 @@ export class LocalConnector {
       try {
         const record = await this.submitSigned(
           () => this.signWrite(request, key, base),
-          async (envelope) => (await this.discourse(host)).submitEvent(input.room_id, envelope),
+          async (envelope) =>
+            (await this.discourse(host)).submitEvent(input.room_id, envelope),
         );
         await this.applyOwnRecord(key, record as ServerRecord);
         const after = this.localRoom(key);
         // The agent's own write extends what it saw only when nothing it has
         // not seen advanced the head in between.
-        if (after.headSeq === record.seq && this.headBefore(after, record.seq, previousHeadSeq) === presentedSeq) {
+        if (
+          after.headSeq === record.seq &&
+          this.headBefore(after, record.seq, previousHeadSeq) === presentedSeq
+        ) {
           this.presentHead(after, record.seq);
         }
         return {
@@ -1604,7 +2468,8 @@ export class LocalConnector {
           sync: this.syncState(key),
         };
       } catch (error) {
-        if (!headBound || !isHttpError(error, "room_head_mismatch")) throw error;
+        if (!headBound || !isHttpError(error, "room_head_mismatch"))
+          throw error;
         await this.syncRoom(key);
         // A host that reports a mismatch the verified history does not show
         // cannot be resolved by retrying.
@@ -1617,14 +2482,21 @@ export class LocalConnector {
    * Applies the record the host returned for the agent's own write, first
    * syncing any records accepted before it that the connector has not seen.
    */
-  private async applyOwnRecord(key: RoomKey, record: ArchiveRecord): Promise<void> {
+  private async applyOwnRecord(
+    key: RoomKey,
+    record: ArchiveRecord,
+  ): Promise<void> {
     const room = this.localRoom(key);
     if (record.seq > room.syncedSeq + 1) await this.syncRoom(key);
     else this.applyHostRecord(key.host, record);
   }
 
   /** Seq of the latest head-advancing record before `seq`, or 0. */
-  private headBefore(room: LocalRoomState, seq: number, previousHeadSeq: number): number {
+  private headBefore(
+    room: LocalRoomState,
+    seq: number,
+    previousHeadSeq: number,
+  ): number {
     for (let s = seq - 1; s > 0; s--) {
       const record = room.records.find((candidate) => candidate.seq === s);
       if (record && recordAdvancesRoomHead(room, record)) return s;
@@ -1648,7 +2520,11 @@ export class LocalConnector {
 
   /** Applies `Max-Seen-Nonce` from a `nonce_not_greater` rejection; reports whether to retry. */
   private resyncNonce(error: unknown): boolean {
-    if (!isHttpError(error, "nonce_not_greater") || error.maxSeenNonce === undefined) return false;
+    if (
+      !isHttpError(error, "nonce_not_greater") ||
+      error.maxSeenNonce === undefined
+    )
+      return false;
     this.nonces.observeMaxNonce(error.maxSeenNonce);
     return true;
   }
@@ -1664,13 +2540,32 @@ export class LocalConnector {
         content_type: input.content_type ?? "text/plain",
         content: input.content,
       };
-      if (input.references && input.references.length > 0) payload.references = input.references;
-      if (input.extra && Object.keys(input.extra).length > 0) payload.extra = input.extra;
-      return this.signRoomEvent(eventType.MESSAGE_CREATE, key, base[0], base[1], input.mentions ?? [], payload);
+      if (input.references && input.references.length > 0)
+        payload.references = input.references;
+      if (input.extra && Object.keys(input.extra).length > 0)
+        payload.extra = input.extra;
+      return this.signRoomEvent(
+        eventType.MESSAGE_CREATE,
+        key,
+        base[0],
+        base[1],
+        input.mentions ?? [],
+        payload,
+      );
     }
     const input = request.input;
-    const payload = payloadWithReferences({ ...input.payload }, input.references ?? []);
-    return this.signRoomEvent(input.type, key, base[0], base[1], input.mentions ?? [], payload);
+    const payload = payloadWithReferences(
+      { ...input.payload },
+      input.references ?? [],
+    );
+    return this.signRoomEvent(
+      input.type,
+      key,
+      base[0],
+      base[1],
+      input.mentions ?? [],
+      payload,
+    );
   }
 
   private async joinRequestsList(
@@ -1678,7 +2573,9 @@ export class LocalConnector {
   ): Promise<unknown> {
     const key = this.resolveRoomKey(input.host, input.room_id);
     const host = this.allowedRoomHost(key);
-    const response = await (await this.discourse(host)).joinRequests(input.room_id, this.requestJwt(host), {
+    const response = await (
+      await this.discourse(host)
+    ).joinRequests(input.room_id, this.requestJwt(host), {
       status: input.status,
       limit: input.limit,
       cursor: input.cursor,
@@ -1697,11 +2594,9 @@ export class LocalConnector {
     if (input.decision === "approve" && input.role === undefined) {
       throw invalidPayload("approving a join request requires a role");
     }
-    const joinRequest = await (await this.discourse(host)).joinRequest(
-      input.room_id,
-      input.request_id,
-      this.requestJwt(host),
-    );
+    const joinRequest = await (
+      await this.discourse(host)
+    ).joinRequest(input.room_id, input.request_id, this.requestJwt(host));
     const payload: RoomJoinReviewPayload = {
       request: joinRequest.request,
       decision: input.decision,
@@ -1709,8 +2604,17 @@ export class LocalConnector {
     if (input.role !== undefined) payload.role = input.role;
     if (input.reason !== undefined) payload.reason = input.reason;
     const record = await this.submitSigned(
-      () => this.signRoomEvent(eventType.ROOM_JOIN_REVIEW, key, undefined, undefined, [], payload),
-      async (envelope) => (await this.discourse(host)).submitEvent(input.room_id, envelope),
+      () =>
+        this.signRoomEvent(
+          eventType.ROOM_JOIN_REVIEW,
+          key,
+          undefined,
+          undefined,
+          [],
+          payload,
+        ),
+      async (envelope) =>
+        (await this.discourse(host)).submitEvent(input.room_id, envelope),
     );
     await this.applyOwnRecord(key, record as ServerRecord);
     return { record, sync: this.syncState(key) };
@@ -1839,9 +2743,10 @@ export class LocalConnector {
   /** Presents the head at `seq`, which must be a known head-advancing record or the current head. */
   private presentHead(room: LocalRoomState, seq: number): void {
     if (seq <= 0) return;
-    const hash = seq === room.headSeq
-      ? room.headHash
-      : room.records.find((record) => record.seq === seq)?.hash;
+    const hash =
+      seq === room.headSeq
+        ? room.headHash
+        : room.records.find((record) => record.seq === seq)?.hash;
     if (hash === undefined) return;
     room.presentedSeq = seq;
     room.presentedHash = hash;
@@ -1874,13 +2779,22 @@ export class LocalConnector {
     };
   }
 
-  private holdDraft(key: RoomKey, request: HeldDraftRequest, base: [number, string]): RoomWriteResult {
+  private holdDraft(
+    key: RoomKey,
+    request: HeldDraftRequest,
+    base: [number, string],
+  ): RoomWriteResult {
     const room = this.localRoom(key);
     const changes = this.roomChangesSince(key, base[0]);
     // The held result shows every change up to the current head.
     this.presentHead(room, room.headSeq);
     const sync = this.syncState(key);
-    const input = { ...request.input, host: sync.host, base_seq: base[0], base_hash: base[1] };
+    const input = {
+      ...request.input,
+      host: sync.host,
+      base_seq: base[0],
+      base_hash: base[1],
+    };
     const draftId = this.nextDraftId(input.room_id);
     const draft: HeldDraft = {
       id: draftId,
@@ -1890,17 +2804,19 @@ export class LocalConnector {
       base_seq: base[0],
       base_hash: base[1],
       current_sync: sync,
-      draft: request.kind === "message"
-        ? messageDraftValue(input as RoomSendMessageInput)
-        : eventDraftValue(input as RoomSubmitEventInput),
+      draft:
+        request.kind === "message"
+          ? messageDraftValue(input as RoomSendMessageInput)
+          : eventDraftValue(input as RoomSubmitEventInput),
       reason: "room_head_mismatch",
       options: heldDraftOptions(),
     };
     this.state.drafts.set(draftId, {
       draft,
-      request: request.kind === "message"
-        ? { kind: "message", input: input as RoomSendMessageInput }
-        : { kind: "event", input: input as RoomSubmitEventInput },
+      request:
+        request.kind === "message"
+          ? { kind: "message", input: input as RoomSendMessageInput }
+          : { kind: "event", input: input as RoomSubmitEventInput },
     });
     return {
       status: "held",
@@ -1935,15 +2851,17 @@ export class LocalConnector {
 
   private syncState(key: RoomKey): SyncState {
     const room = this.localRoom(key);
-    const headHash =
-      room.headHash ?? room.room.head?.hash ?? room.room.hash;
+    const headHash = room.headHash ?? room.room.head?.hash ?? room.room.hash;
     return {
       host: room.host,
       room_id: key.roomId,
       head_seq: room.headSeq,
       head_hash: headHash,
       ...(room.presentedSeq !== undefined
-        ? { presented_seq: room.presentedSeq, presented_hash: room.presentedHash }
+        ? {
+            presented_seq: room.presentedSeq,
+            presented_hash: room.presentedHash,
+          }
         : {}),
       synced_seq: room.syncedSeq,
       remote_seq: Math.max(room.room.seq, room.syncedSeq),
@@ -1954,7 +2872,9 @@ export class LocalConnector {
   }
 
   private maybeSync(key: RoomKey): SyncState | undefined {
-    return this.state.rooms.has(roomKeyString(key)) ? this.syncState(key) : undefined;
+    return this.state.rooms.has(roomKeyString(key))
+      ? this.syncState(key)
+      : undefined;
   }
 
   private roomStateView(room: LocalRoomState): RoomStateView {
@@ -2019,7 +2939,9 @@ export class LocalConnector {
     return { mailboxes };
   }
 
-  private async mailMailboxPublish(input: MailMailboxPublishInput): Promise<unknown> {
+  private async mailMailboxPublish(
+    input: MailMailboxPublishInput,
+  ): Promise<unknown> {
     const now = unixTimeMillis();
     this.pruneMail(now);
     const routes = checkedRoutes(input.routes);
@@ -2028,7 +2950,8 @@ export class LocalConnector {
     let previous: MailboxCard | undefined;
     let newKey: MailEncryptionKey | undefined;
     if (input.mailbox_id === undefined) {
-      if (routes.length === 0) throw invalidPayload("a new mailbox needs routes");
+      if (routes.length === 0)
+        throw invalidPayload("a new mailbox needs routes");
       mailboxId = newMailId();
       newKey = MailEncryptionKey.generate();
     } else {
@@ -2037,7 +2960,9 @@ export class LocalConnector {
       if (!previous) throw invalidPayload("unknown mailbox");
       if (input.rotate_key) newKey = MailEncryptionKey.generate();
       else if (!this.mailKeys.has(previous.event.payload.public_key)) {
-        throw invalidPayload("the mailbox key is not loaded; restore mail keys or rotate the key");
+        throw invalidPayload(
+          "the mailbox key is not loaded; restore mail keys or rotate the key",
+        );
       }
     }
     const expiresAt = input.expires_at ?? now + MAIL_MAX_TTL_MS;
@@ -2047,7 +2972,10 @@ export class LocalConnector {
       receive_until: input.receive_until ?? expiresAt + MAIL_MAX_TTL_MS,
       public_key: newKey?.publicKey() ?? previous!.event.payload.public_key,
       routes,
-      max_packet_bytes: input.max_packet_bytes ?? previous?.event.payload.max_packet_bytes ?? DEFAULT_MAX_PACKET_BYTES,
+      max_packet_bytes:
+        input.max_packet_bytes ??
+        previous?.event.payload.max_packet_bytes ??
+        DEFAULT_MAX_PACKET_BYTES,
     };
 
     // Publish to every route of the previous and new cards (Agent Mail
@@ -2098,12 +3026,19 @@ export class LocalConnector {
     const cards = this.state.mail.mailboxes.get(mailboxId) ?? [];
     cards.push(card);
     this.state.mail.mailboxes.set(mailboxId, cards);
-    return { mailbox: this.mailboxView(mailboxId, card, unixTimeMillis()), published, failed };
+    return {
+      mailbox: this.mailboxView(mailboxId, card, unixTimeMillis()),
+      published,
+      failed,
+    };
   }
 
   private async mailSend(input: MailSendInput): Promise<unknown> {
     const now = unixTimeMillis();
-    const parent = input.in_reply_to === undefined ? undefined : this.replyParent(input.in_reply_to, input.to);
+    const parent =
+      input.in_reply_to === undefined
+        ? undefined
+        : this.replyParent(input.in_reply_to, input.to);
     let owner: AgentId;
     let mailboxId: string;
     let routes: string[];
@@ -2112,7 +3047,10 @@ export class LocalConnector {
       ({ owner, mailbox_id: mailboxId, routes } = address);
     } else if (parent) {
       const replyCard = parent.reply_card;
-      if (replyCard === undefined) throw invalidPayload("the parent message carries no reply card; pass to");
+      if (replyCard === undefined)
+        throw invalidPayload(
+          "the parent message carries no reply card; pass to",
+        );
       validateMailboxCard(replyCard);
       owner = replyCard.event.actor;
       mailboxId = replyCard.event.payload.mailbox_id;
@@ -2120,16 +3058,27 @@ export class LocalConnector {
     } else {
       throw invalidPayload("to or in_reply_to is required");
     }
-    if (parent && parent.from !== owner) throw invalidPayload("a reply must be addressed to the parent's sender");
+    if (parent && parent.from !== owner)
+      throw invalidPayload("a reply must be addressed to the parent's sender");
     const card = await this.mailCard(owner, mailboxId, routes, now);
-    if (!card.event.payload.routes.some((route) => this.isAllowedHost(route))) throw permissionDenied();
-    const replyCard = input.reply_mailbox_id === undefined ? undefined : this.openMailboxCard(input.reply_mailbox_id, now);
+    if (!card.event.payload.routes.some((route) => this.isAllowedHost(route)))
+      throw permissionDenied();
+    const replyCard =
+      input.reply_mailbox_id === undefined
+        ? undefined
+        : this.openMailboxCard(input.reply_mailbox_id, now);
 
-    const parts = [...(input.text === undefined ? [] : [mailTextPart(input.text)]), ...(input.parts ?? [])];
-    if (parts.length === 0) throw invalidPayload("a message needs text or parts");
+    const parts = [
+      ...(input.text === undefined ? [] : [mailTextPart(input.text)]),
+      ...(input.parts ?? []),
+    ];
+    if (parts.length === 0)
+      throw invalidPayload("a message needs text or parts");
     const message = createMailMessage(this.agentId(), now, {
       to: owner,
-      expires_at: input.expires_at ?? Math.min(now + MESSAGE_TTL_MS, card.event.payload.receive_until),
+      expires_at:
+        input.expires_at ??
+        Math.min(now + MESSAGE_TTL_MS, card.event.payload.receive_until),
       thread_id: parent?.thread_id ?? newMailId(),
       parts,
       ...(input.subject === undefined ? {} : { subject: input.subject }),
@@ -2137,7 +3086,12 @@ export class LocalConnector {
       ...(replyCard === undefined ? {} : { reply_card: replyCard }),
     });
     if (parent) validateMailReply(message, parent);
-    const stored: StoredMailMessage = { direction: "sent", message, mailbox_id: mailboxId, read: true };
+    const stored: StoredMailMessage = {
+      direction: "sent",
+      message,
+      mailbox_id: mailboxId,
+      read: true,
+    };
     const status = await this.deliver(stored, card);
     const view = mailMessageView(stored, false);
     this.state.mail.messages.push(stored);
@@ -2145,7 +3099,10 @@ export class LocalConnector {
   }
 
   private async mailSync(input: MailSyncInput): Promise<unknown> {
-    if (input.mailbox_id !== undefined && !this.state.mail.mailboxes.has(input.mailbox_id)) {
+    if (
+      input.mailbox_id !== undefined &&
+      !this.state.mail.mailboxes.has(input.mailbox_id)
+    ) {
       throw invalidPayload("unknown mailbox");
     }
     const now = unixTimeMillis();
@@ -2159,28 +3116,37 @@ export class LocalConnector {
       expired,
       queued: this.state.mail.messages.filter(isQueued).length,
       errors,
+      synced_at: unixTimeMillis(),
       pending_inbox_count: this.pendingInboxCount(),
     };
   }
 
   private mailList(input: MailListInput): unknown {
-    const selected = this.state.mail.messages.filter((stored) =>
-      (input.direction === undefined || stored.direction === input.direction) &&
-      (input.mailbox_id === undefined || stored.mailbox_id === input.mailbox_id) &&
-      (input.from === undefined || stored.message.from === input.from) &&
-      (input.thread_id === undefined || stored.message.thread_id === input.thread_id) &&
-      (input.message_id === undefined || stored.message.message_id === input.message_id) &&
-      (!input.unread_only || isUnread(stored)));
+    const selected = this.state.mail.messages.filter(
+      (stored) =>
+        (input.direction === undefined ||
+          stored.direction === input.direction) &&
+        (input.mailbox_id === undefined ||
+          stored.mailbox_id === input.mailbox_id) &&
+        (input.from === undefined || stored.message.from === input.from) &&
+        (input.thread_id === undefined ||
+          stored.message.thread_id === input.thread_id) &&
+        (input.message_id === undefined ||
+          stored.message.message_id === input.message_id) &&
+        (!input.unread_only || isUnread(stored)),
+    );
     const result = page(selected, input.cursor, input.limit ?? 20);
     const messages = result.items.map((stored) => {
       const view = mailMessageView(stored, input.include_data === true);
-      if (input.mark_read && stored.direction === "received") stored.read = true;
+      if (input.mark_read && stored.direction === "received")
+        stored.read = true;
       return view;
     });
     // The page leaves the unread selection, so the next one starts at the same offset.
-    const next_cursor = result.next_cursor !== undefined && input.unread_only && input.mark_read
-      ? String(parseCursor(input.cursor))
-      : result.next_cursor;
+    const next_cursor =
+      result.next_cursor !== undefined && input.unread_only && input.mark_read
+        ? String(parseCursor(input.cursor))
+        : result.next_cursor;
     const unread_count = this.state.mail.messages.filter(isUnread).length;
     return next_cursor === undefined
       ? { messages, unread_count }
@@ -2190,7 +3156,12 @@ export class LocalConnector {
   private signMailCard(payload: MailboxCardPayload): MailboxCard {
     const createdAt = unixTimeMillis();
     const card = this.signer.signEvent(
-      mailboxPublishEvent(this.agentId(), createdAt, this.nonces.nextNonce(createdAt), payload),
+      mailboxPublishEvent(
+        this.agentId(),
+        createdAt,
+        this.nonces.nextNonce(createdAt),
+        payload,
+      ),
     );
     validateMailboxCard(card, this.agentId());
     return card;
@@ -2206,9 +3177,17 @@ export class LocalConnector {
    * card's — and pins it. A newer card that is closed or expired supersedes
    * older ones; when no route answers, a usable pin is used.
    */
-  private async mailCard(owner: AgentId, mailboxId: string, routes: string[], now: number): Promise<MailboxCard> {
+  private async mailCard(
+    owner: AgentId,
+    mailboxId: string,
+    routes: string[],
+    now: number,
+  ): Promise<MailboxCard> {
     const pins = this.state.mail.pins;
-    const candidates = routes.length > 0 ? routes : pins.get(owner, mailboxId)?.event.payload.routes ?? [];
+    const candidates =
+      routes.length > 0
+        ? routes
+        : (pins.get(owner, mailboxId)?.event.payload.routes ?? []);
     let lastError: unknown;
     for (const route of candidates) {
       let record;
@@ -2237,7 +3216,12 @@ export class LocalConnector {
         // An unusable pin falls through to the last route error.
       }
     }
-    throw lastError ?? invalidPayload("no card is pinned for this mailbox; use a contact address with routes");
+    throw (
+      lastError ??
+      invalidPayload(
+        "no card is pinned for this mailbox; use a contact address with routes",
+      )
+    );
   }
 
   /**
@@ -2245,14 +3229,26 @@ export class LocalConnector {
    * packet unless the stored one was sealed under this card. On `stale_card`
    * it reads the card again and seals under a newer pin once.
    */
-  private async deliver(stored: StoredMailMessage, card: MailboxCard): Promise<"delivered" | "queued"> {
+  private async deliver(
+    stored: StoredMailMessage,
+    card: MailboxCard,
+  ): Promise<"delivered" | "queued"> {
     const owner = stored.message.to;
     let refreshed = false;
     for (;;) {
       const now = unixTimeMillis();
       let packet = stored.packet;
-      if (packet === undefined || packet.event.payload.header.card_hash !== card.hash) {
-        packet = await sealMailPacket(stored.message, card, this.signer, this.nonces.nextNonce(now), now);
+      if (
+        packet === undefined ||
+        packet.event.payload.header.card_hash !== card.hash
+      ) {
+        packet = await sealMailPacket(
+          stored.message,
+          card,
+          this.signer,
+          this.nonces.nextNonce(now),
+          now,
+        );
         stored.packet = packet;
       }
       let transient: RouteError | undefined;
@@ -2277,21 +3273,36 @@ export class LocalConnector {
       }
       if (stale && !refreshed) {
         refreshed = true;
-        const fresh = await this.mailCard(owner, card.event.payload.mailbox_id, card.event.payload.routes, now);
+        const fresh = await this.mailCard(
+          owner,
+          card.event.payload.mailbox_id,
+          card.event.payload.routes,
+          now,
+        );
         if (fresh.hash !== card.hash) {
           card = fresh;
           continue;
         }
       }
-      const lastError = transient ?? (permanent === undefined ? undefined : routeError(permanent[0], permanent[1]));
-      stored.delivery = { status: "queued", ...(lastError === undefined ? {} : { last_error: lastError }) };
+      const lastError =
+        transient ??
+        (permanent === undefined
+          ? undefined
+          : routeError(permanent[0], permanent[1]));
+      stored.delivery = {
+        status: "queued",
+        ...(lastError === undefined ? {} : { last_error: lastError }),
+      };
       if (transient) return "queued";
       throw permanent?.[1] ?? permissionDenied();
     }
   }
 
   /** Retries queued messages with their stored packets. */
-  private async retryQueued(now: number, errors: RouteError[]): Promise<{ delivered: string[]; expired: string[] }> {
+  private async retryQueued(
+    now: number,
+    errors: RouteError[],
+  ): Promise<{ delivered: string[]; expired: string[] }> {
     const delivered: string[] = [];
     const expired: string[] = [];
     for (const stored of this.state.mail.messages) {
@@ -2300,18 +3311,26 @@ export class LocalConnector {
         expired.push(stored.message.message_id);
         continue;
       }
-      const card = this.state.mail.pins.get(stored.message.to, stored.mailbox_id);
+      const card = this.state.mail.pins.get(
+        stored.message.to,
+        stored.mailbox_id,
+      );
       if (!card) continue;
       try {
-        if ((await this.deliver(stored, card)) === "delivered") delivered.push(stored.message.message_id);
+        if ((await this.deliver(stored, card)) === "delivered")
+          delivered.push(stored.message.message_id);
       } catch {
-        if (stored.delivery?.last_error) errors.push(stored.delivery.last_error);
+        if (stored.delivery?.last_error)
+          errors.push(stored.delivery.last_error);
       }
     }
     return { delivered, expired };
   }
 
-  private async pollMailboxes(only: string | undefined, errors: RouteError[]): Promise<MailMessageView[]> {
+  private async pollMailboxes(
+    only: string | undefined,
+    errors: RouteError[],
+  ): Promise<MailMessageView[]> {
     const owner = this.agentId();
     const keyring = this.mailKeyring();
     // Every route of every retained card: old routes keep queued packets until
@@ -2321,7 +3340,8 @@ export class LocalConnector {
       if (only !== undefined && only !== mailboxId) continue;
       const routes: string[] = [];
       for (const card of [...cards].reverse()) {
-        for (const route of card.event.payload.routes) if (!routes.includes(route)) routes.push(route);
+        for (const route of card.event.payload.routes)
+          if (!routes.includes(route)) routes.push(route);
       }
       targets.push([mailboxId, routes]);
     }
@@ -2336,17 +3356,29 @@ export class LocalConnector {
         for (let pageCount = 0; pageCount < SYNC_MAX_PAGES; pageCount += 1) {
           let listed;
           try {
-            listed = await client.list(mailboxId, owner, jwt, { limit: SYNC_PAGE_LIMIT, cursor });
+            listed = await client.list(mailboxId, owner, jwt, {
+              limit: SYNC_PAGE_LIMIT,
+              cursor,
+            });
           } catch (error) {
             errors.push({ ...routeError(route, error), mailbox_id: mailboxId });
             break;
           }
           const now = unixTimeMillis();
           for (const record of listed.result) {
-            const outcome = await this.acceptPacket(keyring, mailboxId, record, now);
+            const outcome = await this.acceptPacket(
+              keyring,
+              mailboxId,
+              record,
+              now,
+            );
             if (outcome === "delete") deletions.push(record.packet_id);
             else if ("error" in outcome) {
-              errors.push({ ...routeError(route, outcome.error), mailbox_id: mailboxId, packet_id: record.packet_id });
+              errors.push({
+                ...routeError(route, outcome.error),
+                mailbox_id: mailboxId,
+                packet_id: record.packet_id,
+              });
             } else received.push(outcome.stored);
           }
           cursor = listed.next_cursor;
@@ -2356,7 +3388,11 @@ export class LocalConnector {
           try {
             await client.delete(mailboxId, packetId, owner, jwt);
           } catch (error) {
-            errors.push({ ...routeError(route, error), mailbox_id: mailboxId, packet_id: packetId });
+            errors.push({
+              ...routeError(route, error),
+              mailbox_id: mailboxId,
+              packet_id: packetId,
+            });
           }
         }
       }
@@ -2377,7 +3413,10 @@ export class LocalConnector {
   ): Promise<"delete" | { error: unknown } | { stored: MailMessageView }> {
     const packet = record.packet;
     // Sender policy applies before decryption.
-    if (this.state.mail.blockedSenders.has(packet.event.actor) || now >= packet.event.payload.header.expires_at) {
+    if (
+      this.state.mail.blockedSenders.has(packet.event.actor) ||
+      now >= packet.event.payload.header.expires_at
+    ) {
       return "delete";
     }
     let message: MailMessagePayload;
@@ -2386,24 +3425,42 @@ export class LocalConnector {
     } catch (error) {
       return { error };
     }
-    const existing = this.state.mail.messages.find((stored) =>
-      stored.direction === "received" &&
-      stored.message.from === message.from &&
-      stored.message.message_id === message.message_id);
+    const existing = this.state.mail.messages.find(
+      (stored) =>
+        stored.direction === "received" &&
+        stored.message.from === message.from &&
+        stored.message.message_id === message.message_id,
+    );
     if (existing) {
       return sameMessage(existing.message, message)
         ? "delete"
-        : { error: protocolError("invalid_event", "message ID reused for different content") };
+        : {
+            error: protocolError(
+              "invalid_event",
+              "message ID reused for different content",
+            ),
+          };
     }
     if (message.reply_card !== undefined) {
       // Verified with the message; a card older than the pin is not used.
       try {
-        this.state.mail.pins.observe(message.reply_card, message.from, now, false);
+        this.state.mail.pins.observe(
+          message.reply_card,
+          message.from,
+          now,
+          false,
+        );
       } catch {
         // The pin stays.
       }
     }
-    const stored: StoredMailMessage = { direction: "received", message, mailbox_id: mailboxId, received_at: now, read: false };
+    const stored: StoredMailMessage = {
+      direction: "received",
+      message,
+      mailbox_id: mailboxId,
+      received_at: now,
+      read: false,
+    };
     this.insertInbox(mailInboxItem(message, now));
     this.state.mail.messages.push(stored);
     return { stored: mailMessageView(stored, false) };
@@ -2425,11 +3482,17 @@ export class LocalConnector {
   private pruneMail(now: number): void {
     const mail = this.state.mail;
     for (const [mailboxId, cards] of mail.mailboxes) {
-      const kept = cards.filter((card) => now < card.event.payload.receive_until);
+      const kept = cards.filter(
+        (card) => now < card.event.payload.receive_until,
+      );
       if (kept.length === 0) mail.mailboxes.delete(mailboxId);
       else mail.mailboxes.set(mailboxId, kept);
     }
-    const advertised = new Set([...mail.mailboxes.values()].flat().map((card) => card.event.payload.public_key));
+    const advertised = new Set(
+      [...mail.mailboxes.values()]
+        .flat()
+        .map((card) => card.event.payload.public_key),
+    );
     for (const [publicKey, key] of this.mailKeys) {
       if (!advertised.has(publicKey)) {
         key.destroy();
@@ -2437,17 +3500,28 @@ export class LocalConnector {
       }
     }
     mail.pins.prune(now);
-    mail.messages = mail.messages.filter((stored) => now < stored.message.expires_at);
+    mail.messages = mail.messages.filter(
+      (stored) => now < stored.message.expires_at,
+    );
   }
 
-  private replyParent(messageId: string, to: string | undefined): MailMessagePayload {
+  private replyParent(
+    messageId: string,
+    to: string | undefined,
+  ): MailMessagePayload {
     const owner = to === undefined ? undefined : parseMailAddress(to).owner;
-    const found = this.state.mail.messages.filter((stored) =>
-      stored.direction === "received" &&
-      stored.message.message_id === messageId &&
-      (owner === undefined || stored.message.from === owner));
-    if (found.length > 1) throw invalidPayload("several received messages share this message_id; pass to");
-    if (found.length === 0) throw invalidPayload("no received message has this message_id");
+    const found = this.state.mail.messages.filter(
+      (stored) =>
+        stored.direction === "received" &&
+        stored.message.message_id === messageId &&
+        (owner === undefined || stored.message.from === owner),
+    );
+    if (found.length > 1)
+      throw invalidPayload(
+        "several received messages share this message_id; pass to",
+      );
+    if (found.length === 0)
+      throw invalidPayload("no received message has this message_id");
     return found[0].message;
   }
 
@@ -2462,15 +3536,25 @@ export class LocalConnector {
     return card;
   }
 
-  private mailboxView(mailboxId: string, card: MailboxCard, now: number): MailboxView {
-    const unread = this.state.mail.messages.filter((stored) => isUnread(stored) && stored.mailbox_id === mailboxId).length;
+  private mailboxView(
+    mailboxId: string,
+    card: MailboxCard,
+    now: number,
+  ): MailboxView {
+    const unread = this.state.mail.messages.filter(
+      (stored) => isUnread(stored) && stored.mailbox_id === mailboxId,
+    ).length;
     return mailboxView(mailboxId, card, now, unread);
   }
 
   // ── Agent Knowledge (local connector Section 4.3).
 
   private async knowledgeSubmit(input: KnowledgeSubmitInput): Promise<unknown> {
-    if (!Array.isArray(input.services) || input.services.length === 0 || input.services.length > MAX_KNOWLEDGE_SERVICES) {
+    if (
+      !Array.isArray(input.services) ||
+      input.services.length === 0 ||
+      input.services.length > MAX_KNOWLEDGE_SERVICES
+    ) {
       throw invalidPayload("services must name one to eight services");
     }
     const services: string[] = [];
@@ -2485,7 +3569,14 @@ export class LocalConnector {
     validatePayload(input.type, input.payload);
     const createdAt = unixTimeMillis();
     const envelope = this.signer.signEvent(
-      createEvent(KNOWLEDGE_PROTOCOL, input.type, this.agentId(), createdAt, this.nonces.nextNonce(createdAt), input.payload),
+      createEvent(
+        KNOWLEDGE_PROTOCOL,
+        input.type,
+        this.agentId(),
+        createdAt,
+        this.nonces.nextNonce(createdAt),
+        input.payload,
+      ),
     ) as KnowledgeEnvelope;
     // A malformed contribution fails here, before anything is disclosed.
     validateKnowledgeEnvelope(envelope);
@@ -2510,13 +3601,22 @@ export class LocalConnector {
   private async knowledgeQuery(input: KnowledgeQueryInput): Promise<unknown> {
     const { service, ...query } = input;
     const response = await (await this.knowledge(service)).query(query);
-    const result = scoped(response, { items: response.result.map(knowledgeItem) });
-    return response.next_cursor === undefined ? result : { ...result, next_cursor: response.next_cursor };
+    const result = scoped(response, {
+      items: response.result.map(knowledgeItem),
+    });
+    return response.next_cursor === undefined
+      ? result
+      : { ...result, next_cursor: response.next_cursor };
   }
 
   private async knowledgeGet(input: KnowledgeGetInput): Promise<unknown> {
-    const response = await (await this.knowledge(input.service)).batch(input.ids);
-    return scoped(response, { items: response.result.map(knowledgeItem), missing: response.missing });
+    const response = await (
+      await this.knowledge(input.service)
+    ).batch(input.ids);
+    return scoped(response, {
+      items: response.result.map(knowledgeItem),
+      missing: response.missing,
+    });
   }
 
   private async knowledgeSearch(input: KnowledgeSearchInput): Promise<unknown> {
@@ -2524,9 +3624,15 @@ export class LocalConnector {
     const response = await (await this.knowledge(service)).search(request);
     const hits = response.result.map((hit) => ({
       item: knowledgeItem(hit.record),
-      ...(hit.explanation === undefined ? {} : { explanation: hit.explanation }),
+      ...(hit.explanation === undefined
+        ? {}
+        : { explanation: hit.explanation }),
     }));
-    return scoped(response, { hits, ranking: response.ranking, coverage: response.coverage });
+    return scoped(response, {
+      hits,
+      ranking: response.ranking,
+      coverage: response.coverage,
+    });
   }
 
   /**
@@ -2539,11 +3645,15 @@ export class LocalConnector {
     const client = await this.knowledge(origin);
     const batch = await client.batch([input.id]);
     const record: KnowledgeRecord | undefined = batch.result[0];
-    if (!record) throw protocolError("not_found", "event not found at this service");
+    if (!record)
+      throw protocolError("not_found", "event not found at this service");
     const target = record.envelope.event;
 
     const tracker = new KnowledgePageTracker(origin);
-    const request: Record<string, unknown> = { target: input.id, limit: STATUS_PAGE_LIMIT };
+    const request: Record<string, unknown> = {
+      target: input.id,
+      limit: STATUS_PAGE_LIMIT,
+    };
     const links: KnowledgeRecord[] = [];
     let scope: KnowledgeQueryResponse | undefined;
     for (let pageCount = 0; pageCount < STATUS_MAX_PAGES; pageCount += 1) {
@@ -2565,16 +3675,25 @@ export class LocalConnector {
     for (const link of links) {
       const event = link.envelope.event;
       const payload = event.payload as unknown as Record<string, unknown>;
-      if (event.type === "knowledge.retract" && payload.target === input.id && laterByAuthor(event)) {
+      if (
+        event.type === "knowledge.retract" &&
+        payload.target === input.id &&
+        laterByAuthor(event)
+      ) {
         retractions.add(link.envelope.hash);
-      } else if (event.type === "knowledge.assess" && payload.target === input.id) {
+      } else if (
+        event.type === "knowledge.assess" &&
+        payload.target === input.id
+      ) {
         assessments.add(link.envelope.hash);
       } else if (
         event.type === "knowledge.publish" &&
         laterByAuthor(event) &&
         Array.isArray(payload.relations) &&
-        payload.relations.some((relation: { relation?: unknown; target?: unknown }) =>
-          relation.relation === "supersedes" && relation.target === input.id)
+        payload.relations.some(
+          (relation: { relation?: unknown; target?: unknown }) =>
+            relation.relation === "supersedes" && relation.target === input.id,
+        )
       ) {
         successors.add(link.envelope.hash);
       }
@@ -2584,7 +3703,9 @@ export class LocalConnector {
     return scoped(scope!, {
       item: knowledgeItem(record),
       complete,
-      ...(complete ? { status: retractions.size === 0 ? "active" : "retracted" } : {}),
+      ...(complete
+        ? { status: retractions.size === 0 ? "active" : "retracted" }
+        : {}),
       retractions: sorted(retractions),
       successors: sorted(successors),
       assessments: sorted(assessments),
@@ -2635,7 +3756,12 @@ export class LocalConnector {
     const origin = serviceOrigin(url);
     if (this.state.hosts.get(origin)?.allowed) return;
     for (const host of this.state.hosts.values()) {
-      if (host.allowed && host.profile_service !== undefined && serviceOrigin(host.profile_service) === origin) return;
+      if (
+        host.allowed &&
+        host.profile_service !== undefined &&
+        serviceOrigin(host.profile_service) === origin
+      )
+        return;
     }
     throw permissionDenied();
   }
@@ -2688,7 +3814,10 @@ export class LocalConnector {
     if (!client) {
       let keep = true;
       try {
-        const discovery = await new DiscourseClient(key, this.fetchImpl).protocol();
+        const discovery = await new DiscourseClient(
+          key,
+          this.fetchImpl,
+        ).protocol();
         client = new DiscourseClient(key, this.fetchImpl, discovery.endpoints);
       } catch (error) {
         // Discovery is optional: a host that answers without a document uses

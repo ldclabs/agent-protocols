@@ -19,6 +19,8 @@ pub(crate) struct PrincipalResolveInput {
 
 #[derive(Deserialize)]
 pub(crate) struct DelegationCheckInput {
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
     pub principal_id: String,
     /// The relying application's origin the delegation must be usable for.
     pub audience: String,
@@ -30,7 +32,8 @@ pub(crate) struct DelegationCheckInput {
 
 #[derive(Deserialize)]
 pub(crate) struct DelegationsListInput {
-    pub delegation_service: String,
+    pub delegation_service: Option<String>,
+    pub principal_id: Option<String>,
     #[serde(default)]
     pub status: Option<DelegationStatus>,
     #[serde(default)]
@@ -64,13 +67,15 @@ pub(crate) struct DelegationRevokeInput {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RoomsListMembership {
     Member,
     Creator,
     Moderator,
     Pending,
+    Invited,
+    Left,
     All,
 }
 
@@ -82,6 +87,7 @@ pub(crate) enum RoomsListScope {
     #[default]
     Known,
     Public,
+    Mine,
 }
 
 #[derive(Deserialize)]
@@ -118,8 +124,16 @@ pub(crate) struct RoomsListInput {
 impl RoomsListInput {
     /// Rejects a filter that belongs to the other scope.
     pub(crate) fn validate_scope(&self) -> Result<(), String> {
+        if self.scope != RoomsListScope::Mine
+            && matches!(
+                self.membership,
+                Some(RoomsListMembership::Invited | RoomsListMembership::Left)
+            )
+        {
+            return Err("invited and left membership require scope mine".into());
+        }
         match self.scope {
-            RoomsListScope::Known => {
+            RoomsListScope::Known | RoomsListScope::Mine => {
                 let public_only = self.tag.is_some()
                     || self.keyword.is_some()
                     || self.creator.is_some()
@@ -138,6 +152,9 @@ impl RoomsListInput {
                     return Err("scope public requires host".to_owned());
                 }
             }
+        }
+        if self.scope == RoomsListScope::Mine && self.host.is_none() {
+            return Err("scope mine requires host".to_owned());
         }
         Ok(())
     }
@@ -227,6 +244,7 @@ pub(crate) struct AgentStatusSetInput {
 
 #[derive(Deserialize)]
 pub(crate) struct RoomTimelineInput {
+    pub source: Option<String>,
     pub room_id: String,
     #[serde(default)]
     pub host: Option<String>,
@@ -536,4 +554,54 @@ pub(crate) struct KnowledgeSearchInput {
 pub(crate) struct KnowledgeStatusInput {
     pub service: String,
     pub id: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ServicesListInput {
+    pub host: Option<String>,
+    pub protocol: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct ProfilesGetInput {
+    pub profile_service: String,
+    pub ids: Option<Vec<AgentId>>,
+}
+#[derive(Deserialize)]
+pub(crate) struct ProfileHistoryInput {
+    pub profile_service: String,
+    pub agent_id: Option<AgentId>,
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct DelegationHistoryInput {
+    pub principal_id: String,
+    pub id: String,
+    pub cursor: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct MailResolveInput {
+    pub agent_id: AgentId,
+    pub address: Option<String>,
+    pub card_url: Option<String>,
+    pub profile_service: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct SchemaGetInput {
+    pub protocol: String,
+    #[serde(rename = "type")]
+    pub event_type: Option<String>,
+    pub room_id: Option<String>,
+    pub host: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct RoomArchiveInput {
+    pub room_id: String,
+    pub host: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct RoomWatchInput {
+    pub room_id: String,
+    pub host: Option<String>,
+    pub types: Option<Vec<String>>,
 }

@@ -12,7 +12,7 @@ TypeScript SDK for the draft Agent Identity, Agent Profile, Agent Delegation, Ag
 - `mail`: signed mailbox cards, sender-signed HPKE packets, card pins, key retention, inbox deduplication, and relay state.
 - `mail-client`: sender-signed Mail delivery and owner-authenticated retrieval with strict HTTP response checks.
 - `http-client`: fetch-based Profile, Delegation, Discourse, and Knowledge clients. Lists use `{ result, next_cursor }`; non-2xx responses throw `HttpResponseError` with the protocol `code`, `data`, and `Max-Seen-Nonce`. `ProfileClient.discover(origin)`, `DelegationClient.discover(origin)`, and `DiscourseClient.discover(origin)` use the endpoints in the service's discovery document, falling back to the RECOMMENDED paths.
-- `local-connector`: the Local Agent Protocols MCP connector: 33 standard tools, each with the full input schema of its local connector Section 4.3 table (required members and enumerated values, no `oneOf`, `anyOf`, or `allOf`), resource URIs, structured views, and the connector engine. It reads each Discourse host's and Knowledge service's discovery document on first use and keeps the client in its `DiscoveryCache` (after a network error, 429, or 5xx the next call reads it again), reads each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed. A host that restores a connector for every call shares one cache through the `discoveryCache` option, only among connectors with the same `fetchImpl`. The Mail tools create and rotate mailboxes, send with pinned cards, retry queued packets byte-for-byte, and sync new mail into the inbox, deleting a relay copy only in a later call; the Knowledge tools sign and submit contributions (a payload that does not match its type is refused before signing, with each failing member in `data.errors`), read verified pages, and check lifecycle status. Mail relays and Knowledge services must be allowed hosts; `setMailSenderBlocked` is the operator's sender policy, and `setMailBlockedSenders` replaces the whole list. `connector.snapshot()` returns a versioned JSON document with the next nonce and all the local state that local connector Section 4.1 requires a host to persist, including mail state; each room keeps its latest `ROOM_HISTORY_LIMIT` (1000) records and timeline items and the inbox `INBOX_LIMIT` (1000) entries, forgetting acknowledged ones first, and a restore trims a larger snapshot. Save it after every tool call and restore it with `LocalConnector.fromSnapshot(signer, snapshot)` for the same Agent ID. The Rust connector uses the same layout. Mail decryption keys stay out of the snapshot: keep `mailKeysSnapshot()` in the key store and load it with `restoreMailKeys(keys)`.
+- `local-connector`: the Local Agent Protocols MCP connector: 41 standard tools, each with the full input schema of its local connector Section 4.3 table (required members and enumerated values, no `oneOf`, `anyOf`, or `allOf`), resource URIs, structured views, and the connector engine. It reads each Discourse host's and Knowledge service's discovery document on first use and keeps the client in its `DiscoveryCache` (after a network error, 429, or 5xx the next call reads it again), reads each profile service's before a profile update, and refuses discovered endpoints whose origin the operator has not allowed. A host that restores a connector for every call shares one cache through the `discoveryCache` option, only among connectors with the same `fetchImpl`. The Mail tools create and rotate mailboxes, send with pinned cards, retry queued packets byte-for-byte, and sync new mail into the inbox, deleting a relay copy only in a later call; the Knowledge tools sign and submit contributions (a payload that does not match its type is refused before signing, with each failing member in `data.errors`), read verified pages, and check lifecycle status. Mail relays and Knowledge services must be allowed hosts; `setMailSenderBlocked` is the operator's sender policy, and `setMailBlockedSenders` replaces the whole list. `connector.snapshot()` returns a versioned JSON document with the next nonce and all the local state that local connector Section 4.1 requires a host to persist, including mail state; each room keeps its latest `ROOM_HISTORY_LIMIT` (1000) records and timeline items and the inbox `INBOX_LIMIT` (1000) entries, forgetting acknowledged ones first, and a restore trims a larger snapshot. Save it after every tool call and restore it with `LocalConnector.fromSnapshot(signer, snapshot)` for the same Agent ID. The Rust connector uses the same layout. Mail decryption keys stay out of the snapshot: keep `mailKeysSnapshot()` in the key store and load it with `restoreMailKeys(keys)`.
 
 ## Example
 
@@ -215,3 +215,39 @@ reads/deletes validate their JWT first. Responses have size, strict JSON and
 binding checks. Supply `allowUrl` and transport-level DNS/egress policy for the
 deployment. Production code runs in Node, browsers and Workers, with no Node-only
 crypto or Buffer. JS cannot guarantee erasure of provider-owned or GC copies.
+
+### Complete MCP workflows
+
+The local connector exposes 41 tools with shared input/output contracts from
+[`1.0.tools.json`](../../docs/mcp/local-connector/1.0.tools.json). Run
+`python3 scripts/sync_connector_catalog.py --check` from the repository root to
+check bundled contracts and protocol schemas. The signed wire protocols and SDK
+version are unchanged.
+
+Start with `agent_protocols_identity_current` and `agent_protocols_services_list`.
+Use `agent_protocols_profiles_get` before editing: `profile_update` replaces the
+whole profile, so preserve desired optional fields and remove `updated_at` and
+`event_id`. Omit `mailbox_id` in `mail_mailbox_publish` to create a mailbox; use
+`mail_resolve` with an expected Agent ID and a profile service, card URL, or
+contact address to discover verified candidates. Explicitly choose a reply
+mailbox when sending.
+
+`rooms_list` with `scope: "mine"` discovers invitations and memberships on the
+host. `schema_get` supplies exact built-in payloads, registered packs, and
+installed custom schemas; `room_watch` persists custom event interests.
+`room_timeline` with `source: "remote"` reads older verified history independently
+of the live read/presented heads. `room_archive` verifies an archive and reports
+redactions and incomplete state replay. `profile_history` and
+`delegation_history` expose signed histories. `delegations_list` with
+`principal_id` enumerates the active Controller's management scope;
+`delegation_check` exposes `next_cursor` and `complete`, so callers must finish
+pagination before concluding no usable grant exists.
+
+The transport-neutral core reports `sync_mode: "explicit"`: inbox reads do not
+poll relays or open SSE connections. Hosts drive SSE/background polling and
+persist state and mail keys after calls; otherwise call `mail_sync` and refresh
+rooms before reading the inbox. Input-schema validation errors include field paths in `data.errors`.
+Transport adapters should publish both `inputSchema` and `outputSchema`, refresh
+their tool inventory, and extend their own capability mappings for the new read
+and local watch tools. Consumers pinned to an older SDK must update their
+integration before the new surface is available.
