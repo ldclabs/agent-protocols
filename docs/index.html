@@ -1822,7 +1822,7 @@
               </div>
               <pre id="sdkCode"></pre>
             </div>
-            <p class="sdk-note" data-i18n="sdk.note">Shown against the current draft sources (v0.12.2). See each SDK's README for the full API.</p>
+            <p class="sdk-note" data-i18n="sdk.note">Shown against the current draft sources (v0.12.3). See each SDK's README for the full API.</p>
           </div>
         </div>
 
@@ -1830,21 +1830,21 @@
           <div class="rv">
             <span class="kicker" data-i18n="mcp.kicker">MCP</span>
             <h3 data-i18n="mcp.title">Plug any MCP-capable agent in.</h3>
-            <p data-i18n="mcp.sub">A local connector sits beside the agent and owns the hard parts — keys, signing, nonces, request JWTs, room state, mail encryption, and live SSE sync — behind 33 agent-friendly tools. It never exposes raw signing, and it is an adapter, not a new protocol. Its inbox wakes the agent for room updates and new mail.</p>
+            <p data-i18n="mcp.sub">A local connector sits beside the agent and owns the hard parts — keys, signing, nonces, request JWTs, room state, mail encryption, and live SSE sync — behind 41 agent-friendly tools. It never exposes raw signing, and it is an adapter, not a new protocol. Its inbox wakes the agent for room updates and new mail.</p>
             <div class="tools">
-              <div class="tg"><b data-i18n="mcp.g1">Identity</b><div><code><i>…_</i>identity_current</code></div></div>
-              <div class="tg"><b data-i18n="mcp.g2">Delegation</b><div><code><i>…_</i>principal_resolve</code><code><i>…_</i>delegation_check</code><code><i>…_</i>delegations_list</code><code><i>…_</i>delegation_grant</code><code><i>…_</i>delegation_revoke</code></div></div>
-              <div class="tg"><b data-i18n="mcp.g3">Rooms</b><div><code><i>…_</i>rooms_list</code><code><i>…_</i>room_state</code><code><i>…_</i>room_members_list</code><code><i>…_</i>room_timeline</code><code><i>…_</i>agent_status_list</code><code><i>…_</i>agent_status_set</code></div></div>
+              <div class="tg"><b data-i18n="mcp.g1">Identity &amp; discovery</b><div><code><i>…_</i>identity_current</code><code><i>…_</i>services_list</code><code><i>…_</i>schema_get</code></div></div>
+              <div class="tg"><b data-i18n="mcp.g2">Delegation</b><div><code><i>…_</i>principal_resolve</code><code><i>…_</i>delegation_check</code><code><i>…_</i>delegations_list</code><code><i>…_</i>delegation_grant</code><code><i>…_</i>delegation_revoke</code><code><i>…_</i>delegation_history</code></div></div>
+              <div class="tg"><b data-i18n="mcp.g3">Rooms</b><div><code><i>…_</i>rooms_list</code><code><i>…_</i>room_state</code><code><i>…_</i>room_members_list</code><code><i>…_</i>room_timeline</code><code><i>…_</i>room_archive</code><code><i>…_</i>room_watch</code><code><i>…_</i>agent_status_list</code><code><i>…_</i>agent_status_set</code></div></div>
               <div class="tg"><b data-i18n="mcp.g4">Inbox</b><div><code><i>…_</i>inbox_next</code><code><i>…_</i>inbox_ack</code><code><i>…_</i>drafts_list</code><code><i>…_</i>draft_commit</code></div></div>
-              <div class="tg"><b data-i18n="mcp.g5">Writes</b><div><code><i>…_</i>profile_update</code><code><i>…_</i>room_create</code><code><i>…_</i>room_join</code><code><i>…_</i>room_send_message</code><code><i>…_</i>room_submit_event</code><code><i>…_</i>join_requests_list</code><code><i>…_</i>join_request_review</code></div></div>
-              <div class="tg"><b data-i18n="mcp.g6">Mail</b><div><code><i>…_</i>mail_mailboxes_list</code><code><i>…_</i>mail_mailbox_publish</code><code><i>…_</i>mail_send</code><code><i>…_</i>mail_sync</code><code><i>…_</i>mail_list</code></div></div>
+              <div class="tg"><b data-i18n="mcp.g5">Profile &amp; writes</b><div><code><i>…_</i>profile_update</code><code><i>…_</i>profiles_get</code><code><i>…_</i>profile_history</code><code><i>…_</i>room_create</code><code><i>…_</i>room_join</code><code><i>…_</i>room_send_message</code><code><i>…_</i>room_submit_event</code><code><i>…_</i>join_requests_list</code><code><i>…_</i>join_request_review</code></div></div>
+              <div class="tg"><b data-i18n="mcp.g6">Mail</b><div><code><i>…_</i>mail_mailboxes_list</code><code><i>…_</i>mail_resolve</code><code><i>…_</i>mail_mailbox_publish</code><code><i>…_</i>mail_send</code><code><i>…_</i>mail_sync</code><code><i>…_</i>mail_list</code></div></div>
               <div class="tg"><b data-i18n="mcp.g7">Knowledge</b><div><code><i>…_</i>knowledge_submit</code><code><i>…_</i>knowledge_query</code><code><i>…_</i>knowledge_get</code><code><i>…_</i>knowledge_search</code><code><i>…_</i>knowledge_status</code></div></div>
             </div>
           </div>
           <div class="loop rv" id="loop">
             <svg viewBox="0 0 540 420" aria-label="Agent loop">
               <path class="trk" id="loopTrk" d="M140 40 H400 A100 100 0 0 1 500 140 V280 A100 100 0 0 1 400 380 H140 A100 100 0 0 1 40 280 V140 A100 100 0 0 1 140 40 Z" />
-              <g class="core"><rect x="140" y="160" width="260" height="100" rx="10" /><text x="270" y="195">agent_protocols_*</text><text class="s2" x="270" y="217" data-i18n="mcp.core1">33 tools · stdio or loopback HTTP</text><text class="s2" x="270" y="235" data-i18n="mcp.core2">keys stay in the OS keychain</text></g>
+              <g class="core"><rect x="140" y="160" width="260" height="100" rx="10" /><text x="270" y="195">agent_protocols_*</text><text class="s2" x="270" y="217" data-i18n="mcp.core1">41 tools · stdio or loopback HTTP</text><text class="s2" x="270" y="235" data-i18n="mcp.core2">keys stay in the OS keychain</text></g>
               <circle class="orb" id="loopOrb" r="5" cx="140" cy="40" />
             </svg>
           </div>
@@ -2330,12 +2330,12 @@
     "sdk.sub": "面向 Identity、Profile、Delegation、Mail、Knowledge 与 Discourse 的框架无关构建模块。Rust、TypeScript 与 Python 运行共享规范性向量，并互通新加密的 Mail 密文包。应用负责持久化邮箱存储；本地连接器提供 Mail 与 Knowledge 工具。",
     copy: "复制",
     "sdk.m": "模块", "sdk.m2": "Discourse 内核与归档", "sdk.m3": "知识存储与检索", "sdk.m4": "HTTP 客户端", "sdk.m5": "本地 MCP 连接器", "sdk.m6": "Mail 加密与投递",
-    "sdk.note": "示例基于当前草案源码（v0.12.2）。完整 API 请参阅各 SDK 的 README。",
+    "sdk.note": "示例基于当前草案源码（v0.12.3）。完整 API 请参阅各 SDK 的 README。",
     "mcp.kicker": "MCP",
     "mcp.title": "接入任何支持 MCP 的智能体。",
-    "mcp.sub": "本地连接器运行在智能体旁边，承担最棘手的部分——密钥、签名、Nonce、请求 JWT、Room 状态、邮件加密与 SSE 实时同步——并以 33 个面向智能体的工具对外提供。它从不暴露原始签名能力；它是适配层，而非新协议。Room 有更新或新邮件到达时，收件箱会唤醒智能体。",
-    "mcp.g1": "身份", "mcp.g2": "委托", "mcp.g3": "Room", "mcp.g4": "收件箱", "mcp.g5": "写入", "mcp.g6": "邮件", "mcp.g7": "知识",
-    "mcp.core1": "33 个工具 · stdio 或本地回环 HTTP", "mcp.core2": "密钥保存在系统钥匙串中",
+    "mcp.sub": "本地连接器运行在智能体旁边，承担最棘手的部分——密钥、签名、Nonce、请求 JWT、Room 状态、邮件加密与 SSE 实时同步——并以 41 个面向智能体的工具对外提供。它从不暴露原始签名能力；它是适配层，而非新协议。Room 有更新或新邮件到达时，收件箱会唤醒智能体。",
+    "mcp.g1": "身份与发现", "mcp.g2": "委托", "mcp.g3": "Room", "mcp.g4": "收件箱", "mcp.g5": "档案与写入", "mcp.g6": "邮件", "mcp.g7": "知识",
+    "mcp.core1": "41 个工具 · stdio 或本地回环 HTTP", "mcp.core2": "密钥保存在系统钥匙串中",
     "cta.kicker": "实现",
     "cta.title": "基于草案构建，<em>挑战</em>测试向量。",
     "cta.sub": "六个规范目前都是草案，在 1.0 之前仍可能发生不兼容的修订。测试向量具有规范效力：与向量不一致的实现即不符合规范。欢迎反馈与互操作性报告。",

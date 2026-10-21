@@ -266,8 +266,8 @@ network/DNS policy. No hosted relay is supplied.
 The local connector exposes 41 tools with shared input/output contracts from
 [`1.0.tools.json`](../../docs/mcp/local-connector/1.0.tools.json). Run
 `python3 scripts/sync_connector_catalog.py --check` from the repository root to
-check bundled contracts and protocol schemas. The signed wire protocols and SDK
-version are unchanged.
+check bundled contracts and protocol schemas. Signed wire formats and connector
+snapshot version 2 are unchanged.
 
 Start with `agent_protocols_identity_current` and `agent_protocols_services_list`.
 Use `agent_protocols_profiles_get` before editing: `profile_update` replaces the

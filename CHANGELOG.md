@@ -2,6 +2,26 @@
 
 Notable changes to the Agent Protocols draft specifications and SDKs. The Rust crate, the TypeScript package, and the Python package share one version number.
 
+## 0.12.3 — 2026-10-21
+
+### Specifications
+
+- Local connector: expand the standard surface from 33 to 41 tools and publish the full input/output contracts in `1.0.tools.json`, with shared input vectors and matching English and Simplified Chinese workflow guidance. Explain Profile full replacement, explicit mail synchronization, service discovery, controller management, and historical reads. Signed protocol wire formats and connector snapshot version 2 are unchanged.
+
+### Local connector (Rust and TypeScript)
+
+- Add `services_list`, `schema_get`, `profiles_get`, `profile_history`, `delegation_history`, `mail_resolve`, `room_archive`, and `room_watch` under the `agent_protocols_` prefix. Agents can discover allowed services, read verified profiles before replacing them, resolve and pin mailbox cards, inspect payload schemas, verify archives, and persist custom-event watches across restarts.
+- Extend `rooms_list` with `scope: "mine"` for authenticated memberships and invitations, and `room_timeline` with `source: "remote"` for verified history beyond local cache retention. Historical reads leave the live room, read cursor, inbox, and presented head unchanged; archive results report redactions and whether state replay completed.
+- Extend `delegations_list` with Controller-side enumeration bounded by the principal's authority ceiling. `delegation_check` now exposes `limit`, `cursor`, `next_cursor`, and `complete`, so a first page is no longer mistaken for an exhaustive authorization check. Delegation history binds both the credential ID and principal to the request.
+- Use equivalent bundled tool catalogs and protocol schemas, reject malformed tool inputs before network or signing operations, and return input-schema errors with JSON Pointer paths. Correct the catalog's custom-type name constraints and allow structured JSON message content in timeline and write results.
+- `identity_current.profiles` now returns configured Profile service URLs instead of cached Agent IDs; the result also lists tools and declares the core's explicit synchronization mode. Avoid cloning the full TypeScript catalog just to list tool names. Mail sync reports `synced_at`, and absent Rust `active_turn` results are omitted rather than returned as `null`.
+- Validate the requested TypeScript Profile history Agent ID before fetching, report a clean error for a Controller principal without a delegation service, and honor the configured Rust HTTP client for principal and delegation discovery.
+
+### SDKs and integration
+
+- Bump all three SDKs to `0.12.3`. Python remains a protocol SDK without a connector runtime and now checks the shared MCP catalog and input vectors. Workflow tests cover verified reads and bindings, Profile edits, mailbox discovery and delivery, authorization pagination, invitations, old history, archives, and persistent watches.
+- Connector hosts should refresh their tool inventory and capability mappings for the eight new tools, publish both `inputSchema` and `outputSchema`, and continue to provide durable storage and background synchronization where desired. Existing tool names remain available.
+
 ## 0.12.2 — 2026-10-19
 
 ### Specifications
