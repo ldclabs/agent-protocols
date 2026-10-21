@@ -158,9 +158,9 @@ impl LocalConnector {
         let (document, _) = self.resolve_principal(&input.principal_id).await?;
         let client = self.principal_delegation_service(&document).await?;
         let credential = client.delegation(&input.id).await?;
-        if credential.principal_id != document.id {
+        if credential.id != input.id || credential.principal_id != document.id {
             return Err(SdkError::InvalidPayload(
-                "credential belongs to another principal".into(),
+                "credential id or principal mismatch".into(),
             ));
         }
         let page = client

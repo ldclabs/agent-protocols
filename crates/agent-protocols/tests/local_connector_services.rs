@@ -1409,6 +1409,20 @@ fn delegation_pagination_and_controller_enumeration() {
             .await["signatures_verified"],
             true
         );
+        let mut wrong_credential = json!(credential);
+        wrong_credential["id"] = json!("other");
+        services.fixture("/v1/delegations/del", wrong_credential);
+        let error = call_error(
+            &mut agent,
+            TOOL_DELEGATION_HISTORY,
+            json!({"principal_id":principal_id,"id":"del"}),
+        )
+        .await;
+        assert!(matches!(
+            error,
+            SdkError::InvalidPayload(message)
+                if message.contains("credential id or principal mismatch")
+        ));
         let mut outside = json!(credential);
         outside["scopes"] = json!(["admin"]);
         services.fixture("/v1/delegations/query", json!({"result":[outside]}));

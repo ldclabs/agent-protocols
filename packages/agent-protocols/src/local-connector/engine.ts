@@ -122,7 +122,6 @@ import { CONNECTOR_CATALOG } from "./catalog-data.js";
 import { KNOWLEDGE_SCHEMA } from "../knowledge-schema.js";
 
 import {
-  standardToolDefinitions,
   validateToolInput,
   payloadSchema,
   TOOL_SERVICES_LIST,
@@ -1127,6 +1126,7 @@ export class LocalConnector {
   private async profileHistory(input: ProfileHistoryInput): Promise<unknown> {
     this.requireAllowedOrigin(input.profile_service);
     const id = input.agent_id ?? this.agentId();
+    publicKeyBytes(id);
     const page = await (
       await this.profileClient(input.profile_service)
     ).profileEvents(id, input.limit ?? 20, input.cursor);
@@ -1151,8 +1151,8 @@ export class LocalConnector {
     const { document } = await this.resolvePrincipal(input.principal_id);
     const client = await this.principalDelegationService(document);
     const credential = await client.delegation(input.id);
-    if (credential.principal_id !== document.id)
-      throw invalidPayload("credential belongs to another principal");
+    if (credential.id !== input.id || credential.principal_id !== document.id)
+      throw invalidPayload("credential id or principal mismatch");
     const page = await client.delegationEvents(input.id, input.cursor);
     for (const record of page.result) {
       validateDelegationEnvelope(record.envelope);
@@ -1511,7 +1511,7 @@ export class LocalConnector {
         ),
       ].sort(compareStrings),
       sync_mode: "explicit",
-      tools: standardToolDefinitions().map((t) => t.name),
+      tools: CONNECTOR_CATALOG.tools.map((t) => t.name),
       hosts: this.sortedHosts(),
     };
   }
@@ -2064,8 +2064,13 @@ export class LocalConnector {
         : await this.controllerPrincipal(input.principal_id);
     if (!principal && !input.delegation_service)
       throw invalidPayload("delegation_service or principal_id is required");
-    const origin =
-      principal?.delegation_service ?? serviceOrigin(input.delegation_service!);
+    if (principal && principal.delegation_service === undefined)
+      throw invalidPayload(
+        `principal ${principal.id} publishes no delegation_service`,
+      );
+    const origin = principal
+      ? principal.delegation_service!
+      : serviceOrigin(input.delegation_service!);
     const jwt = this.requestJwt(origin);
     const service = principal
       ? await this.principalDelegationService(principal)

@@ -162,6 +162,14 @@ test("service discovery and complete profile read/edit/read-back preserve option
   );
   await assert.rejects(
     () =>
+      call(c, "profile_history", {
+        profile_service: HOST,
+        agent_id: "not-an-agent",
+      }),
+    (e) => (e as any).code === "invalid_agent_id",
+  );
+  await assert.rejects(
+    () =>
       call(c, "profile_update", { profile_service: HOST, profile: current }),
     (e) => Boolean((e as any).data?.errors.length),
   );
@@ -197,6 +205,7 @@ test("delegation pages and controller enumeration preserve authority and complet
     acceptedAt: 101,
   });
   let overreach = false;
+  let credentialId = "del";
   const c = connector((async (url, init) => {
     const u = new URL(String(url));
     if (u.pathname === "/principal") return json(principal);
@@ -219,7 +228,8 @@ test("delegation pages and controller enumeration preserve authority and complet
     }
     if (u.pathname === "/v1/delegations/del/events")
       return json({ result: [{ envelope, accepted_at: 101 }] });
-    if (u.pathname === "/v1/delegations/del") return json(credential);
+    if (u.pathname === "/v1/delegations/del")
+      return json({ ...credential, id: credentialId });
     return json({}, 404);
   }) as typeof fetch);
   const input = {
@@ -250,6 +260,16 @@ test("delegation pages and controller enumeration preserve authority and complet
     ).signatures_verified,
     true,
   );
+  credentialId = "other";
+  await assert.rejects(
+    () =>
+      call(c, "delegation_history", {
+        principal_id: principalId,
+        id: "del",
+      }),
+    { code: "invalid_payload" },
+  );
+  credentialId = "del";
   overreach = true;
   await assert.rejects(
     () => call(c, "delegations_list", { principal_id: principalId }),

@@ -226,7 +226,8 @@
                 "items": {
                   "properties": {
                     "type": {
-                      "required": []
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
                     },
                     "kind": {
                       "type": "string",
@@ -299,7 +300,8 @@
                     "types": {
                       "type": "array",
                       "items": {
-                        "required": []
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
                       },
                       "minItems": 1,
                       "uniqueItems": true
@@ -576,7 +578,8 @@
               "items": {
                 "properties": {
                   "type": {
-                    "required": []
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
                   },
                   "kind": {
                     "type": "string",
@@ -649,7 +652,8 @@
                   "types": {
                     "type": "array",
                     "items": {
-                      "required": []
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
                     },
                     "minItems": 1,
                     "uniqueItems": true
@@ -1018,7 +1022,7 @@
                 "type": "string"
               },
               "content": {
-                "type": "string"
+                "description": "The message content: a JSON string, or an object when content_type is a JSON media type."
               },
               "mentions": {
                 "type": "array",
@@ -1496,7 +1500,7 @@
                 "type": "string"
               },
               "content": {
-                "type": "string"
+                "description": "The message content: a JSON string, or an object when content_type is a JSON media type."
               },
               "mentions": {
                 "type": "array",
@@ -2034,7 +2038,7 @@
               "type": "string"
             },
             "content": {
-              "type": "string"
+              "description": "The message content: a JSON string, or an object when content_type is a JSON media type."
             },
             "mentions": {
               "type": "array",
@@ -2112,7 +2116,7 @@
                 "type": "string"
               },
               "content": {
-                "type": "string"
+                "description": "The message content: a JSON string, or an object when content_type is a JSON media type."
               },
               "mentions": {
                 "type": "array",
@@ -2653,7 +2657,8 @@
           "items": {
             "properties": {
               "type": {
-                "required": []
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
               },
               "kind": {
                 "type": "string",
@@ -2726,7 +2731,8 @@
               "types": {
                 "type": "array",
                 "items": {
-                  "required": []
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
                 },
                 "minItems": 1,
                 "uniqueItems": true
@@ -2878,7 +2884,8 @@
               "items": {
                 "properties": {
                   "type": {
-                    "required": []
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
                   },
                   "kind": {
                     "type": "string",
@@ -2951,7 +2958,8 @@
                   "types": {
                     "type": "array",
                     "items": {
-                      "required": []
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$"
                     },
                     "minItems": 1,
                     "uniqueItems": true
@@ -3378,7 +3386,7 @@
               "type": "string"
             },
             "content": {
-              "type": "string"
+              "description": "The message content: a JSON string, or an object when content_type is a JSON media type."
             },
             "mentions": {
               "type": "array",
@@ -3456,7 +3464,7 @@
                 "type": "string"
               },
               "content": {
-                "type": "string"
+                "description": "The message content: a JSON string, or an object when content_type is a JSON media type."
               },
               "mentions": {
                 "type": "array",
@@ -3665,7 +3673,7 @@
               "type": "string"
             },
             "content": {
-              "type": "string"
+              "description": "The message content: a JSON string, or an object when content_type is a JSON media type."
             },
             "mentions": {
               "type": "array",
@@ -3743,7 +3751,7 @@
                 "type": "string"
               },
               "content": {
-                "type": "string"
+                "description": "The message content: a JSON string, or an object when content_type is a JSON media type."
               },
               "mentions": {
                 "type": "array",
