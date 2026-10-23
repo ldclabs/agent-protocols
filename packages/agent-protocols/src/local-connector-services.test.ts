@@ -456,6 +456,24 @@ test("unread pages marked read skip no letter", async () => {
   assert.deepEqual(texts.sort(), ["one", "three", "two"]);
 });
 
+test("empty Mail text and subject are preserved", async () => {
+  const s = services();
+  const alice = s.connector(11);
+  const bob = s.connector(12);
+  const mailbox = await openMailbox(bob);
+  await call(alice, TOOL_MAIL_SEND, {
+    to: mailbox.address,
+    text: "",
+    subject: "",
+  });
+  await call(bob, TOOL_MAIL_SYNC, {});
+  const result = await call(bob, TOOL_MAIL_LIST, {});
+  assert.equal(result.messages[0].subject, "");
+  assert.equal(result.messages[0].parts.length, 1);
+  assert.equal(result.messages[0].parts[0].text, "");
+  assert.equal(result.messages[0].parts[0].size, 0);
+});
+
 test("blank and null arguments read as left out", async () => {
   const s = services();
   const alice = s.connector(11);

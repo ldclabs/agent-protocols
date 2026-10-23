@@ -753,6 +753,31 @@ fn unread_pages_marked_read_skip_no_letter() {
 }
 
 #[test]
+fn empty_mail_text_and_subject_are_preserved() {
+    let services = Services::start();
+    run(async {
+        let mut alice = services.connector(11);
+        let mut bob = services.connector(12);
+        let mailbox = open_mailbox(&mut bob, &services).await;
+        call(
+            &mut alice,
+            TOOL_MAIL_SEND,
+            json!({
+                "to": mailbox["address"], "text": "", "subject": ""
+            }),
+        )
+        .await;
+        call(&mut bob, TOOL_MAIL_SYNC, json!({})).await;
+        let result = call(&mut bob, TOOL_MAIL_LIST, json!({})).await;
+        let message = &result["messages"][0];
+        assert_eq!(message["subject"], "");
+        assert_eq!(message["parts"].as_array().unwrap().len(), 1);
+        assert_eq!(message["parts"][0]["text"], "");
+        assert_eq!(message["parts"][0]["size"], 0);
+    });
+}
+
+#[test]
 fn blank_and_null_arguments_read_as_left_out() {
     let services = Services::start();
     run(async {

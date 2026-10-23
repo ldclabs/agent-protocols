@@ -557,6 +557,75 @@ fn applies_room_records_into_members_timeline_and_inbox() {
 }
 
 #[test]
+fn empty_message_content_is_preserved_when_sending_and_revising_a_draft() {
+    let moderator = signer(5);
+    let mut connector = connector_with_room(1, &moderator);
+    define_type(&mut connector, control_type("plan.update"));
+    let plan = record(&moderator, "plan.update", 1, 1, HEAD, 2, HEAD, json!({}));
+    let hash = plan.hash.clone();
+    connector.apply_record(plan).unwrap();
+    let held = block_on(connector.call_tool(
+        TOOL_ROOM_SEND_MESSAGE,
+        json!({
+            "room_id": "room1", "content": "old text must not be sent",
+            "base_seq": 1, "base_hash": HEAD
+        }),
+    ))
+    .unwrap();
+    assert_eq!(held["status"], "held");
+    // Another coordination change holds the revision locally, before HTTP.
+    connector
+        .apply_record(record(
+            &moderator,
+            "plan.update",
+            2,
+            2,
+            &hash,
+            3,
+            &hash,
+            json!({}),
+        ))
+        .unwrap();
+    let revised = block_on(connector.call_tool(
+        TOOL_DRAFT_COMMIT,
+        json!({
+            "draft_id": held["draft"]["id"], "action": "revise", "content": ""
+        }),
+    ))
+    .unwrap();
+    assert_eq!(revised["status"], "held");
+    assert_eq!(revised["draft"]["draft"]["content"], "");
+    let sent = block_on(connector.call_tool(
+        TOOL_ROOM_SEND_MESSAGE,
+        json!({
+            "room_id": "room1", "content": "", "base_seq": 1, "base_hash": HEAD
+        }),
+    ))
+    .unwrap();
+    assert_eq!(sent["status"], "held");
+    assert_eq!(sent["draft"]["draft"]["content"], "");
+}
+
+#[test]
+fn blank_unknown_tool_arguments_are_rejected_before_changing_state() {
+    let mut connector = LocalConnector::new(signer(1));
+    for value in [Value::Null, json!("")] {
+        let error = block_on(connector.call_tool(
+            TOOL_MAIL_LIST,
+            json!({
+                "form": value, "mark_read": true
+            }),
+        ))
+        .unwrap_err();
+        assert_eq!(error.code(), Some("invalid_payload"));
+        assert!(!error.data().unwrap()["errors"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[test]
 fn message_writes_hold_before_any_network_call_when_coordination_moved() {
     let moderator = signer(5);
     let mut connector = connector_with_room(1, &moderator);

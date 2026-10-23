@@ -548,22 +548,22 @@ function compareStrings(a: string, b: string): number {
 }
 
 /**
- * Reads arguments the way an MCP client that must send every advertised
- * property means them: `null` and `""` both say "left out". A tool's
- * `inputSchema` has no way to spell an omitted optional member, so a host that
- * always serializes the whole property list can only express one as `null` or
- * an empty string. Accepting both keeps such a filter at its documented
- * default, instead of refusing a `null` timestamp as a type error or matching
- * an empty mailbox, thread, or message ID that no stored entry can have.
- * Required arguments that arrive empty are simply absent, so validation still
- * reports them by name.
+ * Accept omitted-value placeholders from hosts that serialize every property.
+ * Preserve unknown members for validation and explicit empty message content:
+ * deleting a draft's empty replacement would send its previous text instead.
+ * Only top-level arguments are normalized; nested payloads stay untouched.
  */
-function normalizeToolInput(input: unknown): unknown {
+function normalizeToolInput(name: string, input: unknown): unknown {
   if (input === null || input === undefined) return {};
   if (typeof input !== "object" || Array.isArray(input)) return input;
+  const properties = CONNECTOR_CATALOG.tools.find((tool) => tool.name === name)
+    ?.inputSchema.properties;
   return Object.fromEntries(
     Object.entries(input as Record<string, unknown>).filter(
-      ([, value]) => value !== null && value !== "",
+      ([key, value]) =>
+        !Object.prototype.hasOwnProperty.call(properties ?? {}, key) ||
+        (value !== null &&
+          (value !== "" || ["content", "text", "subject"].includes(key))),
     ),
   );
 }
@@ -950,7 +950,7 @@ export class LocalConnector {
   }
 
   async callTool(name: string, input: unknown): Promise<unknown> {
-    input = normalizeToolInput(input);
+    input = normalizeToolInput(name, input);
     validateToolInput(name, input);
     switch (name) {
       case TOOL_SERVICES_LIST:

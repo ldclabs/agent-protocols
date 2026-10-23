@@ -890,6 +890,43 @@ test("banned members request review with both known and newly reported bans", as
   }
 });
 
+test("empty message content is preserved when sending and revising a draft", async () => {
+  const host = new MockHost("room1", signer(5));
+  const connector = connectorFor(signer(1), host);
+  await connector.callTool(TOOL_ROOM_STATE, { room_id: "room1", host: HOST });
+  host.append(plan(signer(2), host, "new context", 1));
+  const held = (await connector.callTool(TOOL_ROOM_SEND_MESSAGE, {
+    room_id: "room1",
+    content: "old text must not be sent",
+  })) as RoomWriteResult;
+  assert.equal(held.status, "held");
+  const revised = (await connector.callTool(TOOL_DRAFT_COMMIT, {
+    draft_id: held.draft!.id,
+    action: "revise",
+    content: "",
+  })) as RoomWriteResult;
+  assert.equal(revised.status, "sent");
+  assert.equal(revised.record?.envelope.event.payload.content, "");
+  const sent = (await connector.callTool(TOOL_ROOM_SEND_MESSAGE, {
+    room_id: "room1",
+    content: "",
+  })) as RoomWriteResult;
+  assert.equal(sent.status, "sent");
+  assert.equal(sent.record?.envelope.event.payload.content, "");
+});
+
+test("blank unknown tool arguments are rejected before changing state", async () => {
+  const connector = new LocalConnector(signer(1));
+  for (const value of [null, ""]) {
+    await assert.rejects(
+      () =>
+        connector.callTool(TOOL_MAIL_LIST, { form: value, mark_read: true }),
+      (error: any) =>
+        error.code === "invalid_payload" && error.data.errors.length > 0,
+    );
+  }
+});
+
 test("a message against an unread coordination change is held, then committed with send or dropped", async () => {
   const creator = signer(5),
     active = signer(1),

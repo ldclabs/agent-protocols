@@ -2,13 +2,18 @@
 
 Notable changes to the Agent Protocols draft specifications and SDKs. The Rust crate, the TypeScript package, and the Python package share one version number.
 
-## Unreleased
+## 0.12.5 — 2026-10-23
 
 ### Local connector (Rust and TypeScript)
 
-- Read `null` and `""` tool arguments as left out. A host that must serialize every property its `inputSchema` advertises has no other way to spell an omitted optional member, so both spellings now keep such a member at its documented default: a blank sender is no sender rather than an invalid Agent ID, a blank mailbox, thread, or message ID matches no empty value, and a `null` timestamp is an omitted one instead of a type error. Required arguments that arrive empty are simply absent, so validation still reports them by name.
+- Treat `null` declared top-level tool arguments and blank control/filter arguments as omitted for hosts that serialize unused properties. Blank sender, mailbox, thread, and message filters use their documented defaults, and a `null` timestamp no longer causes a type error. Missing required arguments still fail validation.
+- Preserve explicit empty `content`, `text`, and `subject` strings. In particular, revising a held draft to `content: ""` no longer sends its previous text, and empty room messages and Mail text parts remain valid. Nested payloads are unchanged.
+- Reject unknown arguments even when their values are `null` or `""`; normalization no longer hides misspelled filters from input-schema validation.
 - Report `read` in `mail_list` results as the state the call leaves behind. The message view was built before `mark_read` was applied, so a letter this call had just marked read came back with `read: false` while `unread_count` had already dropped — a caller following the field marked it again.
-- Tool names, required arguments, output shapes, and signed wire formats are unchanged; the connector only accepts more input spellings than before.
+
+### SDKs and integration
+
+- Bump all three SDKs to `0.12.5` and update both landing-page languages. Tool names, input/output schemas, signed wire formats, and connector snapshot version 2 are unchanged. Python remains a protocol SDK without a connector runtime.
 
 ## 0.12.4 — 2026-10-23
 

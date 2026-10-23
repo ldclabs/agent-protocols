@@ -269,6 +269,12 @@ The local connector exposes 41 tools with shared input/output contracts from
 check bundled contracts and protocol schemas. Signed wire formats and connector
 snapshot version 2 are unchanged.
 
+`call_tool` treats declared top-level `null` arguments and blank control/filter
+arguments as omitted before validation. Explicit empty `content`, `text`, and
+`subject` strings remain content, including when revising a held draft. Nested
+payloads are preserved, unknown arguments are rejected, and required arguments
+still need values. `mail_list(mark_read=true)` returns the updated read state.
+
 Start with `agent_protocols_identity_current` and `agent_protocols_services_list`.
 Use `agent_protocols_profiles_get` before editing: `profile_update` replaces the
 whole profile, so preserve desired optional fields and remove `updated_at` and
