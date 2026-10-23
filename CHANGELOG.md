@@ -2,6 +2,14 @@
 
 Notable changes to the Agent Protocols draft specifications and SDKs. The Rust crate, the TypeScript package, and the Python package share one version number.
 
+## Unreleased
+
+### Local connector (Rust and TypeScript)
+
+- Read `null` and `""` tool arguments as left out. A host that must serialize every property its `inputSchema` advertises has no other way to spell an omitted optional member, so both spellings now keep such a member at its documented default: a blank sender is no sender rather than an invalid Agent ID, a blank mailbox, thread, or message ID matches no empty value, and a `null` timestamp is an omitted one instead of a type error. Required arguments that arrive empty are simply absent, so validation still reports them by name.
+- Report `read` in `mail_list` results as the state the call leaves behind. The message view was built before `mark_read` was applied, so a letter this call had just marked read came back with `read: false` while `unread_count` had already dropped — a caller following the field marked it again.
+- Tool names, required arguments, output shapes, and signed wire formats are unchanged; the connector only accepts more input spellings than before.
+
 ## 0.12.4 — 2026-10-23
 
 ### Local connector (Rust and TypeScript)

@@ -542,6 +542,8 @@ fn letters_round_trip_with_replies_retries_and_restored_keys() {
         assert!(letter["parts"][1].get("data").is_none());
         assert_eq!(letter["reply_address"], alice_box["address"]);
         assert_eq!(read["unread_count"], 0);
+        // The view reports the read state this call left behind.
+        assert_eq!(letter["read"], true);
         let with_data = call(
             &mut bob,
             TOOL_MAIL_LIST,
@@ -747,6 +749,75 @@ fn unread_pages_marked_read_skip_no_letter() {
         }
         texts.sort();
         assert_eq!(texts, ["one", "three", "two"]);
+    });
+}
+
+#[test]
+fn blank_and_null_arguments_read_as_left_out() {
+    let services = Services::start();
+    run(async {
+        let mut alice = services.connector(11);
+        let mut bob = services.connector(12);
+        let bob_box = open_mailbox(&mut bob, &services).await;
+        for text in ["first", "second"] {
+            call(
+                &mut alice,
+                TOOL_MAIL_SEND,
+                json!({ "to": bob_box["address"], "text": text }),
+            )
+            .await;
+        }
+        call(&mut bob, TOOL_MAIL_SYNC, json!({})).await;
+
+        // A host that must serialize every advertised property sends "" for the
+        // filters it leaves out. A blank sender is no sender, not a bad agent
+        // ID, and blank mailbox, thread, and message IDs match no empty value.
+        let all = call(&mut bob, TOOL_MAIL_LIST, json!({ "from": "" })).await;
+        assert_eq!(all["messages"].as_array().unwrap().len(), 2);
+        let page = call(
+            &mut bob,
+            TOOL_MAIL_LIST,
+            json!({
+                "from": alice.agent_id(),
+                "mailbox_id": "", "thread_id": "", "message_id": "",
+                "unread_only": true, "mark_read": true
+            }),
+        )
+        .await;
+        assert_eq!(page["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(page["unread_count"], 0);
+        assert!(page["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|message| message["read"] == json!(true)));
+
+        // A null optional argument is an omitted one, not a type error.
+        let inbox = call(
+            &mut bob,
+            TOOL_INBOX_NEXT,
+            json!({ "kinds": ["mail.received"] }),
+        )
+        .await;
+        let ids = inbox["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ids.len(), 2);
+        let acked = call(
+            &mut bob,
+            TOOL_INBOX_ACK,
+            json!({ "ids": ids, "action": "defer", "defer_until": null }),
+        )
+        .await;
+        assert_eq!(acked["acknowledged"].as_array().unwrap().len(), 2);
+
+        // A required argument that arrives blank is still missing.
+        let error = call_error(&mut bob, TOOL_ROOM_STATE, json!({ "room_id": "" })).await;
+        assert_eq!(error.code(), Some("invalid_payload"));
+        assert!(format!("{error}").contains("room_id"), "{error}");
     });
 }
 

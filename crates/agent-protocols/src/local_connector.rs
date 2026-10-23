@@ -434,7 +434,7 @@ impl LocalConnector {
     }
 
     pub async fn call_tool(&mut self, name: &str, input: Value) -> Result<Value> {
-        let input = if input.is_null() { json!({}) } else { input };
+        let input = normalize_tool_input(input);
         catalog::validate_tool_input(name, &input)?;
         match name {
             TOOL_SERVICES_LIST => self.services_list(parse_input(input)?).await,
@@ -2168,6 +2168,29 @@ impl LocalConnector {
         };
         self.require_allowed_host(&service_origin(client.rooms_url())?)?;
         Ok(client)
+    }
+}
+
+/// Reads arguments the way an MCP client that must send every advertised
+/// property means them: `null` and `""` both say "left out".
+///
+/// A tool's `inputSchema` has no way to spell an omitted optional member, so a
+/// host that always serializes the whole property list can only express one as
+/// `null` or as an empty string. Accepting both keeps such a filter at its
+/// documented default, instead of refusing a `null` timestamp as a type error
+/// or matching an empty mailbox, thread, or message ID that no stored entry can
+/// have. Required arguments that arrive empty are simply absent, so validation
+/// still reports them by name.
+fn normalize_tool_input(input: Value) -> Value {
+    match input {
+        Value::Object(members) => Value::Object(
+            members
+                .into_iter()
+                .filter(|(_, value)| !value.is_null() && value.as_str() != Some(""))
+                .collect(),
+        ),
+        Value::Null => json!({}),
+        other => other,
     }
 }
 

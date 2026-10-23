@@ -547,6 +547,27 @@ function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * Reads arguments the way an MCP client that must send every advertised
+ * property means them: `null` and `""` both say "left out". A tool's
+ * `inputSchema` has no way to spell an omitted optional member, so a host that
+ * always serializes the whole property list can only express one as `null` or
+ * an empty string. Accepting both keeps such a filter at its documented
+ * default, instead of refusing a `null` timestamp as a type error or matching
+ * an empty mailbox, thread, or message ID that no stored entry can have.
+ * Required arguments that arrive empty are simply absent, so validation still
+ * reports them by name.
+ */
+function normalizeToolInput(input: unknown): unknown {
+  if (input === null || input === undefined) return {};
+  if (typeof input !== "object" || Array.isArray(input)) return input;
+  return Object.fromEntries(
+    Object.entries(input as Record<string, unknown>).filter(
+      ([, value]) => value !== null && value !== "",
+    ),
+  );
+}
+
 function parseCursor(cursor: string | undefined): number {
   if (cursor === undefined) return 0;
   const parsed = Number.parseInt(cursor, 10);
@@ -929,7 +950,7 @@ export class LocalConnector {
   }
 
   async callTool(name: string, input: unknown): Promise<unknown> {
-    input ??= {};
+    input = normalizeToolInput(input);
     validateToolInput(name, input);
     switch (name) {
       case TOOL_SERVICES_LIST:
@@ -3142,10 +3163,11 @@ export class LocalConnector {
     );
     const result = page(selected, input.cursor, input.limit ?? 20);
     const messages = result.items.map((stored) => {
-      const view = mailMessageView(stored, input.include_data === true);
       if (input.mark_read && stored.direction === "received")
         stored.read = true;
-      return view;
+      // The view is built after the update so `read` reports the state this
+      // call left behind; a stale `false` invites a second mark.
+      return mailMessageView(stored, input.include_data === true);
     });
     // The page leaves the unread selection, so the next one starts at the same offset.
     const next_cursor =

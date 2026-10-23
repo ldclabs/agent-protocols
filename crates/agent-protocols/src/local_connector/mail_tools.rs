@@ -372,10 +372,12 @@ impl LocalConnector {
         let mut messages = Vec::new();
         for index in indices {
             let stored = &mut self.state.mail.messages[index];
-            messages.push(mail_message_view(stored, input.include_data));
             if input.mark_read && stored.direction == MailDirection::Received {
                 stored.read = true;
             }
+            // The view is built after the update so `read` reports the state
+            // this call left behind; a stale `false` invites a second mark.
+            messages.push(mail_message_view(stored, input.include_data));
         }
         let unread_count = self
             .state

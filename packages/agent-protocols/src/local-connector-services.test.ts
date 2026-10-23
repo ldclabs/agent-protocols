@@ -20,6 +20,7 @@ import {
   LOCAL_CONNECTOR_SNAPSHOT_VERSION,
   LocalConnector,
   standardToolDefinitions,
+  TOOL_INBOX_ACK,
   TOOL_INBOX_NEXT,
   TOOL_KNOWLEDGE_GET,
   TOOL_KNOWLEDGE_QUERY,
@@ -31,6 +32,7 @@ import {
   TOOL_MAIL_MAILBOX_PUBLISH,
   TOOL_MAIL_SEND,
   TOOL_MAIL_SYNC,
+  TOOL_ROOM_STATE,
 } from "./local-connector.js";
 import { MailRelayStore, type MailboxCard, type MailPacket } from "./mail.js";
 
@@ -297,6 +299,8 @@ test("letters round-trip with replies, retries, and restored keys", async () => 
   assert.equal(letter.parts[1].data, undefined);
   assert.equal(letter.reply_address, aliceBox.address);
   assert.equal(read.unread_count, 0);
+  // The view reports the read state this call left behind.
+  assert.equal(letter.read, true);
   const withData = await call(bob, TOOL_MAIL_LIST, {
     message_id: messageId,
     include_data: true,
@@ -450,6 +454,51 @@ test("unread pages marked read skip no letter", async () => {
     cursor = page.next_cursor;
   } while (cursor !== undefined);
   assert.deepEqual(texts.sort(), ["one", "three", "two"]);
+});
+
+test("blank and null arguments read as left out", async () => {
+  const s = services();
+  const alice = s.connector(11);
+  const bob = s.connector(12);
+  const bobBox = await openMailbox(bob);
+  for (const text of ["first", "second"]) {
+    await call(alice, TOOL_MAIL_SEND, { to: bobBox.address, text });
+  }
+  await call(bob, TOOL_MAIL_SYNC, {});
+
+  // A host that must serialize every advertised property sends "" for the
+  // filters it leaves out. A blank sender is no sender, not a bad agent ID, and
+  // blank mailbox, thread, and message IDs match no empty value.
+  const all = await call(bob, TOOL_MAIL_LIST, { from: "" });
+  assert.equal(all.messages.length, 2);
+  const page = await call(bob, TOOL_MAIL_LIST, {
+    from: alice.agentId(),
+    mailbox_id: "",
+    thread_id: "",
+    message_id: "",
+    unread_only: true,
+    mark_read: true,
+  });
+  assert.equal(page.messages.length, 2);
+  assert.equal(page.unread_count, 0);
+  assert.equal(
+    page.messages.every((message: Json) => message.read === true),
+    true,
+  );
+
+  // A null optional argument is an omitted one, not a type error.
+  const inbox = await call(bob, TOOL_INBOX_NEXT, { kinds: ["mail.received"] });
+  const ids = inbox.items.map((item: Json) => item.id);
+  assert.equal(ids.length, 2);
+  const acked = await call(bob, TOOL_INBOX_ACK, {
+    ids,
+    action: "defer",
+    defer_until: null,
+  });
+  assert.equal(acked.acknowledged.length, 2);
+
+  // A required argument that arrives blank is still missing.
+  await rejects(bob, TOOL_ROOM_STATE, { room_id: "" }, "invalid_payload");
 });
 
 test("knowledge publish, query, search, and status", async () => {
