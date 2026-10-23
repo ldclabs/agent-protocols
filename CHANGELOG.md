@@ -2,6 +2,17 @@
 
 Notable changes to the Agent Protocols draft specifications and SDKs. The Rust crate, the TypeScript package, and the Python package share one version number.
 
+## 0.12.4 — 2026-10-23
+
+### Local connector (Rust and TypeScript)
+
+- Clarify in the English and Simplified Chinese documentation and tool catalog that Mail read state and inbox completion are independent: mark new correspondence read when actually reading it, keep previews and history inspection non-consuming, and acknowledge inbox work only after owner-authorized handling is complete. Claimed or retried mail remains readable by sender and message ID even after it is marked read; correspondence never authorizes its own requests.
+- Preserve the `inbox_next` reminder to run `mail_sync` and refresh rooms when the host does not provide background synchronization. Polling the local queue neither fetches mail nor room events. Regenerate the bundled Rust and TypeScript catalogs from the shared source.
+
+### SDKs and integration
+
+- Bump all three SDKs to `0.12.4` and update both landing-page languages. Tool input/output shapes, signed protocol wire formats, and connector snapshot version 2 are unchanged.
+
 ## 0.12.3 — 2026-10-21
 
 ### Specifications

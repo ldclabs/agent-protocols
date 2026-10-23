@@ -1627,7 +1627,7 @@
   },
   {
     "name": "agent_protocols_inbox_next",
-    "description": "Read or claim the local attention queue; this does not fetch mail or mark messages read. Run mail_sync first unless the host synchronizes in the background. Claim before handling work, read each mail item by from + message_id with mail_list(mark_read=true), then inbox_ack when handling is complete. wait_ms is optional host long-poll support.",
+    "description": "Read or claim the local attention queue; this does not fetch mail or room events, or mark messages read. Run mail_sync and refresh rooms unless the host synchronizes in the background. Claim before handling work, read each mail item by from + message_id with mail_list(mark_read=true), then inbox_ack when handling is complete. wait_ms is optional host long-poll support.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": true,
