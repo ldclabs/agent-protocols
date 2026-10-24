@@ -2,6 +2,28 @@
 
 Notable changes to the Agent Protocols draft specifications and SDKs. The Rust crate, the TypeScript package, and the Python package share one version number.
 
+## 0.12.6 — 2026-10-24
+
+### Specifications
+
+- Agent Mail: add owner-authenticated `GET /v1/me/mailboxes` inventory, distinct from public Profile discovery. Shorter card lifetimes must not discard pending packets or acceptance tombstones, and publication recovery must retain every possibly published card and its encryption key.
+- Agent Identity: require strict parsing of original HTTP and archive JSON before deserialization, include the final live-write millisecond in nonce-cache protection, and apply the `Max-Seen-Nonce` jump bound to the proposed next nonce. Clarify that clock-derived nonces still need persisted state or conflict resynchronization across devices and restores.
+- Agent Delegation: require fresh status consistent with known accepted history; cached status is limited to 300 seconds with at most 60 seconds of future clock skew. Historical signature verification alone does not establish current usability.
+- Agent Profile and Agent Discourse: require latest signed Profile reads while keeping extended history optional; specify greatest-nonce Profile pins, fixed whitespace and absolute regex-anchor semantics, and atomic type-pack imports. Keep English and Simplified Chinese requirements, schemas, and normative boundary vectors aligned.
+
+### Local connector (Rust and TypeScript)
+
+- Extend `mail_mailboxes_list` with an allowed relay `host` and pagination to recover verified mailbox metadata. Results report `key_available` and `pending_routes`; inventory does not restore decryption secrets. Preserve older cards returned by lagging relays as history without rolling back the newest local card or pin.
+- Save mailbox keys, exact signed attempts, and pending routes through a host persistence callback before publication. Recover lost responses by verifying the current card or retrying, retain nonce-resynchronization intermediates, and update previously successful routes when a pending retry needs a new signature. Report disallowed routes without keeping them in the retry queue.
+- Preserve the latest closed card while older cards still need retention, and resolve each recipient mailbox to its final pinned card after checking all supplied sources. A malformed Profile endpoint no longer suppresses valid endpoints.
+- Persist Profile pins across services and connector restarts. Reject known rollback and same-nonce conflicts with `stale_profile`; explicit history reads remain available. Delegation checks use the clock after history retrieval and report stale or contradictory credentials as unusable. Parse archive JSONL and pack documents strictly.
+
+### SDKs and integration
+
+- Add owner mailbox inventory and verified latest Profile reads with `ProfileCache` to all three SDKs. Align strict HTTP decoding, nonce boundaries, delegation status checks, and Discourse validation; failed type-pack imports leave the registry unchanged.
+- Add deterministic shared boundary fixtures and regression coverage for response loss, partial publication, lagging relay recovery, duplicate JSON members, invalid UTF-8, stale authorization, Profile rollback, and cross-language schema behavior.
+- Bump all three SDKs to `0.12.6` and update both landing-page languages. Signed event field layouts, tool names, and connector snapshot version 2 remain unchanged; snapshots gain optional Profile pins and pending Mail publications. Connector hosts should refresh tool schemas and configure `mailPersistence` / `with_mail_persistence` for crash-safe publication. Python remains a protocol SDK without a connector runtime.
+
 ## 0.12.5 — 2026-10-23
 
 ### Local connector (Rust and TypeScript)
