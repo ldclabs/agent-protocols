@@ -46,6 +46,10 @@ struct Services {
     knowledge: Mutex<KnowledgeStore>,
     /// Packet deliveries to answer with 503 before serving them.
     failing_deliveries: AtomicUsize,
+    lost_publication_responses: AtomicUsize,
+    failing_card_reads: AtomicUsize,
+    resync_publications: AtomicUsize,
+    publication_hashes: Mutex<Vec<String>>,
     /// Discourse discovery reads to answer with 503 before serving them.
     failing_discoveries: AtomicUsize,
     packets_deleted: AtomicUsize,
@@ -68,6 +72,10 @@ impl Services {
             knowledge: Mutex::new(KnowledgeStore::new(&origin).unwrap()),
             origin,
             failing_deliveries: AtomicUsize::new(0),
+            lost_publication_responses: AtomicUsize::new(0),
+            failing_card_reads: AtomicUsize::new(0),
+            resync_publications: AtomicUsize::new(0),
+            publication_hashes: Mutex::new(Vec::new()),
             failing_discoveries: AtomicUsize::new(0),
             packets_deleted: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
@@ -97,6 +105,9 @@ impl Services {
                     continue;
                 };
                 let (status, body, headers) = server.handle(request);
+                if status == 0 {
+                    continue;
+                } // Simulate a committed write whose response is lost.
                 let response = format!(
                     "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
                     body.len()
@@ -165,18 +176,53 @@ impl Services {
                 200,
                 json!({"result":self.profiles.lock().unwrap().iter().filter(|e|e["event"]["actor"].as_str()==Some(id)).take(query(&request,"limit").and_then(|l|l.parse().ok()).unwrap_or(1)).cloned().collect::<Vec<_>>()}),
             )),
-            ("POST", ["v1", "mailboxes"]) => self
+            ("POST", ["v1", "mailboxes"]) => {
+                let body = body();
+                self.publication_hashes
+                    .lock()
+                    .unwrap()
+                    .push(body["hash"].as_str().unwrap().into());
+                if self.resync_publications.load(Ordering::SeqCst) > 0 {
+                    self.resync_publications.fetch_sub(1, Ordering::SeqCst);
+                    Err(SdkError::NonceNotGreater {
+                        max_nonce: body["event"]["nonce"].as_u64().unwrap() + 1,
+                    })
+                } else {
+                    self.relay.lock().unwrap().publish(&body, now).map(|r| {
+                        let status = if self.lost_publication_responses.load(Ordering::SeqCst) > 0 {
+                            self.lost_publication_responses
+                                .fetch_sub(1, Ordering::SeqCst);
+                            0
+                        } else {
+                            200
+                        };
+                        (status, json!(r))
+                    })
+                }
+            }
+            ("GET", ["v1", "me", "mailboxes"]) => self
                 .relay
                 .lock()
                 .unwrap()
-                .publish(&body(), now)
-                .map(|record| (200, json!(record))),
-            ("GET", ["v1", "mailboxes", mailbox, "card"]) => self
-                .relay
-                .lock()
-                .unwrap()
-                .card(mailbox)
-                .map(|record| (200, json!(record))),
+                .mailboxes(
+                    &jwt(),
+                    now,
+                    query(&request, "limit")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(100),
+                    query(&request, "cursor"),
+                )
+                .map(|p| (200, json!(p))),
+            ("GET", ["v1", "mailboxes", mailbox, "card"]) => {
+                if self.failing_card_reads.load(Ordering::SeqCst) > 0 {
+                    return error(503, "service_unavailable", "card read unavailable");
+                }
+                self.relay
+                    .lock()
+                    .unwrap()
+                    .card(mailbox)
+                    .map(|r| (200, json!(r)))
+            }
             ("POST", ["v1", "mailboxes", mailbox, "packets"]) => {
                 let failing = self.failing_deliveries.load(Ordering::SeqCst);
                 if failing > 0 {
@@ -1017,10 +1063,14 @@ fn one_nonce_sequence_spans_mail_and_knowledge() {
         let mailbox = open_mailbox(&mut behind, &services).await;
         let nonce =
             |state: &Value, pointer: &str| state.pointer(pointer).unwrap().as_u64().unwrap();
-        let card = nonce(
-            &behind.snapshot().unwrap(),
-            "/mail/mailboxes/0/cards/0/event/nonce",
-        );
+        let snapshot = behind.snapshot().unwrap();
+        let card = snapshot["mail"]["mailboxes"][0]["cards"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["event"]["nonce"]
+            .as_u64()
+            .unwrap();
         assert!(card > far);
 
         // Knowledge events and mail packets continue the same sequence.
@@ -1592,5 +1642,291 @@ fn archive_pack_metadata_cannot_replace_signed_import_digest() {
             .unwrap()
             .iter()
             .any(|p| p.ends_with("/forged-pack")));
+    });
+}
+
+#[test]
+fn mailbox_publication_recovers_after_response_loss_and_inventory_keeps_keys_separate() {
+    let services = Services::start();
+    run(async {
+        let saved = Arc::new(Mutex::new((Value::Null, Value::Null)));
+        let target = saved.clone();
+        let mut bob = services
+            .connector(8)
+            .with_mail_persistence(move |state, keys| {
+                *target.lock().unwrap() = (state.clone(), keys.clone());
+                Ok(())
+            });
+        let first = open_mailbox(&mut bob, &services).await;
+        services
+            .lost_publication_responses
+            .store(1, Ordering::SeqCst);
+        services.failing_card_reads.store(1, Ordering::SeqCst);
+        let rotated = call(
+            &mut bob,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"mailbox_id":first["mailbox_id"],"routes":[services.origin],"rotate_key":true}),
+        )
+        .await;
+        assert_eq!(rotated["published"], json!([]));
+        assert_eq!(
+            rotated["mailbox"]["pending_routes"],
+            json!([services.origin])
+        );
+        assert_eq!(rotated["mailbox"]["key_available"], true);
+        let remote = services
+            .relay
+            .lock()
+            .unwrap()
+            .card(first["mailbox_id"].as_str().unwrap())
+            .unwrap()
+            .envelope;
+        let (state, keys) = saved.lock().unwrap().clone();
+        assert!(keys["keys"].get(&remote.event.payload.public_key).is_some());
+        let mut restored = LocalConnector::from_snapshot(AgentSigner::from_seed([8; 32]), &state)
+            .unwrap()
+            .with_http_client(tls_client());
+        restored.restore_mail_keys(&keys).unwrap();
+        services.failing_card_reads.store(0, Ordering::SeqCst);
+        let mut alice = services.connector(7);
+        call(
+            &mut alice,
+            TOOL_MAIL_SEND,
+            json!({"to":rotated["mailbox"]["address"],"text":"uncertain rotation"}),
+        )
+        .await;
+        let synced = call(&mut restored, TOOL_MAIL_SYNC, json!({})).await;
+        assert_eq!(
+            synced["received"][0]["parts"][0]["text"],
+            "uncertain rotation"
+        );
+        let local = call(&mut restored, TOOL_MAIL_MAILBOXES_LIST, json!({})).await;
+        assert_eq!(local["mailboxes"][0]["pending_routes"], json!([]));
+        let mut recovered = services.connector(8);
+        let inventory = call(
+            &mut recovered,
+            TOOL_MAIL_MAILBOXES_LIST,
+            json!({"host":services.origin,"limit":1}),
+        )
+        .await;
+        assert_eq!(inventory["mailboxes"][0]["card_hash"], remote.hash);
+        assert_eq!(inventory["mailboxes"][0]["key_available"], false);
+        assert!(recovered
+            .call_tool(TOOL_MAIL_MAILBOXES_LIST, json!({"limit":1}))
+            .await
+            .is_err());
+    });
+}
+
+#[test]
+fn mailbox_checkpoint_failure_prevents_network_publication() {
+    let services = Services::start();
+    run(async {
+        let mut bob = services.connector(8).with_mail_persistence(|_, _| {
+            Err(SdkError::InvalidPayload("storage unavailable".into()))
+        });
+        assert!(bob
+            .call_tool(
+                TOOL_MAIL_MAILBOX_PUBLISH,
+                json!({"routes":[services.origin]})
+            )
+            .await
+            .is_err());
+        assert!(services.take_requests().is_empty());
+    });
+}
+
+#[test]
+fn mailbox_nonce_resync_retains_each_published_card() {
+    let a = Services::start();
+    let b = Services::start();
+    run(async {
+        b.resync_publications.store(1, Ordering::SeqCst);
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let target = saved.clone();
+        let mut bob = a.connector(8).with_mail_persistence(move |state, _| {
+            target.lock().unwrap().push(state.clone());
+            Ok(())
+        });
+        bob.add_host(allowed(&b.origin));
+        let result = call(
+            &mut bob,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"routes":[a.origin,b.origin]}),
+        )
+        .await;
+        assert_eq!(result["published"].as_array().unwrap().len(), 2);
+        let snapshot = bob.snapshot().unwrap();
+        let cards = snapshot["mail"]["mailboxes"][0]["cards"]
+            .as_array()
+            .unwrap();
+        assert_eq!(cards.len(), 2);
+        assert!(snapshot["mail"]["pending_publications"]
+            .as_object()
+            .unwrap()
+            .is_empty());
+        let attempts = a.publication_hashes.lock().unwrap();
+        assert_eq!(attempts.len(), 2);
+        for hash in attempts.iter() {
+            assert!(saved
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|s| s["mail"]["mailboxes"][0]["cards"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c["hash"] == *hash)));
+        }
+    });
+}
+
+#[test]
+fn mail_resolve_merges_final_pins_and_isolates_bad_profile_endpoints() {
+    let a = Services::start();
+    let b = Services::start();
+    run(async {
+        let mut bob = a.connector(8);
+        bob.add_host(allowed(&b.origin));
+        let opened = call(
+            &mut bob,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"routes":[a.origin,b.origin]}),
+        )
+        .await;
+        let id = opened["mailbox"]["mailbox_id"].as_str().unwrap();
+        let old = a.relay.lock().unwrap().card(id).unwrap();
+        call(
+            &mut bob,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"mailbox_id":id,"routes":[]}),
+        )
+        .await;
+        a.fixture(&format!("/v1/mailboxes/{id}/card"), json!(old));
+        call(
+            &mut bob,
+            TOOL_PROFILE_UPDATE,
+            json!({"profile_service":a.origin,"profile":{"name":"Bob","service_endpoints":[
+                {"type":"agent-mail","url":format!("{}/bad",a.origin)},
+                {"type":"agent-mail","url":format!("{}/v1/mailboxes/{id}/card",a.origin)},
+                {"type":"agent-mail","url":format!("{}/v1/mailboxes/{id}/card",b.origin)}
+            ]}}),
+        )
+        .await;
+        let mut alice = a.connector(7);
+        alice.add_host(allowed(&b.origin));
+        let result = call(
+            &mut alice,
+            TOOL_MAIL_RESOLVE,
+            json!({"agent_id":bob.agent_id(),"profile_service":a.origin}),
+        )
+        .await;
+        assert_eq!(result["errors"].as_array().unwrap().len(), 1);
+        assert_eq!(result["mailboxes"].as_array().unwrap().len(), 1);
+        assert_eq!(result["mailboxes"][0]["usable"], false);
+        assert_eq!(
+            result["mailboxes"][0]["card"]["event"]["payload"]["routes"],
+            json!([])
+        );
+    });
+}
+
+#[test]
+fn pruning_a_shorter_closed_card_never_reopens_the_previous_card() {
+    let services = Services::start();
+    run(async {
+        let mut bob = services.connector(8);
+        let opened = open_mailbox(&mut bob, &services).await;
+        let original = services
+            .relay
+            .lock()
+            .unwrap()
+            .card(opened["mailbox_id"].as_str().unwrap())
+            .unwrap()
+            .envelope;
+        let owner = AgentSigner::from_seed([8; 32]);
+        let now = unix_ms();
+        let mut payload = original.event.payload;
+        payload.expires_at = now + 60000;
+        payload.receive_until = now + 120000;
+        let old =
+            agent_protocols::mail::sign_card(&owner, payload.clone(), now - 60000, 1).unwrap();
+        payload.routes.clear();
+        payload.expires_at = now - 2000;
+        payload.receive_until = now - 1000;
+        let closed = agent_protocols::mail::sign_card(&owner, payload, now - 10000, 2).unwrap();
+        let mut snapshot = bob.snapshot().unwrap();
+        snapshot["mail"]["mailboxes"][0]["cards"] = json!([old, closed]);
+        let mut restored = LocalConnector::from_snapshot(owner, &snapshot)
+            .unwrap()
+            .with_http_client(tls_client());
+        restored
+            .restore_mail_keys(&bob.mail_keys_snapshot())
+            .unwrap();
+        call(&mut restored, TOOL_MAIL_SYNC, json!({})).await;
+        let result = call(&mut restored, TOOL_MAIL_MAILBOXES_LIST, json!({})).await;
+        assert_eq!(result["mailboxes"][0]["status"], "closed");
+        assert_eq!(result["mailboxes"][0]["card_hash"], closed.hash);
+    });
+}
+
+#[test]
+fn verified_card_read_confirms_publication_after_lost_response() {
+    let services = Services::start();
+    run(async {
+        services
+            .lost_publication_responses
+            .store(1, Ordering::SeqCst);
+        let mut bob = services.connector(8);
+        let mailbox = open_mailbox(&mut bob, &services).await;
+        assert_eq!(mailbox["pending_routes"], json!([]));
+        assert_eq!(mailbox["key_available"], true);
+        assert_eq!(
+            services
+                .relay
+                .lock()
+                .unwrap()
+                .card(mailbox["mailbox_id"].as_str().unwrap())
+                .unwrap()
+                .envelope
+                .hash,
+            mailbox["card_hash"]
+        );
+    });
+}
+
+#[test]
+fn resigning_pending_publication_updates_previously_successful_routes() {
+    let a = Services::start();
+    let b = Services::start();
+    run(async {
+        b.fixtures.lock().unwrap().insert(
+            "/v1/mailboxes".into(),
+            (
+                503,
+                json!({"error":{"code":"service_unavailable","message":"offline"}}).to_string(),
+            ),
+        );
+        let mut bob = a.connector(8);
+        bob.add_host(allowed(&b.origin));
+        let initial = call(
+            &mut bob,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"routes":[a.origin,b.origin]}),
+        )
+        .await;
+        assert_eq!(initial["mailbox"]["pending_routes"], json!([b.origin]));
+        b.fixtures.lock().unwrap().remove("/v1/mailboxes");
+        b.resync_publications.store(1, Ordering::SeqCst);
+        call(&mut bob, TOOL_MAIL_SYNC, json!({})).await;
+        let id = initial["mailbox"]["mailbox_id"].as_str().unwrap();
+        let left = a.relay.lock().unwrap().card(id).unwrap().envelope.hash;
+        let right = b.relay.lock().unwrap().card(id).unwrap().envelope.hash;
+        assert_eq!(left, right);
+        assert_ne!(left, initial["mailbox"]["card_hash"]);
+        assert!(bob.snapshot().unwrap()["mail"]["pending_publications"]
+            .as_object()
+            .unwrap()
+            .is_empty());
     });
 }

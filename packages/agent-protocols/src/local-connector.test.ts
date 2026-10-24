@@ -522,10 +522,10 @@ test("the tool catalog is the complete 41-tool surface", () => {
     TOOL_KNOWLEDGE_GET,
     TOOL_KNOWLEDGE_SEARCH,
     TOOL_KNOWLEDGE_STATUS,
-    TOOL_MAIL_MAILBOXES_LIST,
   ]) {
     assert.equal(find(name).annotations.readOnlyHint, true, name);
   }
+  assert.equal(find(TOOL_MAIL_MAILBOXES_LIST).annotations.readOnlyHint, false);
   // mark_read makes the mail list a write, like the room timeline.
   assert.equal(find(TOOL_MAIL_LIST).annotations.readOnlyHint, false);
   // Submitting a Knowledge event is a public, permanent disclosure.

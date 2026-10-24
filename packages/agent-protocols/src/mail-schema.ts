@@ -376,6 +376,24 @@ export const MAIL_SCHEMA = {
       },
       additionalProperties: false,
     },
+    mailboxList: {
+      type: "object",
+      required: ["result"],
+      properties: {
+        result: {
+          type: "array",
+          maxItems: 1000,
+          items: {
+            $ref: "#/$defs/cardAcceptedRecord",
+          },
+        },
+        next_cursor: {
+          type: "string",
+          minLength: 1,
+        },
+      },
+      additionalProperties: true,
+    },
   },
   $ref: "#/$defs/envelope",
-} as const;
+};

@@ -493,6 +493,8 @@ pub enum MailboxStatus {
 /// A mailbox of the active Agent ID, described by its current card.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MailboxView {
+    pub key_available: bool,
+    pub pending_routes: Vec<String>,
     pub mailbox_id: String,
     /// The contact address with the card's routes, or the stable address when closed.
     pub address: String,

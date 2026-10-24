@@ -136,7 +136,10 @@ macro_rules! submit_signed {
     }};
 }
 
+type MailPersistence = dyn Fn(&Value, &Value) -> Result<()> + Send + Sync;
+
 pub struct LocalConnector {
+    mail_persistence: Option<Box<MailPersistence>>,
     signer: AgentSigner,
     nonce_manager: ClientNonceManager,
     state: LocalConnectorState,
@@ -158,6 +161,7 @@ impl LocalConnector {
             nonce_manager: ClientNonceManager::new(),
             state,
             mail_keys: BTreeMap::new(),
+            mail_persistence: None,
             // Requests carrying owner JWTs never follow redirects (Agent
             // Mail Section 8.1), and every service is an allowed origin.
             http: reqwest::Client::builder()
@@ -209,8 +213,8 @@ impl LocalConnector {
 
     /// SENSITIVE: the Agent Mail decryption keys of the mailboxes' retained
     /// cards, as `{version, agent_id, keys: {public_key: secret}}`. Keep it in
-    /// the key store, apart from [`LocalConnector::snapshot`]; save it after a
-    /// mailbox publish and restore it with [`LocalConnector::restore_mail_keys`].
+    /// the key store, apart from [`LocalConnector::snapshot`]. Production hosts save it
+    /// through `with_mail_persistence` before publication; restore with [`LocalConnector::restore_mail_keys`].
     pub fn mail_keys_snapshot(&self) -> Value {
         let keys = self
             .mail_keys
@@ -263,6 +267,17 @@ impl LocalConnector {
     /// snapshot keeps none the operator dropped.
     pub fn set_mail_blocked_senders(&mut self, senders: impl IntoIterator<Item = AgentId>) {
         self.state.mail.blocked_senders = senders.into_iter().collect();
+    }
+
+    /// Production hosts must durably save keys, then state, before this hook returns.
+    /// Called before submitting each signed attempt; errors prevent network writes.
+    /// Both values are sensitive host-only snapshots, never MCP results.
+    pub fn with_mail_persistence(
+        mut self,
+        save: impl Fn(&Value, &Value) -> Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.mail_persistence = Some(Box::new(save));
+        self
     }
 
     /// Uses `client` for Agent Discourse, Profile, Mail, and Knowledge
@@ -474,7 +489,7 @@ impl LocalConnector {
             }
             TOOL_JOIN_REQUESTS_LIST => self.join_requests_list(parse_input(input)?).await,
             TOOL_JOIN_REQUEST_REVIEW => self.join_request_review(parse_input(input)?).await,
-            TOOL_MAIL_MAILBOXES_LIST => self.mail_mailboxes_list(),
+            TOOL_MAIL_MAILBOXES_LIST => self.mail_mailboxes_list(parse_input(input)?).await,
             TOOL_MAIL_MAILBOX_PUBLISH => self.mail_mailbox_publish(parse_input(input)?).await,
             TOOL_MAIL_SEND => self.mail_send(parse_input(input)?).await,
             TOOL_MAIL_SYNC => self.mail_sync(parse_input(input)?).await,

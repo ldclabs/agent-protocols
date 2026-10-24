@@ -656,6 +656,19 @@ class MailClient:
         validate_mail_delivery_result(result, packet)
         return result
 
+    def mailboxes(self, owner: str, jwt: str, *, limit: int = 100, cursor: str | None = None,
+                  now_ms: int | None = None) -> dict[str, Any]:
+        from .mail import validate_mail_mailbox_list, verify_mail_owner_jwt
+        verify_mail_owner_jwt(jwt, owner, self.base_url, now_ms=now_ms)
+        if type(limit) is not int or not 1 <= limit <= 1000 or (cursor is not None and (not isinstance(cursor, str) or not cursor)):
+            raise AgentProtocolError('invalid_request', 'invalid Mail pagination request')
+        url = _query(self.base_url + '/v1/me/mailboxes', {'limit': limit, 'cursor': cursor})
+        page = self._request('GET', url, jwt=jwt, owner=owner, now_ms=now_ms)
+        validate_mail_mailbox_list(page, owner, limit=limit)
+        for record in page['result']:
+            self.card_cache.observe(record['envelope'], owner, now_ms=now_ms, require_usable=False)
+        return page
+
     def list(self, mailbox_id: str, owner: str, jwt: str, *, limit: int = 100,
              cursor: str | None = None, now_ms: int | None = None) -> dict[str, Any]:
         from .mail import validate_mail_id, validate_mail_packet_list

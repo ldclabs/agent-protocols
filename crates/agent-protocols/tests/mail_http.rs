@@ -490,3 +490,52 @@ fn principal_reads_are_bounded() {
         assert_eq!(err.code(), Some("payload_too_large"));
     });
 }
+
+#[test]
+fn mail_inventory_http_authenticates_and_validates_owner_and_order() {
+    run(async {
+        let server = Server::start();
+        let client = server.client();
+        let (owner, card, _, _, now) = objects(&server.origin);
+        let jwt = owner
+            .sign_request_jwt(&RequestJwtClaims::new(
+                owner.agent_id(),
+                RequestBinding::new(&server.origin),
+                now / 1000,
+                300,
+            ))
+            .unwrap();
+        let record = json!({"envelope":card,"accepted_at":now});
+        server.reply(&json!({"result":[record]}));
+        let page = client
+            .mailboxes(&owner.agent_id(), &jwt, now, 1, None)
+            .await
+            .unwrap();
+        assert_eq!(page.result.len(), 1);
+        {
+            let requests = server.requests.lock().unwrap();
+            assert_eq!(requests[0].path, "/v1/me/mailboxes?limit=1");
+        }
+        assert!(client
+            .mailboxes(&owner.agent_id(), "bad", now, 100, None)
+            .await
+            .is_err());
+        for page in [
+            json!({"result":[record,record]}),
+            json!({"result":[],"next_cursor":"x"}),
+        ] {
+            server.reply(&page);
+            assert!(client
+                .mailboxes(&owner.agent_id(), &jwt, now, 100, None)
+                .await
+                .is_err());
+        }
+        let stranger = AgentSigner::from_seed([7; 32]);
+        let foreign = sign_card(&stranger, card.event.payload, now, 1).unwrap();
+        server.reply(&json!({"result":[{"envelope":foreign,"accepted_at":now}]}));
+        assert!(client
+            .mailboxes(&owner.agent_id(), &jwt, now, 100, None)
+            .await
+            .is_err());
+    });
+}

@@ -450,6 +450,13 @@ pub(crate) struct JoinRequestReviewInput {
     pub reason: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct MailMailboxesListInput {
+    pub host: Option<String>,
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+}
+
 /// Creates a mailbox without `mailbox_id`; otherwise replaces that mailbox's card.
 #[derive(Deserialize)]
 pub(crate) struct MailMailboxPublishInput {

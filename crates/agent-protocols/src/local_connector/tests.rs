@@ -238,7 +238,7 @@ fn standard_tool_definitions_list_every_tool() {
     ] {
         assert!(find(name).annotations.read_only_hint);
     }
-    assert!(find(TOOL_MAIL_MAILBOXES_LIST).annotations.read_only_hint);
+    assert!(!find(TOOL_MAIL_MAILBOXES_LIST).annotations.read_only_hint);
     // mark_read makes the mail list a write, like the room timeline.
     assert!(!find(TOOL_MAIL_LIST).annotations.read_only_hint);
     // Submitting a Knowledge event is a public, permanent disclosure.

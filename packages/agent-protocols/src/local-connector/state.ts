@@ -87,11 +87,15 @@ export interface StoredMailMessage {
   delivery?: MailDelivery;
 }
 
-/**
- * Agent Mail state. Decryption keys are not part of it: the connector keeps
- * them apart, for the host's key store.
- */
+/** A retained attempt and the routes that have not confirmed it. */
+export interface PendingMailPublication {
+  card_hash: string;
+  routes: string[];
+}
+
+/** Agent Mail state. Decryption keys stay in the separate host key store. */
 export class MailState {
+  pendingPublications = new Map<string, PendingMailPublication>();
   /** The active Agent ID's mailboxes: every card retained until its
    * `receive_until`, in signing order, the last one current. */
   mailboxes = new Map<string, MailboxCard[]>();
@@ -175,6 +179,7 @@ export interface LocalConnectorSnapshot {
   inbox: Record<string, InboxEntry>;
   drafts: Record<string, HeldDraftEntry>;
   mail: {
+    pending_publications?: Record<string, PendingMailPublication>;
     mailboxes: { mailbox_id: string; cards: MailboxCard[] }[];
     pins: MailboxCard[];
     blocked_senders: AgentId[];

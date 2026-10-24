@@ -2,7 +2,7 @@
 //! mailboxes, sending with card pins and byte-identical retries, and a sync
 //! that stores accepted messages before it deletes their relay copies.
 
-use super::state::StoredMailMessage;
+use super::state::{PendingMailPublication, StoredMailMessage};
 use super::views::truncate;
 use super::*;
 
@@ -39,20 +39,173 @@ enum Disposition {
 }
 
 impl LocalConnector {
-    pub(super) fn mail_mailboxes_list(&self) -> Result<Value> {
+    pub(super) async fn mail_mailboxes_list(
+        &mut self,
+        input: MailMailboxesListInput,
+    ) -> Result<Value> {
         let now = unix_ms();
+        if let Some(host) = input.host {
+            let page = self
+                .mail_client(&host)?
+                .mailboxes(
+                    &self.agent_id(),
+                    &self.request_jwt(&host)?,
+                    now,
+                    input.limit.unwrap_or(100),
+                    input.cursor.as_deref(),
+                )
+                .await?;
+            for record in &page.result {
+                self.state.mail.pins.observe_historical(
+                    &serde_json::to_value(&record.envelope)?,
+                    &self.agent_id(),
+                    now,
+                )?;
+                self.retain_own_card(record.envelope.clone())?;
+            }
+            self.persist_mail()?;
+            let mailboxes = page
+                .result
+                .iter()
+                .map(|r| {
+                    let id = &r.envelope.event.payload.mailbox_id;
+                    self.mailbox_view(id, self.state.mail.mailboxes[id].last().unwrap(), now)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(with_cursor(
+                json!({"mailboxes":mailboxes}),
+                page.next_cursor,
+            ));
+        }
+        if input.limit.is_some() || input.cursor.is_some() {
+            return Err(SdkError::InvalidPayload(
+                "remote pagination requires host".into(),
+            ));
+        }
         let mailboxes = self
             .state
             .mail
             .mailboxes
             .iter()
-            .filter_map(|(mailbox_id, cards)| {
-                cards
-                    .last()
-                    .map(|card| self.mailbox_view(mailbox_id, card, now))
-            })
+            .filter_map(|(id, cards)| cards.last().map(|c| self.mailbox_view(id, c, now)))
             .collect::<Result<Vec<_>>>()?;
-        Ok(json!({ "mailboxes": mailboxes }))
+        Ok(json!({"mailboxes":mailboxes}))
+    }
+
+    fn retain_own_card(&mut self, card: MailboxCard) -> Result<()> {
+        let cards = self
+            .state
+            .mail
+            .mailboxes
+            .entry(card.event.payload.mailbox_id.clone())
+            .or_default();
+        if cards
+            .iter()
+            .any(|c| c.event.nonce == card.event.nonce && c.hash != card.hash)
+        {
+            return Err(SdkError::InvalidPayload(
+                "conflicting mailbox card nonce".into(),
+            ));
+        }
+        if !cards.iter().any(|c| c.hash == card.hash) {
+            cards.push(card);
+        }
+        cards.sort_by_key(|c| c.event.nonce);
+        Ok(())
+    }
+
+    fn persist_mail(&self) -> Result<()> {
+        if let Some(save) = &self.mail_persistence {
+            save(&self.snapshot()?, &self.mail_keys_snapshot())?;
+        }
+        Ok(())
+    }
+
+    async fn publish_mail_card(
+        &mut self,
+        mut card: MailboxCard,
+        mut targets: Vec<String>,
+    ) -> Result<(MailboxCard, Vec<String>, Vec<RouteError>)> {
+        let id = card.event.payload.mailbox_id.clone();
+        let mut resigned = false;
+        loop {
+            self.retain_own_card(card.clone())?;
+            self.state.mail.pending_publications.insert(
+                id.clone(),
+                PendingMailPublication {
+                    card_hash: card.hash.clone(),
+                    routes: targets.clone(),
+                },
+            );
+            self.persist_mail()?;
+            let mut published = Vec::new();
+            let mut failed = Vec::new();
+            let mut retry = false;
+            for route in &targets {
+                let result = match self.mail_client(route) {
+                    Ok(client) => client.publish(&card).await,
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(_) => published.push(route.clone()),
+                    Err(error) => {
+                        if !resigned
+                            && (self.resync_nonce(&error)
+                                || (error.code() == Some("timestamp_out_of_window")
+                                    && card.event.payload.expires_at > unix_ms()))
+                        {
+                            retry = true;
+                            break;
+                        }
+                        let confirmed = match self.mail_client(route) {
+                            Ok(client) => client
+                                .card(&id, &self.agent_id())
+                                .await
+                                .is_ok_and(|r| r.envelope.hash == card.hash),
+                            Err(_) => false,
+                        };
+                        if confirmed {
+                            published.push(route.clone());
+                        } else {
+                            let mut e = route_error(route, &error);
+                            e.mailbox_id = Some(id.clone());
+                            failed.push(e);
+                        }
+                    }
+                }
+            }
+            if retry {
+                resigned = true;
+                for route in self
+                    .state
+                    .mail
+                    .mailboxes
+                    .get(&id)
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|c| &c.event.payload.routes)
+                {
+                    if !targets.contains(route) {
+                        targets.push(route.clone());
+                    }
+                }
+                card = self.sign_mail_card(card.event.payload)?;
+                continue;
+            }
+            if failed.is_empty() {
+                self.state.mail.pending_publications.remove(&id);
+            } else {
+                self.state.mail.pending_publications.insert(
+                    id.clone(),
+                    PendingMailPublication {
+                        card_hash: card.hash.clone(),
+                        routes: failed.iter().map(|e| e.route.clone()).collect(),
+                    },
+                );
+            }
+            self.persist_mail()?;
+            return Ok((card, published, failed));
+        }
     }
 
     pub(super) async fn mail_mailbox_publish(
@@ -117,77 +270,39 @@ impl LocalConnector {
             }),
         };
 
-        // Publish to every route of the previous and new cards (Agent Mail
-        // Section 4.2); routes the operator no longer allows are reported.
         let mut targets = routes;
-        for route in previous
-            .iter()
-            .flat_map(|card| card.event.payload.routes.iter())
+        for route in self
+            .state
+            .mail
+            .mailboxes
+            .get(&mailbox_id)
+            .into_iter()
+            .flatten()
+            .flat_map(|c| &c.event.payload.routes)
+            .chain(
+                self.state
+                    .mail
+                    .pending_publications
+                    .get(&mailbox_id)
+                    .into_iter()
+                    .flat_map(|p| &p.routes),
+            )
         {
             if !targets.contains(route) {
                 targets.push(route.clone());
             }
         }
-        let mut failed = Vec::new();
-        let mut allowed = Vec::new();
-        for route in targets {
-            match self.require_allowed_host(&route) {
-                Ok(()) => allowed.push(route),
-                Err(error) => failed.push(route_error(&route, &error)),
-            }
-        }
-        if allowed.is_empty() {
+        if !targets.iter().any(|r| self.require_allowed_host(r).is_ok()) {
             return Err(SdkError::PermissionDenied);
-        }
-        let mut card = self.sign_mail_card(payload.clone())?;
-        let mut resynced = false;
-        let (published, errors) = loop {
-            let mut published = Vec::new();
-            let mut errors = Vec::new();
-            let mut resync = false;
-            for route in &allowed {
-                match self.mail_client(route)?.publish(&card).await {
-                    Ok(_) => published.push(route.clone()),
-                    Err(error) if !resynced && self.resync_nonce(&error) => {
-                        resync = true;
-                        break;
-                    }
-                    Err(error) => errors.push((route.clone(), error)),
-                }
-            }
-            if !resync {
-                break (published, errors);
-            }
-            // One re-signed card, published to every route again.
-            resynced = true;
-            card = self.sign_mail_card(payload.clone())?;
-        };
-        failed.extend(
-            errors
-                .iter()
-                .map(|(route, error)| route_error(route, error)),
-        );
-        if published.is_empty() {
-            return Err(errors
-                .into_iter()
-                .next()
-                .map(|(_, error)| error)
-                .unwrap_or(SdkError::PermissionDenied));
         }
         if let Some(key) = new_key {
             self.mail_keys.insert(key.public_key(), key);
         }
-        self.state
-            .mail
-            .mailboxes
-            .entry(mailbox_id.clone())
-            .or_default()
-            .push(card.clone());
-        Ok(json!({
-            "mailbox": self.mailbox_view(&mailbox_id, &card, unix_ms())?,
-            "published": published,
-            "failed": failed
-        }))
+        let card = self.sign_mail_card(payload)?;
+        let (card, published, failed) = self.publish_mail_card(card, targets).await?;
+        Ok(
+            json!({"mailbox":self.mailbox_view(&mailbox_id,&card,unix_ms())?,"published":published,"failed":failed}),
+        )
     }
 
     pub(super) async fn mail_send(&mut self, input: MailSendInput) -> Result<Value> {
@@ -300,6 +415,26 @@ impl LocalConnector {
         }
         let now = unix_ms();
         let mut errors = Vec::new();
+        for (id, pending) in self.state.mail.pending_publications.clone() {
+            if input
+                .mailbox_id
+                .as_ref()
+                .is_some_and(|selected| selected != &id)
+            {
+                continue;
+            }
+            let card = self
+                .state
+                .mail
+                .mailboxes
+                .get(&id)
+                .and_then(|cards| cards.iter().find(|c| c.hash == pending.card_hash))
+                .cloned();
+            if let Some(card) = card.filter(|c| now < c.event.payload.receive_until) {
+                let (_, _, failed) = self.publish_mail_card(card, pending.routes).await?;
+                errors.extend(failed);
+            }
+        }
         let (delivered, expired) = self.retry_queued(now, &mut errors).await?;
         self.prune_mail(now);
         let received = self
@@ -758,9 +893,18 @@ impl LocalConnector {
     fn prune_mail(&mut self, now: i64) {
         let mail = &mut self.state.mail;
         for cards in mail.mailboxes.values_mut() {
-            cards.retain(|card| now < card.event.payload.receive_until);
+            let live = cards
+                .iter()
+                .any(|card| now < card.event.payload.receive_until);
+            let latest = cards.last().map(|c| c.hash.clone());
+            cards.retain(|card| {
+                now < card.event.payload.receive_until
+                    || (live && Some(&card.hash) == latest.as_ref())
+            });
         }
         mail.mailboxes.retain(|_, cards| !cards.is_empty());
+        mail.pending_publications
+            .retain(|id, _| mail.mailboxes.contains_key(id));
         let advertised = mail
             .mailboxes
             .values()
@@ -817,6 +961,14 @@ impl LocalConnector {
             MailboxStatus::Open
         };
         Ok(MailboxView {
+            key_available: self.mail_keys.contains_key(&payload.public_key),
+            pending_routes: self
+                .state
+                .mail
+                .pending_publications
+                .get(mailbox_id)
+                .map(|p| p.routes.clone())
+                .unwrap_or_default(),
             mailbox_id: mailbox_id.to_owned(),
             address: format_mail_address(&card.event.actor, mailbox_id, &payload.routes)?,
             routes: payload.routes.clone(),

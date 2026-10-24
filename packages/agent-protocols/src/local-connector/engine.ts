@@ -200,6 +200,7 @@ import {
   KnowledgeSubmitInput,
   MailListInput,
   MailMailboxPublishInput,
+  MailMailboxesListInput,
   MailSendInput,
   MailSyncInput,
   PrincipalResolveInput,
@@ -614,6 +615,11 @@ export class DiscoveryCache {
 }
 
 export interface LocalConnectorOptions {
+  /** Production hosts must durably save keys, then state, before this callback resolves. Secrets never go to MCP. */
+  mailPersistence?: (
+    snapshot: LocalConnectorSnapshot,
+    keys: ReturnType<LocalConnector["mailKeysSnapshot"]>,
+  ) => void | Promise<void>;
   /** Restore a previously persisted working set. Defaults to empty. */
   state?: LocalConnectorState;
   /** Injected `fetch`, e.g. for tests or a custom transport. */
@@ -627,6 +633,7 @@ export class LocalConnector {
   private nonces = new ClientNonceManager();
   private readonly fetchImpl: FetchLike;
   private readonly discovery: DiscoveryCache;
+  private readonly mailPersistence?: LocalConnectorOptions["mailPersistence"];
   /** Agent Mail decryption keys by public key: key-store material, never in the snapshot. */
   private readonly mailKeys = new Map<string, MailEncryptionKey>();
 
@@ -637,6 +644,7 @@ export class LocalConnector {
     this.state = options.state ?? new LocalConnectorState();
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.discovery = options.discoveryCache ?? new DiscoveryCache();
+    this.mailPersistence = options.mailPersistence;
   }
 
   /**
@@ -718,6 +726,9 @@ export class LocalConnector {
     state.inbox = new Map(Object.entries(doc.inbox));
     trimInbox(state.inbox);
     state.drafts = new Map(Object.entries(doc.drafts));
+    state.mail.pendingPublications = new Map(
+      Object.entries(doc.mail.pending_publications ?? {}),
+    );
     for (const box of doc.mail.mailboxes)
       state.mail.mailboxes.set(box.mailbox_id, box.cards);
     state.mail.pins = new MailCardCache({ version: 1, pins: doc.mail.pins });
@@ -759,6 +770,9 @@ export class LocalConnector {
       inbox: Object.fromEntries(this.state.inbox),
       drafts: Object.fromEntries(this.state.drafts),
       mail: {
+        pending_publications: Object.fromEntries(
+          this.state.mail.pendingPublications,
+        ),
         mailboxes: [...this.state.mail.mailboxes.entries()]
           .sort((a, b) => compareStrings(a[0], b[0]))
           .map(([mailbox_id, cards]) => ({ mailbox_id, cards })),
@@ -775,8 +789,8 @@ export class LocalConnector {
   /**
    * SENSITIVE: the Agent Mail decryption keys of the mailboxes' retained
    * cards, as `{ version, agent_id, keys: { public_key: secret } }`. Keep it in
-   * the key store, apart from {@link LocalConnector.snapshot}; save it after a
-   * mailbox publish and restore it with {@link LocalConnector.restoreMailKeys}.
+   * the key store, apart from {@link LocalConnector.snapshot}. Production hosts save
+   * it in mailPersistence before publication; restore with {@link LocalConnector.restoreMailKeys}.
    */
   mailKeysSnapshot(): {
     version: 1;
@@ -1016,7 +1030,7 @@ export class LocalConnector {
       case TOOL_JOIN_REQUEST_REVIEW:
         return this.joinRequestReview(input as JoinRequestReviewInput);
       case TOOL_MAIL_MAILBOXES_LIST:
-        return this.mailMailboxesList();
+        return this.mailMailboxesList((input ?? {}) as MailMailboxesListInput);
       case TOOL_MAIL_MAILBOX_PUBLISH:
         return this.mailMailboxPublish(input as MailMailboxPublishInput);
       case TOOL_MAIL_SEND:
@@ -1199,6 +1213,7 @@ export class LocalConnector {
       throw invalidPayload(
         "supply exactly one of address, card_url or profile_service",
       );
+    const errors: unknown[] = [];
     const contacts: { mailboxId: string; routes: string[] }[] = [];
     const cardUrl = (value: string) => {
       const url = new URL(value);
@@ -1208,6 +1223,7 @@ export class LocalConnector {
       if (url.search || url.hash || !match)
         throw invalidPayload("invalid mailbox card URL");
       validateOrigin(url.origin);
+      formatMailAddress(input.agent_id, match[1], [url.origin]);
       contacts.push({ mailboxId: match[1], routes: [url.origin] });
     };
     if (input.address) {
@@ -1226,26 +1242,34 @@ export class LocalConnector {
         ids: [input.agent_id],
       });
       for (const endpoint of result.profiles[0]?.service_endpoints ?? [])
-        if (endpoint.type === "agent-mail") cardUrl(endpoint.url);
+        if (endpoint.type === "agent-mail") {
+          try {
+            cardUrl(endpoint.url);
+          } catch (error) {
+            errors.push({
+              url: endpoint.url,
+              code: "invalid_url",
+              message: String(error),
+            });
+          }
+        }
     }
-    const mailboxes: unknown[] = [],
-      errors: unknown[] = [];
-    const seen = new Set<string>();
+    const mailboxes: unknown[] = [];
+    const ids = new Set<string>();
     for (const contact of contacts) {
-      let card: MailboxCard | undefined;
+      ids.add(contact.mailboxId);
       for (const route of contact.routes) {
         try {
           const record = await this.mailClient(route).card(
             contact.mailboxId,
             input.agent_id,
           );
-          card = this.state.mail.pins.observe(
+          this.state.mail.pins.observe(
             record.envelope,
             input.agent_id,
             unixTimeMillis(),
             false,
           );
-          break;
         } catch (error) {
           errors.push({
             mailbox_id: contact.mailboxId,
@@ -1253,10 +1277,10 @@ export class LocalConnector {
           });
         }
       }
-      if (!card)
-        card = this.state.mail.pins.get(input.agent_id, contact.mailboxId);
-      if (!card || seen.has(card.hash)) continue;
-      seen.add(card.hash);
+    }
+    for (const mailboxId of [...ids].sort()) {
+      const card = this.state.mail.pins.get(input.agent_id, mailboxId);
+      if (!card) continue;
       let usable = card.event.payload.routes.some((route) =>
         this.isAllowedHost(route),
       );
@@ -1268,7 +1292,7 @@ export class LocalConnector {
       mailboxes.push({
         address: formatMailAddress(
           input.agent_id,
-          contact.mailboxId,
+          mailboxId,
           card.event.payload.routes,
         ),
         card,
@@ -2955,14 +2979,134 @@ export class LocalConnector {
 
   // ── Agent Mail (local connector Section 4.3).
 
-  private mailMailboxesList(): unknown {
+  private async mailMailboxesList(
+    input: MailMailboxesListInput,
+  ): Promise<unknown> {
     const now = unixTimeMillis();
-    const mailboxes: MailboxView[] = [];
-    for (const [mailboxId, cards] of this.state.mail.mailboxes) {
-      const card = cards.at(-1);
-      if (card) mailboxes.push(this.mailboxView(mailboxId, card, now));
+    if (!input.host) {
+      if (input.limit !== undefined || input.cursor !== undefined)
+        throw invalidPayload("remote pagination requires host");
+      return {
+        mailboxes: [...this.state.mail.mailboxes].flatMap(([id, cards]) =>
+          cards.length ? [this.mailboxView(id, cards.at(-1)!, now)] : [],
+        ),
+      };
     }
-    return { mailboxes };
+    this.requireAllowedHost(input.host);
+    const page = await this.mailClient(input.host).mailboxes(
+      this.agentId(),
+      this.requestJwt(input.host),
+      { limit: input.limit, cursor: input.cursor },
+    );
+    for (const record of page.result) {
+      this.state.mail.pins.observe(record.envelope, this.agentId(), now, false);
+      this.retainOwnCard(record.envelope);
+    }
+    await this.persistMail();
+    return {
+      mailboxes: page.result.map((r) => {
+        const id = r.envelope.event.payload.mailbox_id;
+        return this.mailboxView(
+          id,
+          this.state.mail.mailboxes.get(id)!.at(-1)!,
+          now,
+        );
+      }),
+      ...(page.next_cursor === undefined
+        ? {}
+        : { next_cursor: page.next_cursor }),
+    };
+  }
+
+  private retainOwnCard(card: MailboxCard): void {
+    const id = card.event.payload.mailbox_id;
+    const cards = this.state.mail.mailboxes.get(id) ?? [];
+    if (
+      cards.some(
+        (c) => c.event.nonce === card.event.nonce && c.hash !== card.hash,
+      )
+    )
+      throw invalidPayload("conflicting mailbox card nonce");
+    if (!cards.some((c) => c.hash === card.hash)) cards.push(card);
+    cards.sort((a, b) => a.event.nonce - b.event.nonce);
+    this.state.mail.mailboxes.set(id, cards);
+  }
+
+  private async persistMail(): Promise<void> {
+    if (this.mailPersistence)
+      await this.mailPersistence(this.snapshot(), this.mailKeysSnapshot());
+  }
+
+  /** Every signed attempt is retained before any request, including nonce-resync intermediates. */
+  private async publishMailCard(
+    card: MailboxCard,
+    targets: string[],
+  ): Promise<{ card: MailboxCard; published: string[]; failed: RouteError[] }> {
+    const id = card.event.payload.mailbox_id;
+    let resigned = false;
+    for (;;) {
+      this.retainOwnCard(card);
+      this.state.mail.pendingPublications.set(id, {
+        card_hash: card.hash,
+        routes: [...targets],
+      });
+      await this.persistMail();
+      const published: string[] = [],
+        failed: RouteError[] = [];
+      let retry = false;
+      for (const route of targets) {
+        try {
+          await this.mailClient(route).publish(card);
+          published.push(route);
+        } catch (error) {
+          if (
+            !resigned &&
+            (this.resyncNonce(error) ||
+              (isHttpError(error, "timestamp_out_of_window") &&
+                card.event.payload.expires_at > unixTimeMillis()))
+          ) {
+            retry = true;
+            break;
+          }
+          // A lost response is not proof of rejection. A public read can confirm exact acceptance.
+          try {
+            const record = await this.mailClient(route).card(
+              id,
+              this.agentId(),
+            );
+            if (record.envelope.hash === card.hash) {
+              published.push(route);
+              continue;
+            }
+          } catch {
+            /* Preserve the original publication error and the pending attempt. */
+          }
+          failed.push({ mailbox_id: id, ...routeError(route, error) });
+        }
+      }
+      if (retry) {
+        resigned = true;
+        targets = [
+          ...new Set([
+            ...targets,
+            ...card.event.payload.routes,
+            ...(this.state.mail.mailboxes.get(id) ?? []).flatMap(
+              (c) => c.event.payload.routes,
+            ),
+          ]),
+        ];
+        card = this.signMailCard(card.event.payload);
+        continue;
+      }
+      if (failed.length)
+        this.state.mail.pendingPublications.set(id, {
+          card_hash: card.hash,
+          routes: failed.map((e) => e.route),
+        });
+      else this.state.mail.pendingPublications.delete(id);
+      await this.persistMail();
+      return { card, published, failed };
+    }
   }
 
   private async mailMailboxPublish(
@@ -3004,58 +3148,26 @@ export class LocalConnector {
         DEFAULT_MAX_PACKET_BYTES,
     };
 
-    // Publish to every route of the previous and new cards (Agent Mail
-    // Section 4.2); routes the operator no longer allows are reported.
-    const targets = [...routes];
-    for (const route of previous?.event.payload.routes ?? []) {
-      if (!targets.includes(route)) targets.push(route);
-    }
-    const failed: RouteError[] = [];
-    const allowed: string[] = [];
-    for (const route of targets) {
-      try {
-        this.requireAllowedHost(route);
-        allowed.push(route);
-      } catch (error) {
-        failed.push(routeError(route, error));
-      }
-    }
-    if (allowed.length === 0) throw permissionDenied();
-    let card = this.signMailCard(payload);
-    let resynced = false;
-    let published: string[];
-    let errors: [string, unknown][];
-    for (;;) {
-      published = [];
-      errors = [];
-      let resync = false;
-      for (const route of allowed) {
-        try {
-          await this.mailClient(route).publish(card);
-          published.push(route);
-        } catch (error) {
-          if (!resynced && this.resyncNonce(error)) {
-            resync = true;
-            break;
-          }
-          errors.push([route, error]);
-        }
-      }
-      if (!resync) break;
-      // One re-signed card, published to every route again.
-      resynced = true;
-      card = this.signMailCard(payload);
-    }
-    failed.push(...errors.map(([route, error]) => routeError(route, error)));
-    if (published.length === 0) throw errors[0]?.[1] ?? permissionDenied();
+    const targets = [
+      ...new Set([
+        ...routes,
+        ...[...(this.state.mail.mailboxes.get(mailboxId) ?? [])].flatMap(
+          (c) => c.event.payload.routes,
+        ),
+        ...(this.state.mail.pendingPublications.get(mailboxId)?.routes ?? []),
+      ]),
+    ];
+    if (!targets.some((route) => this.isAllowedHost(route)))
+      throw permissionDenied();
     if (newKey) this.mailKeys.set(newKey.publicKey(), newKey);
-    const cards = this.state.mail.mailboxes.get(mailboxId) ?? [];
-    cards.push(card);
-    this.state.mail.mailboxes.set(mailboxId, cards);
+    const result = await this.publishMailCard(
+      this.signMailCard(payload),
+      targets,
+    );
     return {
-      mailbox: this.mailboxView(mailboxId, card, unixTimeMillis()),
-      published,
-      failed,
+      mailbox: this.mailboxView(mailboxId, result.card, unixTimeMillis()),
+      published: result.published,
+      failed: result.failed,
     };
   }
 
@@ -3133,6 +3245,16 @@ export class LocalConnector {
     }
     const now = unixTimeMillis();
     const errors: RouteError[] = [];
+    for (const [id, pending] of [...this.state.mail.pendingPublications]) {
+      if (input.mailbox_id && input.mailbox_id !== id) continue;
+      const card = this.state.mail.mailboxes
+        .get(id)
+        ?.find((c) => c.hash === pending.card_hash);
+      if (card && now < card.event.payload.receive_until) {
+        const result = await this.publishMailCard(card, pending.routes);
+        errors.push(...result.failed);
+      }
+    }
     const { delivered, expired } = await this.retryQueued(now, errors);
     this.pruneMail(now);
     const received = await this.pollMailboxes(input.mailbox_id, errors);
@@ -3509,9 +3631,13 @@ export class LocalConnector {
   private pruneMail(now: number): void {
     const mail = this.state.mail;
     for (const [mailboxId, cards] of mail.mailboxes) {
+      const live = cards.some((card) => now < card.event.payload.receive_until);
       const kept = cards.filter(
-        (card) => now < card.event.payload.receive_until,
+        (card) =>
+          now < card.event.payload.receive_until ||
+          (live && card === cards.at(-1)),
       );
+      if (!live) mail.pendingPublications.delete(mailboxId);
       if (kept.length === 0) mail.mailboxes.delete(mailboxId);
       else mail.mailboxes.set(mailboxId, kept);
     }
@@ -3571,7 +3697,12 @@ export class LocalConnector {
     const unread = this.state.mail.messages.filter(
       (stored) => isUnread(stored) && stored.mailbox_id === mailboxId,
     ).length;
-    return mailboxView(mailboxId, card, now, unread);
+    return {
+      ...mailboxView(mailboxId, card, now, unread),
+      key_available: this.mailKeys.has(card.event.payload.public_key),
+      pending_routes:
+        this.state.mail.pendingPublications.get(mailboxId)?.routes ?? [],
+    };
   }
 
   // ── Agent Knowledge (local connector Section 4.3).

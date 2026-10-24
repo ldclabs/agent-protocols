@@ -14,6 +14,8 @@ import {
   validateMailOwnerJwt,
   validateMailPacket,
   validateMailPacketList,
+  validateMailMailboxList,
+  type MailboxList,
   type MailboxCard,
   type MailCardRecord,
   type MailDeliveryResult,
@@ -94,6 +96,30 @@ export class MailClient {
     );
     validateMailDeliveryResult(r, packet);
     return r;
+  }
+  async mailboxes(
+    owner: string,
+    jwt: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<MailboxList> {
+    validateMailOwnerJwt(jwt, this.service, owner, this.clock());
+    const limit = options.limit ?? 100;
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 1000 ||
+      options.cursor === ""
+    )
+      throw protocolError("invalid_request", "invalid pagination");
+    const url = new URL(`${this.service}/v1/me/mailboxes`);
+    url.searchParams.set("limit", String(limit));
+    if (options.cursor !== undefined)
+      url.searchParams.set("cursor", options.cursor);
+    const page = await this.request(url.href, "GET", 200, undefined, jwt);
+    validateMailMailboxList(page, owner, limit);
+    for (const record of page.result)
+      this.cardCache.observe(record.envelope, owner, this.clock(), false);
+    return page;
   }
   async list(
     mailboxId: string,

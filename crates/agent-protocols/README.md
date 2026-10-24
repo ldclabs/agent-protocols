@@ -302,3 +302,11 @@ Transport adapters should publish both `inputSchema` and `outputSchema`, refresh
 their tool inventory, and extend their own capability mappings for the new read
 and local watch tools. Consumers pinned to an older SDK must update their
 integration before the new surface is available.
+
+### Mailbox inventory and publication recovery
+
+`MailClient::mailboxes(owner, jwt, now, limit, cursor)` and `MailRelayStore::mailboxes(jwt, now, limit, cursor)` implement owner-authenticated `GET /v1/me/mailboxes`. Results contain current signed cards at that relay, including retained closed/expired mailboxes; they are not a global directory or a backup of secrets and historical cards. Public contact discovery remains explicit Profile `agent-mail` endpoints. Relays retain pending packets and acceptance tombstones even when a newer card shortens `receive_until`.
+
+Before publishing any card, durably save its independent secret, exact signed envelope and targets. A timeout can follow relay acceptance; retain every possibly published card/key, including nonce-resync intermediates, until its own `receive_until`. Reconcile by exact retry or a verified card read.
+
+Production connector hosts must install `with_mail_persistence(|snapshot, keys| ...)` to save keys first, then state, before network publication; a rejected/failed callback prevents the write. Without this hook the SDK core is memory-only and cannot provide crash durability. Snapshots include pending publications; save state after every tool call, including errors, and restore keys before `mail_sync`. `mail_sync` retries outstanding publications. `mail_mailboxes_list({host, limit, cursor})` imports one remote page; `key_available` distinguishes metadata recovery from a loaded decryption key, and `pending_routes` reports uncertain or failed publication targets. A publish with no confirmed route returns its retained mailbox plus errors, so the caller can resume rather than lose its key. `mail_resolve` returns one final pinned candidate per mailbox and isolates bad Profile endpoints.

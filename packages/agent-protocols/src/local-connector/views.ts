@@ -375,6 +375,8 @@ export type MailboxStatus = "open" | "closed" | "expired";
 
 /** A mailbox of the active Agent ID, described by its current card. */
 export interface MailboxView {
+  key_available: boolean;
+  pending_routes: string[];
   mailbox_id: string;
   /** The contact address with the card's routes, or the stable address when closed. */
   address: string;

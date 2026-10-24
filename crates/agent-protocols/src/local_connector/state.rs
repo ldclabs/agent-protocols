@@ -111,10 +111,17 @@ impl LocalRoomState {
     }
 }
 
-/// Agent Mail state. Decryption keys are not part of it: the connector keeps
-/// them apart, for the host's key store.
+/// A retained attempt and the routes that have not confirmed it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct PendingMailPublication {
+    pub(crate) card_hash: String,
+    pub(crate) routes: Vec<String>,
+}
+
+/// Agent Mail state. Decryption keys stay in the separate host key store.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MailState {
+    pub(crate) pending_publications: BTreeMap<String, PendingMailPublication>,
     /// The active Agent ID's mailboxes: every card retained until its
     /// `receive_until`, in signing order, the last one current.
     pub(crate) mailboxes: BTreeMap<String, Vec<MailboxCard>>,
@@ -220,6 +227,8 @@ pub(crate) struct ConnectorSnapshot {
 
 #[derive(Serialize, Deserialize)]
 struct MailSnapshot {
+    #[serde(default)]
+    pending_publications: BTreeMap<String, PendingMailPublication>,
     mailboxes: Vec<OwnMailbox>,
     pins: Vec<MailboxCard>,
     blocked_senders: BTreeSet<AgentId>,
@@ -297,6 +306,7 @@ impl ConnectorSnapshot {
             inbox: state.inbox.clone(),
             drafts: state.drafts.clone(),
             mail: MailSnapshot {
+                pending_publications: state.mail.pending_publications.clone(),
                 mailboxes: state
                     .mail
                     .mailboxes
@@ -346,6 +356,7 @@ impl ConnectorSnapshot {
             inbox,
             drafts: self.drafts,
             mail: MailState {
+                pending_publications: self.mail.pending_publications,
                 mailboxes: self
                     .mail
                     .mailboxes

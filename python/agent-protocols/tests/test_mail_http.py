@@ -219,3 +219,21 @@ def test_non2xx_errors_and_delete_body_contract():
     session, _ = transport((b'not-empty', 204, {}))
     with pytest.raises(AgentProtocolError):
         MailClient(ORIGIN, session).delete(MAILBOX, V['encryptions']['original']['packet_id'], OWNER, TOKEN, now_ms=NOW)
+
+
+def test_owner_mailbox_inventory_http_validates_owner_order_and_pins():
+    relay, card, _ = populated()
+    page = relay.mailboxes(TOKEN, now_ms=NOW)
+    session, adapter = transport(page)
+    client = MailClient(ORIGIN, session)
+    assert client.mailboxes(OWNER, TOKEN, limit=1, now_ms=NOW) == page
+    request, _ = adapter.calls[0]
+    assert urlsplit(request.url).path == '/v1/me/mailboxes'
+    assert request.headers['Authorization'] == 'Bearer ' + TOKEN
+    assert client.card_cache.get(OWNER, MAILBOX) == card['envelope']
+    for bad in [{'result':[card,card]}, {'result':[{'envelope':ENVS['inventory_foreign_card'],'accepted_at':NOW}]}, {'result':[], 'next_cursor':'x'}]:
+        session, _ = transport(bad)
+        with pytest.raises(AgentProtocolError): MailClient(ORIGIN, session).mailboxes(OWNER, TOKEN, now_ms=NOW)
+    session, adapter = transport(page)
+    with pytest.raises(AgentProtocolError): MailClient(ORIGIN, session).mailboxes(OWNER, 'bad', now_ms=NOW)
+    assert adapter.calls == []

@@ -15,6 +15,7 @@ import {
   type ServerRecord,
 } from "./discourse.js";
 import * as delegation from "./delegation.js";
+import { MailEncryptionKey, mailboxPublishEvent, newMailId } from "./mail.js";
 import {
   LocalConnector,
   standardToolDefinitions,
@@ -508,4 +509,58 @@ test("archive pack metadata cannot replace the signed import digest", async () =
     () => call(c, "room_archive", { room_id: "room1", host: HOST }),
     /signed import/,
   );
+});
+
+test("mail resolve projects the final pin once and isolates malformed Profile endpoints", async () => {
+  const mirror = "https://mirror.example.test",
+    now = Date.now(),
+    id = newMailId();
+  const payload = {
+    mailbox_id: id,
+    public_key: MailEncryptionKey.generate().publicKey(),
+    routes: [HOST, mirror],
+    expires_at: now + 60000,
+    receive_until: now + 120000,
+    max_packet_bytes: 65536,
+  };
+  const old = bob.signEvent(
+    mailboxPublishEvent(bob.agentId(), now, 1, payload),
+  );
+  const closed = bob.signEvent(
+    mailboxPublishEvent(bob.agentId(), now, 2, { ...payload, routes: [] }),
+  );
+  const profile = bob.signEvent(
+    profileUpdateEvent(bob.agentId(), now, 3, {
+      id: bob.agentId(),
+      name: "Bob",
+      service_endpoints: [
+        { type: "agent-mail", url: `${HOST}/bad` },
+        { type: "agent-mail", url: `${HOST}/v1/mailboxes/${id}/card` },
+        { type: "agent-mail", url: `${mirror}/v1/mailboxes/${id}/card` },
+      ],
+    }),
+  );
+  const c = connector((async (url) => {
+    const u = new URL(String(url));
+    if (u.pathname === "/.well-known/agent-profile")
+      return json({
+        protocol: "agent-profile/1.0",
+        service: HOST,
+        endpoints: { profiles: `${HOST}/profiles` },
+      });
+    if (u.pathname.endsWith("/events")) return json({ result: [profile] });
+    return json({
+      envelope: u.origin === mirror ? closed : old,
+      accepted_at: now,
+    });
+  }) as typeof fetch);
+  c.addHost({ host: mirror, allowed: true });
+  const result = await call(c, "mail_resolve", {
+    agent_id: bob.agentId(),
+    profile_service: HOST,
+  });
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.mailboxes.length, 1);
+  assert.equal(result.mailboxes[0].card.hash, closed.hash);
+  assert.equal(result.mailboxes[0].usable, false);
 });

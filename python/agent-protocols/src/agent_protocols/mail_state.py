@@ -319,6 +319,22 @@ class MailRelayStore:
             else:
                 box.blocked_senders.discard(sender)
 
+    def mailboxes(self, token: str, *, limit: int = 100, cursor: str | None = None,
+                  now_ms: int | None = None) -> dict[str, Any]:
+        """Owner-only current cards, including closed/expired mailboxes at this relay."""
+        now = _now(now_ms)
+        owner = verify_mail_owner_jwt(token, None, self.origin, now_ms=now)['iss']
+        _require(type(limit) is int and 1 <= limit <= 1000, 'invalid_request', 'invalid limit')
+        if cursor is not None:
+            try: validate_mail_id(cursor, size=16)
+            except (AgentProtocolError, TypeError): raise AgentProtocolError('invalid_request', 'invalid cursor')
+        with self._lock:
+            rows = [(id, box) for id, box in sorted(self._boxes.items())
+                    if box.current['envelope']['event']['actor'] == owner and (cursor is None or id > cursor)]
+            page = {'result': [copy.deepcopy(box.current) for _, box in rows[:limit]]}
+            if len(rows) > limit: page['next_cursor'] = rows[limit-1][0]
+            return page
+
     def _owner_box(self, mailbox_id: str, token: str, now: int) -> _Mailbox:
         validate_mail_id(mailbox_id, size=16)
         claims = verify_mail_owner_jwt(token, None, self.origin, now_ms=now)
@@ -354,14 +370,14 @@ class MailRelayStore:
                 box.bytes -= stored[1]
 
     def prune(self, *, now_ms: int | None = None) -> None:
-        """Drop expired packets and tombstones, then forget mailboxes whose current card's receive_until passed."""
+        """Drop expired packets and tombstones, then forget mailboxes only after card and packet/tombstone retention ends."""
         now = _now(now_ms)
         with self._lock:
             for mailbox_id, box in list(self._boxes.items()):
                 box.drop_expired(now)
                 for pid in [pid for pid, t in box.tombstones.items() if now >= t['expires_at']]:
                     del box.tombstones[pid]
-                if now >= box.current['envelope']['event']['payload']['receive_until']:
+                if now >= box.current['envelope']['event']['payload']['receive_until'] and not box.packets and not box.tombstones:
                     del self._boxes[mailbox_id]
 
     def snapshot(self) -> dict[str, Any]:

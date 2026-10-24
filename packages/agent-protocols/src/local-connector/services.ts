@@ -109,6 +109,8 @@ export function mailboxView(
 ): MailboxView {
   const payload = card.event.payload;
   return {
+    key_available: false,
+    pending_routes: [],
     mailbox_id: mailboxId,
     address: formatMailAddress(card.event.actor, mailboxId, payload.routes),
     routes: [...payload.routes],

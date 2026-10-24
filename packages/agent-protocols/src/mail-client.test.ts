@@ -323,3 +323,35 @@ test("Mail HTTP pins closed and moved cards before returning and rejects later r
   );
   await assert.rejects(() => api.card(mailbox, owner), { code: "stale_card" });
 });
+
+test("Mail inventory owner-authenticates and validates every card before pinning", async () => {
+  const calls: string[] = [];
+  const c = client(async (url: string, init: RequestInit) => {
+    calls.push(url);
+    assert.equal(
+      (init.headers as Record<string, string>).authorization,
+      `Bearer ${jwt()}`,
+    );
+    return response({ result: [accepted] });
+  });
+  assert.deepEqual(await c.mailboxes(owner, jwt(), { limit: 1 }), {
+    result: [accepted],
+  });
+  assert.equal(calls[0], `${service}/v1/me/mailboxes?limit=1`);
+  assert.equal(c.cardCache.get(owner, mailbox)?.hash, card.hash);
+  await assert.rejects(c.mailboxes(owner, "bad"));
+  assert.equal(calls.length, 1);
+  for (const bad of [
+    { result: [accepted, accepted] },
+    {
+      result: [
+        { envelope: v.envelopes.inventory_foreign_card, accepted_at: now },
+      ],
+    },
+    { result: [], next_cursor: "x" },
+  ]) {
+    await assert.rejects(
+      client(async () => response(bad)).mailboxes(owner, jwt()),
+    );
+  }
+});

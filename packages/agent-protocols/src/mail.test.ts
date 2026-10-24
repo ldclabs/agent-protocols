@@ -669,3 +669,62 @@ test("Mail logical ID conflicts fail and distinct senders have distinct ID names
   assert.equal((await inbox.accept(other, now)).kind, "accepted");
   assert.equal(inbox.snapshot().accepted.length, 2);
 });
+
+test("shorter card preserves packets and tombstones through their original deadlines", () => {
+  const c = v.lifecycle.relay_retention;
+  for (const deleteFirst of [false, true]) {
+    let relay = new m.MailRelayStore(service);
+    relay.publish(e[c.initial_card], now);
+    const p = packet(c.packet),
+      delivery = relay.deliver(mailbox, p, now);
+    if (deleteFirst) relay.delete(mailbox, p.hash, jwt(), now);
+    relay.publish(e[c.replacement_card], now);
+    relay = new m.MailRelayStore(service, { snapshot: relay.snapshot() });
+    relay.prune(c.prune_at);
+    assert.equal(relay.card(mailbox).envelope.hash, e[c.replacement_card].hash);
+    assert.deepEqual(relay.deliver(mailbox, p, c.prune_at), delivery);
+    assert.equal(
+      relay.list(mailbox, jwt(signer, service, c.prune_at), { now: c.prune_at })
+        .result.length,
+      deleteFirst ? 0 : 1,
+    );
+    relay.prune(c.expires_at);
+    assert.throws(() => relay.card(mailbox), { code: "mailbox_unavailable" });
+  }
+});
+
+test("owner inventory authenticates, paginates by mailbox and retains closed cards", () => {
+  const c = v.lifecycle.mailbox_inventory;
+  let relay = new m.MailRelayStore(service);
+  for (const name of c.cards) relay.publish(e[name], now);
+  relay.publish(makeCard(e[c.closed_card].event.payload, 122), now);
+  const first = relay.mailboxes(jwt(), { now, limit: 1 });
+  relay = new m.MailRelayStore(service, { snapshot: relay.snapshot() });
+  const second = relay.mailboxes(jwt(), {
+    now,
+    limit: 1,
+    cursor: first.next_cursor,
+  });
+  assert.deepEqual(
+    [...first.result, ...second.result].map(
+      (r) => r.envelope.event.payload.mailbox_id,
+    ),
+    c.owner_mailbox_ids,
+  );
+  assert.equal(second.next_cursor, undefined);
+  assert.equal(relay.mailboxes(jwt(sender), { now }).result.length, 1);
+  assert.throws(() => relay.mailboxes("bad", { now, limit: 0 }), {
+    code: "invalid_token",
+  });
+  assert.throws(() => relay.mailboxes(jwt(), { now, cursor: "bad" }), {
+    code: "invalid_request",
+  });
+  assert.throws(() => relay.mailboxes(jwt(), { now, limit: 0 }), {
+    code: "invalid_request",
+  });
+  assert.equal(
+    relay.mailboxes(jwt(signer, service, now + 60000), { now: now + 60000 })
+      .result.length,
+    2,
+  );
+});

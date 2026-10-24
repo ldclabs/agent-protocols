@@ -505,6 +505,36 @@ impl MailRelayStore {
         }
         Ok(())
     }
+    /// Current cards at this relay, including closed/expired mailboxes. Owner-only.
+    pub fn mailboxes(
+        &self,
+        jwt: &str,
+        now: i64,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<ListResponse<AcceptedRecord<MailboxCardPayload>>> {
+        let owner = owner_claims(jwt, &self.origin, now)?.iss;
+        if !(1..=1000).contains(&limit) {
+            return Err(fail("invalid_request", "invalid limit"));
+        }
+        if let Some(cursor) = cursor {
+            path_id(cursor, 16)?;
+        }
+        let mut rows: Vec<_> = self
+            .mailboxes
+            .iter()
+            .filter(|(id, m)| {
+                m.current.envelope.event.actor == owner && cursor.is_none_or(|c| id.as_str() > c)
+            })
+            .map(|(_, m)| m.current.clone())
+            .collect();
+        let more = rows.len() > limit;
+        rows.truncate(limit);
+        Ok(ListResponse {
+            next_cursor: more.then(|| rows[limit - 1].envelope.event.payload.mailbox_id.clone()),
+            result: rows,
+        })
+    }
     fn owner_box(&self, mailbox: &str, jwt: &str, now: i64) -> Result<&RelayMailbox> {
         path_id(mailbox, 16)?;
         let claims = owner_claims(jwt, &self.origin, now)?;
@@ -562,16 +592,18 @@ impl MailRelayStore {
         }
         Ok(())
     }
-    /// Drop expired packets and tombstones, then forget mailboxes whose
-    /// current card's `receive_until` passed; a later card is a new registration.
+    /// Drop expired packets and tombstones, then forget mailboxes only when all retention ends; a later card is a new registration.
     pub fn prune(&mut self, now: i64) -> Result<()> {
         clock(now)?;
         for m in self.mailboxes.values_mut() {
             m.drop_expired(now);
             m.tombstones.retain(|_, (_, expires)| now < *expires);
         }
-        self.mailboxes
-            .retain(|_, m| now < m.current.envelope.event.payload.receive_until);
+        self.mailboxes.retain(|_, m| {
+            now < m.current.envelope.event.payload.receive_until
+                || !m.packets.is_empty()
+                || !m.tombstones.is_empty()
+        });
         Ok(())
     }
     pub fn snapshot(&self) -> Result<Value> {

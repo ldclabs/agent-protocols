@@ -416,6 +416,17 @@ def validate_mail_card_record(record: dict[str, Any], owner: str, mailbox_id: st
              and (card_hash is None or card['hash'] == card_hash), 'invalid_response', 'card record mismatch')
 
 
+def validate_mail_mailbox_list(page: dict[str, Any], owner: str, *, limit: int = 100) -> None:
+    validate_mail_schema(page, 'mailboxList', 'invalid_response')
+    _require(len(page['result']) <= limit and ('next_cursor' not in page or bool(page['result'])), 'invalid_response', 'invalid page size')
+    previous = ''
+    for record in page['result']:
+        validate_mail_card_record(record, owner)
+        id = record['envelope']['event']['payload']['mailbox_id']
+        _require(id > previous, 'invalid_response', 'unordered or repeated mailboxes')
+        previous = id
+
+
 def validate_mail_delivery_result(result: dict[str, Any], packet: dict[str, Any] | None = None) -> None:
     validate_mail_schema(result, 'deliveryResult', 'invalid_response')
     if packet is not None:
@@ -468,5 +479,5 @@ __all__ = [
     'encode_mail_plaintext', 'decode_mail_plaintext', 'mail_packet_id', 'validate_mail_packet',
     'parse_mail_packet', 'encrypt_mail', 'decrypt_mail', 'validate_mail_discovery',
     'validate_mail_card_record', 'validate_mail_delivery_result', 'validate_mail_packet_record',
-    'validate_mail_packet_list', 'verify_mail_owner_jwt',
+    'validate_mail_packet_list', 'validate_mail_mailbox_list', 'verify_mail_owner_jwt',
 ]

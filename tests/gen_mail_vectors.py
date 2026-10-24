@@ -463,6 +463,9 @@ def generate():
         'short_closed_card': signed(recipient, 'mailbox.publish', {**p, 'routes': [], 'expires_at': NOW + 2 * DAY, 'receive_until': NOW + 2 * DAY}, 111),
         'small_limit_card': signed(recipient, 'mailbox.publish', {**p, 'max_packet_bytes': 4096}, 112),
         'foreign_card': signed(sender, 'mailbox.publish', p, 300),
+        'early_closed_card': signed(recipient, 'mailbox.publish', {**p, 'routes': [], 'expires_at': NOW + 30000, 'receive_until': NOW + 60000}, 120),
+        'inventory_card': signed(recipient, 'mailbox.publish', {**p, 'mailbox_id': b64(bytes([240])*16)}, 121),
+        'inventory_foreign_card': signed(sender, 'mailbox.publish', {**p, 'mailbox_id': b64(bytes([241])*16)}, 301),
     }
     message_content = {
         'to': owner, 'expires_at': NOW + DAY + 1000, 'thread_id': b64(bytes(range(48, 64))),
@@ -505,6 +508,10 @@ def generate():
         schema_cases.append({'name': name, 'definition': definition, 'value': value, 'valid': valid})
     for name in ['card', 'rotated_card', 'closed_card', 'original_packet']:
         sc(name, 'envelope', envelopes[name], True)
+    sc('owner mailbox list', 'mailboxList', {'result': [{'envelope':card,'accepted_at':NOW}], 'extension':True}, True)
+    sc('empty mailbox inventory', 'mailboxList', {'result':[]}, True)
+    sc('invalid inventory cursor', 'mailboxList', {'result':[], 'next_cursor':''}, False)
+    sc('invalid inventory record', 'mailboxList', {'result':[card]}, False)
     sc('message', 'messagePayload', letter, True)
     sc('message ID is not an id16', 'messagePayload', change(letter, ['message_id'], b64(bytes(32))), False)
     sc('parent reference is not an id16', 'messagePayload', change(letter, ['in_reply_to'], b64(bytes(32))), False)
@@ -761,6 +768,8 @@ def generate():
         'address_cases': address_cases,
         'owner_jwt_cases': token_cases,
         'lifecycle': {
+            'relay_retention': {'initial_card':'card', 'packet':'original', 'replacement_card':'early_closed_card', 'prune_at':NOW+60000, 'expires_at':letter['expires_at']},
+            'mailbox_inventory': {'cards':['card','inventory_card','inventory_foreign_card'], 'closed_card':'early_closed_card', 'owner_mailbox_ids':sorted([p['mailbox_id'],envelopes['inventory_card']['event']['payload']['mailbox_id']])},
             'card_cache': card_cache, 'persistent_card_pin': persistent_pin,
             'recipient': recipient_steps, 'historical_card': historical, 'expired_new_message': expired,
             'relay': relay_steps, 'relay_registration': registration, 'reply': reply,

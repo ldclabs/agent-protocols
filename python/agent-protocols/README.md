@@ -253,3 +253,9 @@ The Python suite also checks the shared
 against JSON Schema. These adapter additions do not change the signed protocol
 schemas or vectors. See the [connector workflows](../../docs/mcp/local-connector/1.0.md#46-complete-workflows-and-read-boundaries)
 for full Profile replacement and explicit mail synchronization semantics.
+
+### Mailbox inventory and publication recovery
+
+`MailClient.mailboxes(owner, jwt, limit=100, cursor=None)` and `MailRelayStore.mailboxes(jwt, ...)` implement owner-authenticated `GET /v1/me/mailboxes`. Results contain current signed cards at that relay, including retained closed/expired mailboxes; they are not a global directory or a backup of secrets and historical cards. Public contact discovery remains explicit Profile `agent-mail` endpoints. Relays retain pending packets and acceptance tombstones even when a newer card shortens `receive_until`.
+
+Before publishing any card, durably save its independent secret, exact signed envelope and targets. A timeout can follow relay acceptance; retain every possibly published card/key, including nonce-resync intermediates, until its own `receive_until`. Reconcile by exact retry or a verified card read.

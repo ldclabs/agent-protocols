@@ -19,6 +19,7 @@ import {
 import {
   LOCAL_CONNECTOR_SNAPSHOT_VERSION,
   LocalConnector,
+  type LocalConnectorOptions,
   standardToolDefinitions,
   TOOL_INBOX_ACK,
   TOOL_INBOX_NEXT,
@@ -56,7 +57,11 @@ const STATUS: Record<string, number> = {
 function services() {
   const relay = new MailRelayStore(ORIGIN);
   const knowledge = new KnowledgeStore({ service: ORIGIN });
-  const state = { failingDeliveries: 0 };
+  const state = {
+    failingDeliveries: 0,
+    losePublicationResponses: 0,
+    failCardReads: false,
+  };
   const json = (
     status: number,
     value: unknown,
@@ -76,10 +81,26 @@ function services() {
     const at = (...parts: string[]) =>
       parts.length === path.length &&
       parts.every((part, i) => part === "*" || part === path[i]);
-    if (method === "POST" && at("v1", "mailboxes"))
-      return json(200, relay.publish(body as MailboxCard));
-    if (method === "GET" && at("v1", "mailboxes", "*", "card"))
+    if (method === "POST" && at("v1", "mailboxes")) {
+      const record = relay.publish(body as MailboxCard);
+      if (state.losePublicationResponses > 0) {
+        state.losePublicationResponses--;
+        throw new TypeError("response lost after commit");
+      }
+      return json(200, record);
+    }
+    if (method === "GET" && at("v1", "me", "mailboxes"))
+      return json(
+        200,
+        relay.mailboxes(jwt, {
+          limit: Number(url.searchParams.get("limit") ?? 100),
+          cursor: url.searchParams.get("cursor") ?? undefined,
+        }),
+      );
+    if (method === "GET" && at("v1", "mailboxes", "*", "card")) {
+      if (state.failCardReads) throw new TypeError("card read unavailable");
       return json(200, relay.card(path[2]));
+    }
     if (method === "POST" && at("v1", "mailboxes", "*", "packets")) {
       if (state.failingDeliveries > 0) {
         state.failingDeliveries -= 1;
@@ -177,10 +198,10 @@ function services() {
       );
     }
   }) as typeof fetch;
-  const connector = (seed: number) => {
+  const connector = (seed: number, options: LocalConnectorOptions = {}) => {
     const local = new LocalConnector(
       AgentSigner.fromSeed(new Uint8Array(32).fill(seed)),
-      { fetchImpl },
+      { ...options, fetchImpl },
     );
     local.addHost({ host: ORIGIN, allowed: true, features: [] });
     return local;
@@ -192,7 +213,7 @@ function services() {
       .mailboxes.find(
         (box) => box.current.envelope.event.payload.mailbox_id === mailboxId,
       )?.packets.length ?? 0;
-  return { state, fetchImpl, connector, packets };
+  return { state, fetchImpl, connector, packets, relay };
 }
 
 type Json = Record<string, any>;
@@ -679,7 +700,7 @@ test("one nonce sequence spans mail and knowledge", async () => {
   // and re-signs once.
   const behind = s.connector(8);
   const mailbox = await openMailbox(behind);
-  const card = behind.snapshot().mail.mailboxes[0].cards[0].event.nonce;
+  const card = behind.snapshot().mail.mailboxes[0].cards.at(-1)!.event.nonce;
   assert.ok(card > far);
 
   // Knowledge events and mail packets continue the same sequence.
@@ -706,4 +727,243 @@ test("one nonce sequence spans mail and knowledge", async () => {
   const packet = state.mail.messages[0].packet!.event.nonce;
   assert.ok(packet > knowledge);
   assert.ok(state.next_nonce > packet);
+});
+
+test("mail publication survives response loss and restart; inventory recovers metadata only", async () => {
+  const s = services();
+  let saved: any, keys: any;
+  const persist: LocalConnectorOptions["mailPersistence"] = (
+    snapshot,
+    material,
+  ) => {
+    saved = structuredClone(snapshot);
+    keys = structuredClone(material);
+  };
+  const bob = s.connector(8, { mailPersistence: persist });
+  const first = await openMailbox(bob);
+  s.state.losePublicationResponses = 1;
+  s.state.failCardReads = true;
+  const rotated = await call(bob, TOOL_MAIL_MAILBOX_PUBLISH, {
+    mailbox_id: first.mailbox_id,
+    routes: [ORIGIN],
+    rotate_key: true,
+  });
+  assert.deepEqual(rotated.published, []);
+  assert.deepEqual(rotated.mailbox.pending_routes, [ORIGIN]);
+  assert.equal(rotated.mailbox.key_available, true);
+  const remote = s.relay.card(first.mailbox_id).envelope;
+  assert.equal(saved.mail.mailboxes[0].cards.at(-1).hash, remote.hash);
+  assert.ok(Object.hasOwn(keys.keys, remote.event.payload.public_key));
+  s.state.failCardReads = false;
+  const restored = LocalConnector.fromSnapshot(
+    AgentSigner.fromSeed(new Uint8Array(32).fill(8)),
+    saved,
+    { fetchImpl: s.fetchImpl, mailPersistence: persist },
+  );
+  restored.restoreMailKeys(keys);
+  const alice = s.connector(7);
+  await call(alice, TOOL_MAIL_SEND, {
+    to: rotated.mailbox.address,
+    text: "arrived under uncertain rotation",
+  });
+  const synced = await call(restored, TOOL_MAIL_SYNC, {});
+  assert.equal(
+    synced.received[0].parts[0].text,
+    "arrived under uncertain rotation",
+  );
+  assert.deepEqual(
+    (await call(restored, TOOL_MAIL_MAILBOXES_LIST, {})).mailboxes[0]
+      .pending_routes,
+    [],
+  );
+  const recovery = s.connector(8);
+  const inventory = await call(recovery, TOOL_MAIL_MAILBOXES_LIST, {
+    host: ORIGIN,
+    limit: 1,
+  });
+  assert.equal(inventory.mailboxes[0].card_hash, remote.hash);
+  assert.equal(inventory.mailboxes[0].key_available, false);
+  assert.equal(
+    (await call(recovery, TOOL_MAIL_MAILBOXES_LIST, {})).mailboxes.length,
+    1,
+  );
+  await assert.rejects(
+    recovery.callTool(TOOL_MAIL_MAILBOXES_LIST, { limit: 1 }),
+  );
+});
+
+test("a failed durable checkpoint prevents publication", async () => {
+  const s = services();
+  const bob = s.connector(8, {
+    mailPersistence: () => {
+      throw new Error("storage unavailable");
+    },
+  });
+  await assert.rejects(
+    bob.callTool(TOOL_MAIL_MAILBOX_PUBLISH, { routes: [ORIGIN] }),
+    /storage unavailable/,
+  );
+  assert.equal(s.relay.snapshot().mailboxes.length, 0);
+});
+
+test("nonce resync checkpoints and retains intermediate published cards", async () => {
+  const other = "https://second.example.test";
+  const a = new MailRelayStore(ORIGIN),
+    b = new MailRelayStore(other);
+  let rejectOnce = true;
+  let saved: any;
+  const attempts: string[] = [];
+  const c = new LocalConnector(
+    AgentSigner.fromSeed(new Uint8Array(32).fill(8)),
+    {
+      mailPersistence: (state) => {
+        saved = structuredClone(state);
+      },
+      fetchImpl: async (url, init) => {
+        const card = JSON.parse(String(init?.body)) as MailboxCard;
+        assert.ok(
+          saved.mail.mailboxes[0].cards.some(
+            (c: MailboxCard) => c.hash === card.hash,
+          ),
+        );
+        attempts.push(card.hash);
+        if (new URL(String(url)).origin === other && rejectOnce) {
+          rejectOnce = false;
+          return Response.json(
+            { error: { code: "nonce_not_greater", message: "resync" } },
+            {
+              status: 409,
+              headers: { "Max-Seen-Nonce": String(card.event.nonce + 1) },
+            },
+          );
+        }
+        return Response.json(
+          (new URL(String(url)).origin === other ? b : a).publish(card),
+        );
+      },
+    },
+  );
+  for (const host of [ORIGIN, other])
+    c.addHost({ host, allowed: true, features: [] });
+  const result = await call(c, TOOL_MAIL_MAILBOX_PUBLISH, {
+    routes: [ORIGIN, other],
+  });
+  assert.equal(result.published.length, 2);
+  assert.equal(new Set(attempts).size, 2);
+  assert.equal(c.snapshot().mail.mailboxes[0].cards.length, 2);
+  assert.equal(
+    Object.keys(c.snapshot().mail.pending_publications ?? {}).length,
+    0,
+  );
+});
+
+test("pruning a shorter closed card never reopens the previous local card", async () => {
+  const s = services(),
+    bob = s.connector(8);
+  await openMailbox(bob);
+  const snapshot = bob.snapshot(),
+    keys = bob.mailKeysSnapshot(),
+    original = snapshot.mail.mailboxes[0].cards[0];
+  const owner = AgentSigner.fromSeed(new Uint8Array(32).fill(8)),
+    now = Date.now();
+  const old = owner.signEvent({
+    ...original.event,
+    created_at: now - 60000,
+    nonce: 1,
+    payload: {
+      ...original.event.payload,
+      expires_at: now + 60000,
+      receive_until: now + 120000,
+    },
+  });
+  const closed = owner.signEvent({
+    ...old.event,
+    created_at: now - 10000,
+    nonce: 2,
+    payload: {
+      ...old.event.payload,
+      routes: [],
+      expires_at: now - 2000,
+      receive_until: now - 1000,
+    },
+  });
+  snapshot.mail.mailboxes[0].cards = [old, closed];
+  const restored = LocalConnector.fromSnapshot(owner, snapshot, {
+    fetchImpl: s.fetchImpl,
+  });
+  restored.restoreMailKeys(keys);
+  await call(restored, TOOL_MAIL_SYNC, {});
+  const current = (await call(restored, TOOL_MAIL_MAILBOXES_LIST, {}))
+    .mailboxes[0];
+  assert.equal(current.status, "closed");
+  assert.equal(current.card_hash, closed.hash);
+  assert.equal(restored.snapshot().mail.mailboxes[0].cards.length, 2);
+});
+
+test("a verified current card confirms publication after a lost response", async () => {
+  const s = services();
+  s.state.losePublicationResponses = 1;
+  const bob = s.connector(8);
+  const mailbox = await openMailbox(bob);
+  assert.deepEqual(mailbox.pending_routes, []);
+  assert.equal(mailbox.key_available, true);
+  assert.equal(
+    s.relay.card(mailbox.mailbox_id).envelope.hash,
+    mailbox.card_hash,
+  );
+});
+
+test("resigning a pending publication updates previously successful routes too", async () => {
+  const other = "https://retry.example.test",
+    a = new MailRelayStore(ORIGIN),
+    b = new MailRelayStore(other);
+  let phase = 0;
+  const c = new LocalConnector(
+    AgentSigner.fromSeed(new Uint8Array(32).fill(8)),
+    {
+      fetchImpl: async (url, init) => {
+        const u = new URL(String(url)),
+          relay = u.origin === ORIGIN ? a : b;
+        if (init?.method === "POST") {
+          const card = JSON.parse(String(init.body)) as MailboxCard;
+          if (u.origin === other && phase === 0)
+            return Response.json(
+              { error: { code: "service_unavailable", message: "offline" } },
+              { status: 503 },
+            );
+          if (u.origin === other && phase === 1) {
+            phase = 2;
+            return Response.json(
+              { error: { code: "nonce_not_greater", message: "resync" } },
+              {
+                status: 409,
+                headers: { "Max-Seen-Nonce": String(card.event.nonce + 1) },
+              },
+            );
+          }
+          return Response.json(relay.publish(card));
+        }
+        if (u.pathname.endsWith("/card"))
+          return Response.json(
+            { error: { code: "mailbox_unavailable", message: "unknown" } },
+            { status: 404 },
+          );
+        return Response.json({ result: [] });
+      },
+    },
+  );
+  for (const host of [ORIGIN, other]) c.addHost({ host, allowed: true });
+  const initial = await call(c, TOOL_MAIL_MAILBOX_PUBLISH, {
+    routes: [ORIGIN, other],
+  });
+  assert.deepEqual(initial.mailbox.pending_routes, [other]);
+  phase = 1;
+  await call(c, TOOL_MAIL_SYNC, {});
+  const id = initial.mailbox.mailbox_id;
+  assert.equal(a.card(id).envelope.hash, b.card(id).envelope.hash);
+  assert.notEqual(a.card(id).envelope.hash, initial.mailbox.card_hash);
+  assert.equal(
+    Object.keys(c.snapshot().mail.pending_publications ?? {}).length,
+    0,
+  );
 });

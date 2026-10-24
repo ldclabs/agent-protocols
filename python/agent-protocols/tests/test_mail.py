@@ -311,3 +311,43 @@ def test_logical_id_conflict_is_not_an_overwrite_and_id_is_scoped_to_sender():
     other=sdk_encrypt_mail(same_id_other_sender,ENVS['card'],RECIPIENT,1000,now_ms=NOW)
     assert inbox.accept(other,now_ms=NOW)['kind']=='accepted'
     assert len(inbox.snapshot()['accepted'])==2
+
+
+def test_shorter_card_retains_pending_packets_and_deleted_packet_tombstones():
+    case = V['lifecycle']['relay_retention']
+    for delete_first in [False, True]:
+        relay = MailRelayStore(ORIGIN)
+        relay.publish(ENVS[case['initial_card']], now_ms=NOW)
+        original = packet(case['packet'])
+        delivery = relay.deliver(MAILBOX, original, now_ms=NOW)
+        if delete_first: relay.delete(MAILBOX, delivery['packet_id'], TOKEN, now_ms=NOW)
+        relay.publish(ENVS[case['replacement_card']], now_ms=NOW)
+        relay = MailRelayStore.from_snapshot(relay.snapshot())
+        relay.prune(now_ms=case['prune_at'])
+        assert relay.card(MAILBOX)['envelope'] == ENVS[case['replacement_card']]
+        assert relay.deliver(MAILBOX, original, now_ms=case['prune_at']) == delivery
+        rows = relay.list(MAILBOX, token(now=case['prune_at']), now_ms=case['prune_at'])['result']
+        assert len(rows) == (0 if delete_first else 1)
+        relay.prune(now_ms=case['expires_at'])
+        assert code_of(lambda: relay.card(MAILBOX)) == 'mailbox_unavailable'
+
+
+def test_owner_mailbox_inventory_is_private_paginated_and_includes_closed_cards():
+    case = V['lifecycle']['mailbox_inventory']
+    relay = MailRelayStore(ORIGIN)
+    for name in case['cards']: relay.publish(ENVS[name], now_ms=NOW)
+    # Separate mailbox updates still use the owner's service-wide nonce sequence.
+    relay.publish(signed_change(ENVS[case['closed_card']], nonce=122), now_ms=NOW)
+    first = relay.mailboxes(TOKEN, now_ms=NOW, limit=1)
+    first_id = first['result'][0]['envelope']['event']['payload']['mailbox_id']
+    relay = MailRelayStore.from_snapshot(relay.snapshot())
+    second = relay.mailboxes(TOKEN, now_ms=NOW, limit=1, cursor=first['next_cursor'])
+    assert [first_id, second['result'][0]['envelope']['event']['payload']['mailbox_id']] == case['owner_mailbox_ids']
+    assert 'next_cursor' not in second
+    foreign = relay.mailboxes(token(SENDER), now_ms=NOW)
+    assert len(foreign['result']) == 1 and foreign['result'][0]['envelope']['event']['actor'] == SENDER.agent_id()
+    assert code_of(lambda: relay.mailboxes('bad', now_ms=NOW, limit=0)) == 'invalid_token'
+    assert code_of(lambda: relay.mailboxes(TOKEN, now_ms=NOW, cursor='bad')) == 'invalid_request'
+    assert code_of(lambda: relay.mailboxes(TOKEN, now_ms=NOW, limit=0)) == 'invalid_request'
+    later = NOW + 60000
+    assert len(relay.mailboxes(token(now=later), now_ms=later)['result']) == 2

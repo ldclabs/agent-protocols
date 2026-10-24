@@ -293,6 +293,12 @@ export interface JoinRequestReviewInput {
 }
 
 /** Creates a mailbox without `mailbox_id`; otherwise replaces that mailbox's card. */
+export interface MailMailboxesListInput {
+  host?: string;
+  limit?: number;
+  cursor?: string;
+}
+
 export interface MailMailboxPublishInput {
   mailbox_id?: string;
   routes: string[];

@@ -197,6 +197,8 @@ impl LocalConnector {
                 "supply exactly one of address, card_url or profile_service".into(),
             ));
         }
+        let profile_lookup = input.profile_service.is_some();
+        let mut errors = Vec::new();
         let mut contacts: Vec<(String, Vec<String>)> = Vec::new();
         let mut urls = Vec::new();
         if let Some(address) = input.address {
@@ -235,34 +237,41 @@ impl LocalConnector {
             }
         }
         for url in urls {
-            let parsed = reqwest::Url::parse(&url)
-                .map_err(|_| SdkError::InvalidPayload("invalid mailbox card URL".into()))?;
-            let segments: Vec<_> = parsed.path().split('/').collect();
-            if parsed.query().is_some()
-                || parsed.fragment().is_some()
-                || segments.len() != 5
-                || segments[1] != "v1"
-                || segments[2] != "mailboxes"
-                || segments[4] != "card"
-            {
-                return Err(SdkError::InvalidPayload("invalid mailbox card URL".into()));
+            let parsed = (|| -> Result<(String, Vec<String>)> {
+                let parsed = reqwest::Url::parse(&url)
+                    .map_err(|_| SdkError::InvalidPayload("invalid mailbox card URL".into()))?;
+                let segments: Vec<_> = parsed.path().split('/').collect();
+                if parsed.query().is_some()
+                    || parsed.fragment().is_some()
+                    || segments.len() != 5
+                    || segments[1] != "v1"
+                    || segments[2] != "mailboxes"
+                    || segments[4] != "card"
+                {
+                    return Err(SdkError::InvalidPayload("invalid mailbox card URL".into()));
+                }
+                let origin = service_origin(&url)?;
+                validate_origin(&origin)?;
+                format_mail_address(&input.agent_id, segments[3], std::slice::from_ref(&origin))?;
+                Ok((segments[3].to_owned(), vec![origin]))
+            })();
+            match parsed {
+                Ok(contact) => contacts.push(contact),
+                Err(error) if profile_lookup => {
+                    errors.push(json!({"url":url,"code":"invalid_url","message":error.to_string()}))
+                }
+                Err(error) => return Err(error),
             }
-            let origin = service_origin(&url)?;
-            validate_origin(&origin)?;
-            // Formatting validates the id16 and canonical routes.
-            format_mail_address(&input.agent_id, segments[3], std::slice::from_ref(&origin))?;
-            contacts.push((segments[3].to_owned(), vec![origin]));
         }
-        let mut mailboxes = Vec::new();
-        let mut errors = Vec::new();
-        let mut seen = BTreeSet::new();
+        let mut ids = BTreeSet::new();
         for (id, routes) in contacts {
-            let mut found = None;
+            ids.insert(id.clone());
             for route in routes {
                 let result = async {
                     self.require_allowed_host(&route)?;
-                    let client = MailClient::with_client(&route, self.http.clone())?;
-                    let record = client.card(&id, &input.agent_id).await?;
+                    let record = MailClient::with_client(&route, self.http.clone())?
+                        .card(&id, &input.agent_id)
+                        .await?;
                     self.state.mail.pins.observe_historical(
                         &serde_json::to_value(record.envelope)?,
                         &input.agent_id,
@@ -270,22 +279,22 @@ impl LocalConnector {
                     )
                 }
                 .await;
-                match result {Ok(card)=>{found=Some(card);break;},Err(error)=>errors.push(json!({"route":route,"mailbox_id":id,"code":error.code().unwrap_or("network_error"),"message":error.to_string()}))}
-            }
-            if found.is_none() {
-                found = self.state.mail.pins.get(&input.agent_id, &id).cloned();
-            }
-            if let Some(card) = found {
-                if seen.insert(card.hash.clone()) {
-                    let usable = check_card_usable(&card, &input.agent_id, unix_ms()).is_ok()
-                        && card
-                            .event
-                            .payload
-                            .routes
-                            .iter()
-                            .any(|r| self.require_allowed_host(r).is_ok());
-                    mailboxes.push(json!({"address":format_mail_address(&input.agent_id,&id,&card.event.payload.routes)?,"card":card,"usable":usable}));
+                if let Err(error) = result {
+                    errors.push(json!({"route":route,"mailbox_id":id,"code":error.code().unwrap_or("network_error"),"message":error.to_string()}));
                 }
+            }
+        }
+        let mut mailboxes = Vec::new();
+        for id in ids {
+            if let Some(card) = self.state.mail.pins.get(&input.agent_id, &id) {
+                let usable = check_card_usable(card, &input.agent_id, unix_ms()).is_ok()
+                    && card
+                        .event
+                        .payload
+                        .routes
+                        .iter()
+                        .any(|r| self.require_allowed_host(r).is_ok());
+                mailboxes.push(json!({"address":format_mail_address(&input.agent_id,&id,&card.event.payload.routes)?,"card":card,"usable":usable}));
             }
         }
         Ok(json!({"agent_id":input.agent_id,"mailboxes":mailboxes,"errors":errors}))

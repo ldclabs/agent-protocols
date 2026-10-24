@@ -87,6 +87,7 @@ export interface MailDiscovery {
   [key: string]: unknown;
 }
 export type MailCardRecord = AcceptedRecord<MailboxCardPayload>;
+export type MailboxList = ListResponse<MailCardRecord>;
 export type MailPacketList = ListResponse<MailPacketRecord> & {
   [key: string]: unknown;
 };
@@ -986,6 +987,35 @@ export function validateMailCardRecord(
     "card record mismatch",
   );
 }
+export function validateMailMailboxList(
+  value: unknown,
+  owner: string,
+  limit = 100,
+): asserts value is MailboxList {
+  try {
+    validateMailSchema(value, "mailboxList");
+  } catch {
+    throw protocolError("invalid_response", "invalid mailbox list shape");
+  }
+  const page = value as MailboxList;
+  requireMail(
+    page.result.length <= limit &&
+      (!page.next_cursor || page.result.length > 0),
+    "invalid_response",
+    "invalid page size",
+  );
+  let previous = "";
+  for (const record of page.result) {
+    validateMailCardRecord(record, owner);
+    const id = record.envelope.event.payload.mailbox_id;
+    requireMail(
+      id > previous,
+      "invalid_response",
+      "unordered or repeated mailboxes",
+    );
+    previous = id;
+  }
+}
 export function validateMailDeliveryResult(
   value: unknown,
   packet?: MailPacket,
@@ -1295,6 +1325,33 @@ export class MailRelayStore {
     if (blocked) b.blockedSenders.add(sender);
     else b.blockedSenders.delete(sender);
   }
+  /** Current cards at this relay, including closed/expired mailboxes. Owner-only. */
+  mailboxes(
+    jwt: string,
+    options: { limit?: number; cursor?: string; now?: number } = {},
+  ): MailboxList {
+    const now = options.now ?? this.clock();
+    safeTime(now);
+    const owner = ownerClaims(jwt, this.origin, now).iss;
+    const limit = options.limit ?? 100;
+    requireMail(
+      Number.isSafeInteger(limit) && limit >= 1 && limit <= 1000,
+      "invalid_request",
+      "invalid limit",
+    );
+    if (options.cursor !== undefined) pathId(options.cursor, 16);
+    const rows = [...this.boxes.entries()]
+      .filter(
+        ([id, box]) =>
+          box.current.envelope.event.actor === owner &&
+          (options.cursor === undefined || id > options.cursor),
+      )
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const result = clone(rows.slice(0, limit).map(([, box]) => box.current));
+    return rows.length > limit
+      ? { result, next_cursor: rows[limit - 1][0] }
+      : { result };
+  }
   private ownerBox(mailboxId: string, jwt: string, now: number): RelayMailbox {
     pathId(mailboxId, 16);
     const claims = ownerClaims(jwt, this.origin, now);
@@ -1355,14 +1412,18 @@ export class MailRelayStore {
       b.bytes -= stored.size;
     }
   }
-  /** Drop expired packets and tombstones, then forget mailboxes whose current card's `receive_until` passed. */
+  /** Drop expired packets and tombstones, then forget mailboxes only after the current card and all packet/tombstone retention ends. */
   prune(now = this.clock()): void {
     safeTime(now);
     for (const [mailboxId, b] of this.boxes) {
       this.dropExpired(b, now);
       for (const [id, t] of b.tombstones)
         if (now >= t.expires_at) b.tombstones.delete(id);
-      if (now >= b.current.envelope.event.payload.receive_until)
+      if (
+        now >= b.current.envelope.event.payload.receive_until &&
+        b.packets.size === 0 &&
+        b.tombstones.size === 0
+      )
         this.boxes.delete(mailboxId);
     }
   }

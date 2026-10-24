@@ -261,6 +261,54 @@ impl MailClient {
         }
         Ok(result)
     }
+    pub async fn mailboxes(
+        &self,
+        owner: &AgentId,
+        jwt: &str,
+        now: i64,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<ListResponse<AcceptedRecord<MailboxCardPayload>>> {
+        verify_owner_jwt(jwt, owner, &self.origin, now)?;
+        if !(1..=1000).contains(&limit) || cursor == Some("") {
+            return Err(fail("invalid_request", "invalid pagination"));
+        }
+        let mut url = url::Url::parse(&format!("{}/v1/me/mailboxes", self.origin))
+            .map_err(|_| fail("invalid_request", "invalid URL"))?;
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        if let Some(cursor) = cursor {
+            url.query_pairs_mut().append_pair("cursor", cursor);
+        }
+        let value = self.send(self.inner.get(url).bearer_auth(jwt), 200).await?;
+        validate_mail_schema(&value, "mailboxList")
+            .map_err(|_| fail("invalid_response", "invalid mailbox list shape"))?;
+        let page: ListResponse<AcceptedRecord<MailboxCardPayload>> =
+            serde_json::from_value(normalized(&value))?;
+        if page.result.len() > limit || (page.result.is_empty() && page.next_cursor.is_some()) {
+            return Err(fail("invalid_response", "invalid page size"));
+        }
+        let mut previous = "";
+        for record in &page.result {
+            validate_card(&serde_json::to_value(&record.envelope)?)?;
+            let id = record.envelope.event.payload.mailbox_id.as_str();
+            if &record.envelope.event.actor != owner {
+                return Err(fail("invalid_actor", "card owner mismatch"));
+            }
+            if id <= previous {
+                return Err(fail("invalid_response", "unordered or repeated mailboxes"));
+            }
+            previous = id;
+        }
+        let mut pins = self
+            .cards
+            .lock()
+            .map_err(|_| fail("invalid_request", "card cache lock poisoned"))?;
+        for record in &page.result {
+            pins.observe_historical(&serde_json::to_value(&record.envelope)?, owner, now)?;
+        }
+        Ok(page)
+    }
     pub async fn list(
         &self,
         mailbox: &str,

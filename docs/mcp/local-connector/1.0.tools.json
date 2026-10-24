@@ -4316,17 +4316,30 @@
   },
   {
     "name": "agent_protocols_mail_mailboxes_list",
-    "description": "List the active local agent's mailboxes and their addresses from local state.",
+    "description": "List local mailboxes; with host, authenticate and recover one page of this agent's mailbox cards from that allowed relay. This does not recover encryption keys.",
     "annotations": {
-      "readOnlyHint": true,
+      "readOnlyHint": false,
       "idempotentHint": true,
       "destructiveHint": false,
-      "openWorldHint": false
+      "openWorldHint": true
     },
     "inputSchema": {
       "type": "object",
       "required": [],
-      "properties": {},
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
       "additionalProperties": false
     },
     "outputSchema": {
@@ -4373,6 +4386,15 @@
               },
               "unread_count": {
                 "type": "integer"
+              },
+              "key_available": {
+                "type": "boolean"
+              },
+              "pending_routes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [
@@ -4385,9 +4407,14 @@
               "receive_until",
               "max_packet_bytes",
               "status",
-              "unread_count"
+              "unread_count",
+              "key_available",
+              "pending_routes"
             ]
           }
+        },
+        "next_cursor": {
+          "type": "string"
         }
       },
       "required": [
@@ -4397,7 +4424,7 @@
   },
   {
     "name": "agent_protocols_mail_mailbox_publish",
-    "description": "Create a mailbox, or sign and publish a replacement card to change its routes, renew it, rotate its key, or close it.",
+    "description": "Create a mailbox, or sign and publish a replacement card to change its routes, renew it, rotate its key, or close it. Publication attempts and keys are retained before network writes. Inspect published, failed and mailbox.pending_routes; an empty published list can mean an uncertain outcome. mail_sync retries pending routes.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -4487,6 +4514,15 @@
             },
             "unread_count": {
               "type": "integer"
+            },
+            "key_available": {
+              "type": "boolean"
+            },
+            "pending_routes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [
@@ -4499,7 +4535,9 @@
             "receive_until",
             "max_packet_bytes",
             "status",
-            "unread_count"
+            "unread_count",
+            "key_available",
+            "pending_routes"
           ]
         },
         "published": {
@@ -6537,7 +6575,7 @@
   },
   {
     "name": "agent_protocols_mail_resolve",
-    "description": "Read, verify and pin mailbox cards for an expected Agent ID. Supply an address, a card_url, or a profile_service to discover its agent-mail endpoints. Returns all candidates including closed/expired cards; never sends mail.",
+    "description": "Read, verify and pin mailbox cards for an expected Agent ID. Supply an address, a card_url, or a profile_service to discover its agent-mail endpoints. Returns all candidates including closed/expired cards; never sends mail. Results contain one final pinned card per mailbox, not a complete inventory; malformed Profile endpoints and individual route failures are isolated.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
