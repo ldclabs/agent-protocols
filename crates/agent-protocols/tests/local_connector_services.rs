@@ -1933,6 +1933,85 @@ fn resigning_pending_publication_updates_previously_successful_routes() {
 }
 
 #[test]
+fn inventory_keeps_lagging_relay_card_and_disallowed_routes_are_not_pending() {
+    let a = Services::start();
+    let b = Services::start();
+    run(async {
+        let connector = || {
+            let mut c = a.connector(8);
+            c.add_host(allowed(&b.origin));
+            c
+        };
+        let mut owner = connector();
+        let first = call(
+            &mut owner,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"routes":[a.origin,b.origin]}),
+        )
+        .await;
+        let id = first["mailbox"]["mailbox_id"].clone();
+        b.fixtures.lock().unwrap().insert(
+            "/v1/mailboxes".into(),
+            (
+                503,
+                json!({"error":{"code":"service_unavailable","message":"offline"}}).to_string(),
+            ),
+        );
+        let second = call(
+            &mut owner,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"mailbox_id":id,"routes":[a.origin,b.origin]}),
+        )
+        .await;
+        assert_eq!(second["mailbox"]["pending_routes"], json!([b.origin]));
+        b.fixtures.lock().unwrap().remove("/v1/mailboxes");
+
+        // The first relay pins the newer card; the lagging one still serves
+        // the older card, which recovery keeps as history.
+        let mut recovery = connector();
+        call(
+            &mut recovery,
+            TOOL_MAIL_MAILBOXES_LIST,
+            json!({"host":a.origin}),
+        )
+        .await;
+        let lagging = call(
+            &mut recovery,
+            TOOL_MAIL_MAILBOXES_LIST,
+            json!({"host":b.origin}),
+        )
+        .await;
+        assert_eq!(
+            lagging["mailboxes"][0]["card_hash"],
+            second["mailbox"]["card_hash"]
+        );
+        assert_eq!(
+            recovery.snapshot().unwrap()["mail"]["mailboxes"][0]["cards"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // A route the operator stops allowing is reported once, not kept pending.
+        owner.add_host(AgentProtocolsHost {
+            allowed: false,
+            ..allowed(&b.origin)
+        });
+        let third = call(
+            &mut owner,
+            TOOL_MAIL_MAILBOX_PUBLISH,
+            json!({"mailbox_id":id,"routes":[a.origin]}),
+        )
+        .await;
+        assert_eq!(third["published"], json!([a.origin]));
+        assert_eq!(third["failed"][0]["route"], json!(b.origin));
+        assert_eq!(third["failed"][0]["code"], "permission_denied");
+        assert_eq!(third["mailbox"]["pending_routes"], json!([]));
+    });
+}
+
+#[test]
 fn verified_profile_pins_survive_connector_restart() {
     let services = Services::start();
     run(async {

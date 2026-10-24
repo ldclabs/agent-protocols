@@ -967,3 +967,77 @@ test("resigning a pending publication updates previously successful routes too",
     0,
   );
 });
+
+test("inventory keeps a lagging relay's older card; disallowed routes are not pending", async () => {
+  const other = "https://lagging.example.test",
+    a = new MailRelayStore(ORIGIN),
+    b = new MailRelayStore(other);
+  let offline = false;
+  const fetchImpl = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    const u = new URL(String(input)),
+      relay = u.origin === ORIGIN ? a : b;
+    if (init?.method === "POST") {
+      if (u.origin === other && offline)
+        return Response.json(
+          { error: { code: "service_unavailable", message: "offline" } },
+          { status: 503 },
+        );
+      return Response.json(relay.publish(JSON.parse(String(init.body))));
+    }
+    if (u.pathname === "/v1/me/mailboxes") {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      return Response.json(
+        relay.mailboxes(headers.authorization.replace(/^Bearer /, "")),
+      );
+    }
+    return Response.json(
+      { error: { code: "mailbox_unavailable", message: "unknown" } },
+      { status: 404 },
+    );
+  }) as typeof fetch;
+  const connector = () => {
+    const c = new LocalConnector(
+      AgentSigner.fromSeed(new Uint8Array(32).fill(8)),
+      { fetchImpl },
+    );
+    for (const host of [ORIGIN, other]) c.addHost({ host, allowed: true });
+    return c;
+  };
+  const owner = connector();
+  const first = await call(owner, TOOL_MAIL_MAILBOX_PUBLISH, {
+    routes: [ORIGIN, other],
+  });
+  const id = first.mailbox.mailbox_id;
+  offline = true;
+  const second = await call(owner, TOOL_MAIL_MAILBOX_PUBLISH, {
+    mailbox_id: id,
+    routes: [ORIGIN, other],
+  });
+  assert.deepEqual(second.mailbox.pending_routes, [other]);
+
+  // The first relay pins the newer card; the lagging one still serves the
+  // older card, which recovery keeps as history.
+  const recovery = connector();
+  await call(recovery, TOOL_MAIL_MAILBOXES_LIST, { host: ORIGIN });
+  const lagging = await call(recovery, TOOL_MAIL_MAILBOXES_LIST, {
+    host: other,
+  });
+  assert.equal(lagging.mailboxes[0].card_hash, second.mailbox.card_hash);
+  assert.equal(recovery.snapshot().mail.mailboxes[0].cards.length, 2);
+
+  // A route the operator stops allowing is reported once, not kept pending.
+  owner.addHost({ host: other, allowed: false });
+  const third = await call(owner, TOOL_MAIL_MAILBOX_PUBLISH, {
+    mailbox_id: id,
+    routes: [ORIGIN],
+  });
+  assert.deepEqual(third.published, [ORIGIN]);
+  assert.deepEqual(
+    third.failed.map((e: Json) => [e.route, e.code]),
+    [[other, "permission_denied"]],
+  );
+  assert.deepEqual(third.mailbox.pending_routes, []);
+});

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 from urllib.parse import urlparse
@@ -189,7 +190,6 @@ class ProfileCache:
             for envelope in snapshot['profiles']: self.observe(envelope, envelope['event']['actor'])
 
     def observe(self, envelope: Envelope, owner: AgentId) -> Envelope:
-        import copy
         validate_profile_update(envelope)
         if envelope['event']['actor'] != owner:
             raise AgentProtocolError('invalid_actor', 'profile response owner mismatch')
@@ -200,9 +200,7 @@ class ProfileCache:
         return copy.deepcopy(envelope)
 
     def get(self, owner: AgentId) -> Envelope | None:
-        import copy
         return copy.deepcopy(self._profiles.get(owner))
 
     def snapshot(self) -> dict[str, Any]:
-        import copy
         return {'version':1, 'profiles':[copy.deepcopy(value) for _, value in sorted(self._profiles.items())]}

@@ -1,7 +1,3 @@
-import { AgentProtocolError } from "../errors.js";
-import { parseStrictJson } from "../identity.js";
-import { ProfileCache } from "../profile.js";
-import { readProtocolJson } from "../http-client.js";
 // The stateful local connector engine. `LocalConnector` is transport-neutral:
 // it signs on the active agent's behalf, calls Agent Protocols services over
 // HTTP, materializes local room state by projecting accepted records, derives
@@ -53,6 +49,7 @@ import {
   createEvent,
   createRequestBinding,
   createRequestJwtClaims,
+  parseStrictJson,
   publicKeyBytes,
   serviceOrigin,
   unixTimeMillis,
@@ -67,6 +64,7 @@ import {
   HttpResponseError,
   KnowledgeClient,
   ProfileClient,
+  readProtocolJson,
 } from "../http-client.js";
 import {
   KNOWLEDGE_EVENT_TYPES,
@@ -116,6 +114,7 @@ import {
 } from "../delegation.js";
 import {
   AgentProfile,
+  ProfileCache,
   ProfileUpdatePayload,
   materializeProfile,
   profileUpdateEvent,
@@ -231,7 +230,7 @@ import {
   validateNextRecord,
   validateRecordBasePrecondition,
 } from "./projection.js";
-import { protocolError } from "../errors.js";
+import { AgentProtocolError, protocolError } from "../errors.js";
 import {
   HeldDraftRequest,
   InboxEntry,
@@ -3013,8 +3012,16 @@ export class LocalConnector {
       { limit: input.limit, cursor: input.cursor },
     );
     for (const record of page.result) {
-      this.state.mail.pins.observe(record.envelope, this.agentId(), now, false);
-      this.retainOwnCard(record.envelope);
+      // A lagging relay may still serve an older card: retain it as history
+      // without moving the pin back (Agent Mail Section 3.2).
+      const card = record.envelope;
+      const pin = this.state.mail.pins.get(
+        this.agentId(),
+        card.event.payload.mailbox_id,
+      );
+      if (!pin || pin.event.nonce < card.event.nonce)
+        this.state.mail.pins.observe(card, this.agentId(), now, false);
+      this.retainOwnCard(card);
     }
     await this.persistMail();
     return {
@@ -3112,10 +3119,14 @@ export class LocalConnector {
         card = this.signMailCard(card.event.payload);
         continue;
       }
-      if (failed.length)
+      // Routes the operator no longer allows are reported, not retried.
+      const pending = failed
+        .map((e) => e.route)
+        .filter((route) => this.isAllowedHost(route));
+      if (pending.length)
         this.state.mail.pendingPublications.set(id, {
           card_hash: card.hash,
-          routes: failed.map((e) => e.route),
+          routes: pending,
         });
       else this.state.mail.pendingPublications.delete(id);
       await this.persistMail();

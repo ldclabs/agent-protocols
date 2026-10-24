@@ -582,8 +582,7 @@ export function validateControllerEnumeration(
   }
 }
 
-/** Checks audience/status/time only, after cryptographic and historical verification.
- * The application still authenticates the subject and enforces scopes and constraints. */
+/** Status freshness bounds (Section 8): maximum age and future skew of `checked_at`. */
 export const MAX_STATUS_AGE_MS = 300000;
 export const STATUS_CLOCK_SKEW_MS = 60000;
 
@@ -602,6 +601,8 @@ function validateStatusFreshness(
   if (now - credential.checked_at > MAX_STATUS_AGE_MS) fail("status is stale");
 }
 
+/** Checks audience/status/time only, after cryptographic and historical verification.
+ * The application still authenticates the subject and enforces scopes and constraints. */
 export function validateDelegationUse(
   credential: DelegationCredential,
   audience: string,

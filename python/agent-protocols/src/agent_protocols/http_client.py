@@ -27,6 +27,7 @@ from .knowledge import (
     validate_knowledge_id, validate_knowledge_query, validate_knowledge_query_response,
     validate_knowledge_record, validate_knowledge_search_request, validate_knowledge_search_response,
 )
+from .profile import ProfileCache
 
 
 class HttpResponseError(Exception):
@@ -91,9 +92,6 @@ def _read_bounded_json(response: Any, limit: int, deadline: float) -> Any:
 def _query(path: str, params: dict[str, Any]) -> str:
     query = urlencode({key: value for key, value in params.items() if value is not None}, quote_via=quote)
     return f"{path}?{query}" if query else path
-
-
-from .profile import ProfileCache
 
 
 class ProfileClient:

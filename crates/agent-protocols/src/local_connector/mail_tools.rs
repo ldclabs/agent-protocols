@@ -55,13 +55,25 @@ impl LocalConnector {
                     input.cursor.as_deref(),
                 )
                 .await?;
+            let owner = self.agent_id();
             for record in &page.result {
-                self.state.mail.pins.observe_historical(
-                    &serde_json::to_value(&record.envelope)?,
-                    &self.agent_id(),
-                    now,
-                )?;
-                self.retain_own_card(record.envelope.clone())?;
+                // A lagging relay may still serve an older card: retain it as
+                // history without moving the pin back (Agent Mail Section 3.2).
+                let card = &record.envelope;
+                if self
+                    .state
+                    .mail
+                    .pins
+                    .get(&owner, &card.event.payload.mailbox_id)
+                    .is_none_or(|pin| pin.event.nonce < card.event.nonce)
+                {
+                    self.state.mail.pins.observe_historical(
+                        &serde_json::to_value(card)?,
+                        &owner,
+                        now,
+                    )?;
+                }
+                self.retain_own_card(card.clone())?;
             }
             self.persist_mail()?;
             let mailboxes = page
@@ -192,14 +204,20 @@ impl LocalConnector {
                 card = self.sign_mail_card(card.event.payload)?;
                 continue;
             }
-            if failed.is_empty() {
+            // Routes the operator no longer allows are reported, not retried.
+            let pending: Vec<String> = failed
+                .iter()
+                .map(|e| e.route.clone())
+                .filter(|route| self.require_allowed_host(route).is_ok())
+                .collect();
+            if pending.is_empty() {
                 self.state.mail.pending_publications.remove(&id);
             } else {
                 self.state.mail.pending_publications.insert(
                     id.clone(),
                     PendingMailPublication {
                         card_hash: card.hash.clone(),
-                        routes: failed.iter().map(|e| e.route.clone()).collect(),
+                        routes: pending,
                     },
                 );
             }
