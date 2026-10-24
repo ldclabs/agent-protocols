@@ -784,7 +784,7 @@ impl NonceStore for MemoryNonceStore {
         }
 
         if let Some(record) = self.records.get(actor) {
-            if record.expires_at > now_ms && nonce <= record.max_nonce {
+            if record.expires_at >= now_ms && nonce <= record.max_nonce {
                 return Err(SdkError::NonceNotGreater {
                     max_nonce: record.max_nonce,
                 });
@@ -802,7 +802,7 @@ impl NonceStore for MemoryNonceStore {
     fn max_nonce(&self, actor: &AgentId, now_ms: i64) -> Option<u64> {
         self.records
             .get(actor)
-            .filter(|record| record.expires_at > now_ms)
+            .filter(|record| record.expires_at >= now_ms)
             .map(|record| record.max_nonce)
     }
 }
@@ -840,7 +840,8 @@ impl ClientNonceManager {
     }
 
     /// Clock-derived nonce, `max(last + 1, created_at)` (Section 6.2): it
-    /// stays monotonic across restarts, restores, and devices sharing a key.
+    /// reduces dependence on a counter; persistence and conflict resynchronization
+    /// are still needed across restarts, clock rollback, and devices sharing a key.
     pub fn next_nonce_at(&mut self, created_at: i64) -> Result<u64> {
         let clock = u64::try_from(created_at).unwrap_or(0);
         if clock > self.next_nonce {
@@ -849,12 +850,14 @@ impl ClientNonceManager {
         self.next_nonce()
     }
 
-    /// Applies a `Max-Seen-Nonce` value. A value more than [`MAX_NONCE_JUMP`]
+    /// Applies a `Max-Seen-Nonce` value. A proposed next nonce more than [`MAX_NONCE_JUMP`]
     /// beyond `max(next_nonce, now_ms)` is rejected rather than applied.
     pub fn observe_max_nonce(&mut self, max_nonce: u64, now_ms: i64) -> Result<()> {
         validate_nonce(max_nonce)?;
         let floor = self.next_nonce.max(u64::try_from(now_ms).unwrap_or(0));
-        if max_nonce > floor.saturating_add(MAX_NONCE_JUMP) {
+        if max_nonce.saturating_add(1) > floor.saturating_add(MAX_NONCE_JUMP)
+            || max_nonce >= MAX_SAFE_NONCE
+        {
             return Err(SdkError::InvalidNonce(format!(
                 "Max-Seen-Nonce {max_nonce} jumps too far beyond the local sequence"
             )));

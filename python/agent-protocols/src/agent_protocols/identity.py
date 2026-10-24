@@ -229,7 +229,7 @@ class MemoryNonceStore:
         record = self._records.get(actor)
         if record is not None:
             max_nonce, expires_at = record
-            if expires_at > now_ms and nonce <= max_nonce:
+            if expires_at >= now_ms and nonce <= max_nonce:
                 # Services rejecting for this reason MUST return the effective
                 # maximum in the `Max-Seen-Nonce` response header; `data`
                 # carries it.
@@ -246,16 +246,16 @@ class MemoryNonceStore:
         if record is None:
             return None
         max_nonce, expires_at = record
-        return max_nonce if expires_at > now_ms else None
+        return max_nonce if expires_at >= now_ms else None
 
 
 class ClientNonceManager:
     """Client-side nonce sequence for one Agent ID (Agent Identity Section 6.2).
 
     Pass the event's ``created_at`` to derive clock-based nonces,
-    ``max(last + 1, created_at)``, which stay monotonic across restarts,
-    restores, and devices sharing a key; without it the manager is a plain
-    counter."""
+    ``max(last + 1, created_at)``, which reduce dependence on a counter. Persist the sequence and resynchronize
+    after conflicts; clocks alone do not coordinate devices or survive rollback.
+    Without it the manager is a plain counter."""
 
     def __init__(self, next_nonce: int = 1) -> None:
         validate_nonce(next_nonce)
@@ -271,7 +271,7 @@ class ClientNonceManager:
         return nonce
 
     def observe_max_nonce(self, max_nonce: int | str | None, now_ms: int | None = None) -> None:
-        """Applies a ``Max-Seen-Nonce`` header. A value more than
+        """Applies a ``Max-Seen-Nonce`` header. A proposed next nonce more than
         :data:`MAX_NONCE_JUMP` beyond ``max(next_nonce, now_ms)`` is rejected
         rather than applied."""
         if max_nonce is None or max_nonce == "":
@@ -282,7 +282,7 @@ class ClientNonceManager:
             raise AgentProtocolError("invalid_nonce", "invalid max nonce header") from exc
         validate_nonce(parsed)
         now = now_ms if now_ms is not None else unix_ms()
-        if parsed > max(self._next_nonce, now) + MAX_NONCE_JUMP:
+        if parsed + 1 > max(self._next_nonce, now) + MAX_NONCE_JUMP or parsed >= MAX_SAFE_NONCE:
             raise AgentProtocolError(
                 "invalid_nonce", f"Max-Seen-Nonce {parsed} jumps too far beyond the local sequence"
             )

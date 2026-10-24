@@ -77,7 +77,9 @@ impl LocalConnector {
                     protocol.split('/').next().unwrap_or_default()
                 );
                 let result: Result<Value> = async {
-                    let doc: Value = self.connector_get(&url, None).await?.json().await?;
+                    let doc: Value =
+                        crate::http_client::read_json(self.connector_get(&url, None).await?)
+                            .await?;
                     if doc["protocol"] != *protocol || doc["service"] != origin {
                         return Err(SdkError::InvalidPayload(
                             "discovery protocol/service mismatch".into(),
@@ -101,26 +103,23 @@ impl LocalConnector {
         Ok(json!({"services":services,"errors":errors}))
     }
 
-    pub(super) async fn profiles_get(&self, input: ProfilesGetInput) -> Result<Value> {
+    pub(super) async fn profiles_get(&mut self, input: ProfilesGetInput) -> Result<Value> {
         let client = self.verified_profile_client(&input.profile_service).await?;
         let mut profiles = Vec::new();
         let mut missing = Vec::new();
         for id in input.ids.unwrap_or_else(|| vec![self.agent_id()]) {
             id.public_key_bytes()?;
-            match client.profile_events(&id, Some(1)).await {
-                Ok(page) => match page.result.first() {
-                    Some(envelope) => {
-                        let profile = materialize_profile(envelope)?;
-                        if profile.id != id {
-                            return Err(SdkError::InvalidPayload(
-                                "profile response belongs to another Agent ID".into(),
-                            ));
-                        }
-                        profiles.push(profile);
-                    }
-                    None => missing.push(id),
-                },
-                Err(SdkError::HttpStatus { status: 404, .. }) => missing.push(id),
+            match client.latest_profile_update(&id).await {
+                Ok(envelope) => {
+                    let envelope = self.state.profile_pins.observe(&envelope, &id)?;
+                    profiles.push(materialize_profile(&envelope)?);
+                }
+                Err(error)
+                    if error.code() == Some("not_found")
+                        || matches!(error, SdkError::HttpStatus { status: 404, .. }) =>
+                {
+                    missing.push(id)
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -400,11 +399,11 @@ impl LocalConnector {
                 query.append_pair("cursor", &cursor);
             }
         }
-        let page: Value = self
-            .connector_get(url.as_str(), Some(&self.request_jwt(&host)?))
-            .await?
-            .json()
-            .await?;
+        let page: Value = crate::http_client::read_json(
+            self.connector_get(url.as_str(), Some(&self.request_jwt(&host)?))
+                .await?,
+        )
+        .await?;
         let records = page["result"]
             .as_array()
             .ok_or_else(|| SdkError::InvalidPayload("invalid rooms list".into()))?;

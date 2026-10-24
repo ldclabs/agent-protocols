@@ -56,7 +56,7 @@ def _read_json(response: Any) -> Any:
     if status >= 400:
         headers = getattr(response, "headers", None) or {}
         raise HttpResponseError(status, getattr(response, "text", ""), headers.get(MAX_NONCE_HEADER))
-    return response.json()
+    return parse_strict_json(response.content)
 
 
 # Principal URLs come from signed events that anyone can submit, so every
@@ -85,12 +85,15 @@ def _read_bounded_json(response: Any, limit: int, deadline: float) -> Any:
     if status >= 400:
         headers = getattr(response, "headers", None) or {}
         raise HttpResponseError(status, body.decode("utf-8", errors="replace"), headers.get(MAX_NONCE_HEADER))
-    return json.loads(body)
+    return parse_strict_json(body)
 
 
 def _query(path: str, params: dict[str, Any]) -> str:
     query = urlencode({key: value for key, value in params.items() if value is not None}, quote_via=quote)
     return f"{path}?{query}" if query else path
+
+
+from .profile import ProfileCache
 
 
 class ProfileClient:
@@ -99,7 +102,8 @@ class ProfileClient:
     document instead, whose endpoints clients MUST prefer. ``profiles_url`` is
     the base of profile reads, event history, and submission (Section 7.1)."""
 
-    def __init__(self, base_url: str, session: Any | None = None, endpoints: dict[str, str] | None = None):
+    def __init__(self, base_url: str, session: Any | None = None, endpoints: dict[str, str] | None = None, *, profile_cache: ProfileCache | None = None):
+        self.profile_cache = profile_cache if profile_cache is not None else ProfileCache()
         self.base_url = base_url.rstrip("/")
         self.session = session or _requests_session()
         endpoints = endpoints or {}
@@ -107,7 +111,7 @@ class ProfileClient:
         self.batch_url = endpoints.get("profile_batch") or f"{self.profiles_url}/batch"
 
     @classmethod
-    def discover(cls, origin: str, session: Any | None = None) -> "ProfileClient":
+    def discover(cls, origin: str, session: Any | None = None, *, profile_cache: ProfileCache | None = None) -> "ProfileClient":
         """Builds a client for the service at ``origin`` from its discovery
         document, falling back to the default paths when the service publishes none."""
         session = session or _requests_session()
@@ -115,9 +119,16 @@ class ProfileClient:
         try:
             discovery = _read_json(session.get(f"{base}/.well-known/agent-profile"))
             endpoints = discovery.get("endpoints") if isinstance(discovery, dict) else None
-            return cls(base, session, endpoints if isinstance(endpoints, dict) else None)
+            return cls(base, session, endpoints if isinstance(endpoints, dict) else None, profile_cache=profile_cache)
         except Exception:  # Discovery is optional; the default paths apply.
-            return cls(base, session)
+            return cls(base, session, profile_cache=profile_cache)
+
+    def latest_profile_update(self, agent_id: AgentId) -> Envelope:
+        page = self.profile_events(agent_id, limit=1)
+        if not isinstance(page, dict) or not isinstance(page.get('result'), list) or len(page['result']) > 1:
+            raise AgentProtocolError('invalid_response', 'invalid latest profile page')
+        if not page['result']: raise AgentProtocolError('not_found', 'profile not found')
+        return self.profile_cache.observe(page['result'][0], agent_id)
 
     def get_profile(self, agent_id: AgentId) -> dict[str, Any]:
         return _read_json(self.session.get(f"{self.profiles_url}/{agent_id}"))

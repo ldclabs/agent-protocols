@@ -297,7 +297,7 @@ export class MemoryNonceStore implements NonceStore {
       );
     }
     const record = this.records.get(actor);
-    if (record && record.expiresAt > nowMs && nonce <= record.maxNonce) {
+    if (record && record.expiresAt >= nowMs && nonce <= record.maxNonce) {
       // Services rejecting for this reason MUST return the effective maximum
       // in the `Max-Seen-Nonce` response header; `data.max_nonce` carries it.
       throw protocolError(
@@ -312,15 +312,16 @@ export class MemoryNonceStore implements NonceStore {
 
   maxNonce(actor: AgentId, nowMs: number): number | undefined {
     const record = this.records.get(actor);
-    return record && record.expiresAt > nowMs ? record.maxNonce : undefined;
+    return record && record.expiresAt >= nowMs ? record.maxNonce : undefined;
   }
 }
 
 /**
  * Client-side nonce sequence for one Agent ID (Agent Identity Section 6.2).
  * Pass the event's `created_at` to derive clock-based nonces,
- * `max(last + 1, created_at)`, which stay monotonic across restarts, restores,
- * and devices sharing a key; without it the manager is a plain counter.
+ * `max(last + 1, created_at)`, which reduce dependence on a counter. Persist the sequence and resynchronize
+ * after conflicts; clocks alone do not coordinate devices or survive rollback.
+ * Without it the manager is a plain counter.
  */
 export class ClientNonceManager {
   constructor(private nextNonceValue = 1) {
@@ -342,7 +343,7 @@ export class ClientNonceManager {
   }
 
   /**
-   * Applies a `Max-Seen-Nonce` header. A value more than {@link MAX_NONCE_JUMP}
+   * Applies a `Max-Seen-Nonce` header. A proposed next nonce more than {@link MAX_NONCE_JUMP}
    * beyond `max(nextNonce, nowMs)` is rejected rather than applied.
    */
   observeMaxNonce(
@@ -352,7 +353,7 @@ export class ClientNonceManager {
     if (maxNonce === null || maxNonce === undefined || maxNonce === "") return;
     const parsed = typeof maxNonce === "string" ? Number(maxNonce) : maxNonce;
     validateNonce(parsed);
-    if (parsed > Math.max(this.nextNonceValue, nowMs) + MAX_NONCE_JUMP) {
+    if (parsed + 1 > Math.max(this.nextNonceValue, nowMs) + MAX_NONCE_JUMP || parsed >= Number.MAX_SAFE_INTEGER) {
       throw protocolError(
         "invalid_nonce",
         `Max-Seen-Nonce ${parsed} jumps too far beyond the local sequence`,

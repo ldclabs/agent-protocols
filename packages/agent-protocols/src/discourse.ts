@@ -83,7 +83,8 @@ export const CONTRACT_EVENT_TYPES: readonly string[] = [
  * custom types. `message` and `control` writes must be based at or after the
  * room head; `genesis`, `contract`, and `control` records advance it.
  */
-export type RecordClass = "genesis" | "contract" | "message" | "signal" | "control";
+export type RecordClass =
+  "genesis" | "contract" | "message" | "signal" | "control";
 
 /** Class of a built-in type per the Section 12.2 table. */
 export type BuiltinEventClass = "genesis" | "contract" | "signal" | "message";
@@ -92,9 +93,7 @@ export type BuiltinEventClass = "genesis" | "contract" | "signal" | "message";
  * Section 12.2 class of a built-in type; `undefined` for room-defined types and
  * for `room.join.request`, which never becomes a record.
  */
-export function builtinEventClass(
-  type: string,
-): BuiltinEventClass | undefined {
+export function builtinEventClass(type: string): BuiltinEventClass | undefined {
   switch (type) {
     case eventType.ROOM_CREATE:
       return "genesis";
@@ -178,10 +177,16 @@ export function validateRoomBase(
   headSeq: number,
 ): void {
   if (anchorHash !== baseHash) {
-    throw protocolError("base_record_mismatch", `base ${baseSeq} does not name an accepted record of this room`);
+    throw protocolError(
+      "base_record_mismatch",
+      `base ${baseSeq} does not name an accepted record of this room`,
+    );
   }
   if (eventRequiresRoomHead(type, registry) && baseSeq < headSeq) {
-    throw protocolError("room_head_mismatch", `base ${baseSeq} is before the room head ${headSeq}`);
+    throw protocolError(
+      "room_head_mismatch",
+      `base ${baseSeq} is before the room head ${headSeq}`,
+    );
   }
 }
 
@@ -658,7 +663,10 @@ export function eventRequiresBase(type: string): boolean {
 
 export function validateRoomId(roomId: unknown): asserts roomId is string {
   if (typeof roomId !== "string" || !ROOM_ID_PATTERN.test(roomId)) {
-    throw protocolError("invalid_event", "room_id must match [A-Za-z0-9_-]{1,64}");
+    throw protocolError(
+      "invalid_event",
+      "room_id must match [A-Za-z0-9_-]{1,64}",
+    );
   }
 }
 
@@ -723,7 +731,7 @@ export function validateRoomHeadPrecondition(event: Event<unknown>): void {
       "base_seq must be a positive safe JSON integer",
     );
   }
-  if (typeof baseHash !== "string" || baseHash.trim() === "") {
+  if (typeof baseHash !== "string" || isBlank(baseHash)) {
     throw protocolError("invalid_event", "base_hash must not be empty");
   }
 }
@@ -775,7 +783,9 @@ export function isPackImport(
   );
 }
 
-export function isTypeDef(declaration: TypeDeclaration): declaration is TypeDef {
+export function isTypeDef(
+  declaration: TypeDeclaration,
+): declaration is TypeDef {
   return (
     typeof declaration === "object" &&
     declaration !== null &&
@@ -785,21 +795,33 @@ export function isTypeDef(declaration: TypeDeclaration): declaration is TypeDef 
 }
 
 const TYPE_DEF_FIELDS = [
-  "type", "kind", "title", "description", "schema", "roles", "instructions",
-  "status", "rate_hint", "max_payload_hint", "extra",
+  "type",
+  "kind",
+  "title",
+  "description",
+  "schema",
+  "roles",
+  "instructions",
+  "status",
+  "rate_hint",
+  "max_payload_hint",
+  "extra",
 ];
 
 export function validateTypeDef(def: TypeDef): void {
   for (const key of Object.keys(def)) {
     if (!TYPE_DEF_FIELDS.includes(key)) {
-      throw protocolError("invalid_event", `unknown type definition field: ${key}`);
+      throw protocolError(
+        "invalid_event",
+        `unknown type definition field: ${key}`,
+      );
     }
   }
   validateCustomEventTypeName(def.type);
   if (!includes(TYPE_KINDS, def.kind)) {
     throw protocolError("invalid_event", `invalid type kind: ${def.kind}`);
   }
-  if (typeof def.title !== "string" || def.title.trim() === "") {
+  if (typeof def.title !== "string" || isBlank(def.title)) {
     throw protocolError(
       "invalid_event",
       "type definition title must not be empty",
@@ -873,7 +895,10 @@ export function validatePackImport(declaration: PackImport): void {
     }
   } else if (hasExternal) {
     if (!/^https:\/\//.test(declaration.pack as string)) {
-      throw protocolError("invalid_event", "external pack must be an HTTPS URL");
+      throw protocolError(
+        "invalid_event",
+        "external pack must be an HTTPS URL",
+      );
     }
     if (!CONTENT_DIGEST_PATTERN.test(declaration.digest as string)) {
       throw protocolError(
@@ -895,7 +920,10 @@ export function validatePackImport(declaration: PackImport): void {
       );
     }
     if (new Set(declaration.types).size !== declaration.types.length) {
-      throw protocolError("type_conflict", "pack import types subset has duplicates");
+      throw protocolError(
+        "type_conflict",
+        "pack import types subset has duplicates",
+      );
     }
   }
 }
@@ -927,7 +955,12 @@ const FORBIDDEN_SCHEMA_KEYWORDS = [
   "$vocabulary",
 ];
 const SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
-const ANNOTATION_KEYWORDS = ["format", "contentEncoding", "contentMediaType", "contentSchema"];
+const ANNOTATION_KEYWORDS = [
+  "format",
+  "contentEncoding",
+  "contentMediaType",
+  "contentSchema",
+];
 const SUBSCHEMA_KEYWORDS = [
   "items",
   "additionalProperties",
@@ -942,19 +975,27 @@ const SUBSCHEMA_KEYWORDS = [
   "additionalItems",
 ];
 const SUBSCHEMA_ARRAY_KEYWORDS = ["allOf", "anyOf", "oneOf", "prefixItems"];
-const SUBSCHEMA_MAP_KEYWORDS = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"];
+const SUBSCHEMA_MAP_KEYWORDS = [
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+];
 
 /** Calls `visit` on every subschema object of `schema`, depth first. */
 function walkSchema(
   schema: unknown,
   visit: (node: Record<string, unknown>) => void,
 ): void {
-  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) return;
+  if (typeof schema !== "object" || schema === null || Array.isArray(schema))
+    return;
   const node = schema as Record<string, unknown>;
   visit(node);
   for (const key of SUBSCHEMA_KEYWORDS) walkSchema(node[key], visit);
   for (const key of SUBSCHEMA_ARRAY_KEYWORDS) {
-    if (Array.isArray(node[key])) for (const item of node[key] as unknown[]) walkSchema(item, visit);
+    if (Array.isArray(node[key]))
+      for (const item of node[key] as unknown[]) walkSchema(item, visit);
   }
   for (const key of SUBSCHEMA_MAP_KEYWORDS) {
     const map = node[key];
@@ -969,24 +1010,38 @@ function walkSchema(
  * dynamic or recursive references, the 2020-12 dialect, and portable
  * regular expressions.
  */
-export function validateTypeSchemaProfile(schema: Record<string, unknown>): void {
+export function validateTypeSchemaProfile(
+  schema: Record<string, unknown>,
+): void {
   walkSchema(schema, (node) => {
     for (const keyword of FORBIDDEN_SCHEMA_KEYWORDS) {
-      if (keyword in node) throw protocolError("invalid_type_schema", `${keyword} is not allowed`);
+      if (keyword in node)
+        throw protocolError("invalid_type_schema", `${keyword} is not allowed`);
     }
     if ("$schema" in node && node.$schema !== SCHEMA_DIALECT) {
-      throw protocolError("invalid_type_schema", "$schema must be the draft 2020-12 dialect");
+      throw protocolError(
+        "invalid_type_schema",
+        "$schema must be the draft 2020-12 dialect",
+      );
     }
-    if ("$ref" in node && (typeof node.$ref !== "string" || !node.$ref.startsWith("#"))) {
-      throw protocolError("invalid_type_schema", "$ref must be a fragment inside the schema");
+    if (
+      "$ref" in node &&
+      (typeof node.$ref !== "string" || !node.$ref.startsWith("#"))
+    ) {
+      throw protocolError(
+        "invalid_type_schema",
+        "$ref must be a fragment inside the schema",
+      );
     }
     if ("pattern" in node) {
-      if (typeof node.pattern !== "string") throw protocolError("invalid_type_schema", "pattern must be a string");
+      if (typeof node.pattern !== "string")
+        throw protocolError("invalid_type_schema", "pattern must be a string");
       validatePortablePattern(node.pattern);
     }
     const patternProperties = node.patternProperties;
     if (typeof patternProperties === "object" && patternProperties !== null) {
-      for (const key of Object.keys(patternProperties)) validatePortablePattern(key);
+      for (const key of Object.keys(patternProperties))
+        validatePortablePattern(key);
     }
   });
 }
@@ -998,7 +1053,10 @@ export function validateTypeSchemaProfile(schema: Record<string, unknown>): void
  */
 export function validatePortablePattern(pattern: string): void {
   const reject = (reason: string): never => {
-    throw protocolError("invalid_type_schema", `pattern ${JSON.stringify(pattern)} is not portable: ${reason}`);
+    throw protocolError(
+      "invalid_type_schema",
+      `pattern ${JSON.stringify(pattern)} is not portable: ${reason}`,
+    );
   };
   let body = pattern;
   if (body.startsWith("^")) body = body.slice(1);
@@ -1048,7 +1106,8 @@ export function validatePortablePattern(pattern: string): void {
     } else if (ch === "*" || ch === "+" || ch === "?") {
       if (!canQuantify) reject("quantifier without operand");
       i += 1;
-      if (chars[i] === "?" || chars[i] === "+") reject("lazy or possessive quantifier");
+      if (chars[i] === "?" || chars[i] === "+")
+        reject("lazy or possessive quantifier");
       canQuantify = false;
     } else if (ch === "{") {
       if (!canQuantify) reject("quantifier without operand");
@@ -1056,7 +1115,8 @@ export function validatePortablePattern(pattern: string): void {
       const match = /^\{[0-9]+(,[0-9]*)?\}/.exec(rest);
       if (!match) reject("malformed quantifier");
       i += [...match![0]].length;
-      if (chars[i] === "?" || chars[i] === "+") reject("lazy or possessive quantifier");
+      if (chars[i] === "?" || chars[i] === "+")
+        reject("lazy or possessive quantifier");
       canQuantify = false;
     } else if (ch === ".") {
       reject("'.' outside a character class");
@@ -1077,6 +1137,10 @@ function stripAnnotations(schema: unknown): unknown {
   const copy = structuredClone(schema);
   walkSchema(copy, (node) => {
     for (const keyword of ANNOTATION_KEYWORDS) delete node[keyword];
+    // The validator indexes JSON pointers using encodeURI; equivalent URI
+    // spellings must resolve to the same local subschema.
+    if (typeof node.$ref === "string")
+      node.$ref = encodeURI(decodeURIComponent(node.$ref));
   });
   return copy;
 }
@@ -1090,7 +1154,8 @@ export function validateRoomPolicy(policy: RoomPolicy | undefined): void {
     throw protocolError("invalid_event", "policy must be an object");
   }
   for (const key of Object.keys(policy)) {
-    if (!ROOM_POLICY_FIELDS.includes(key)) throw protocolError("invalid_event", `unknown policy field: ${key}`);
+    if (!ROOM_POLICY_FIELDS.includes(key))
+      throw protocolError("invalid_event", `unknown policy field: ${key}`);
   }
   const maxSpeakers = policy.max_speakers;
   if (
@@ -1103,20 +1168,35 @@ export function validateRoomPolicy(policy: RoomPolicy | undefined): void {
     );
   }
   if (policy.invites !== undefined) {
-    if (typeof policy.invites !== "object" || policy.invites === null || Array.isArray(policy.invites)) {
+    if (
+      typeof policy.invites !== "object" ||
+      policy.invites === null ||
+      Array.isArray(policy.invites)
+    ) {
       throw protocolError("invalid_event", "invites must be an object");
     }
     for (const [agentId, role] of Object.entries(policy.invites)) {
       validateAgentId(agentId);
-      if (!includes(ROLES, role)) throw protocolError("invalid_event", `invalid invited role: ${role}`);
+      if (!includes(ROLES, role))
+        throw protocolError("invalid_event", `invalid invited role: ${role}`);
     }
   }
   if (policy.open_roles !== undefined) {
-    if (!Array.isArray(policy.open_roles) || new Set(policy.open_roles).size !== policy.open_roles.length) {
-      throw protocolError("invalid_event", "open_roles must be a list of unique roles");
+    if (
+      !Array.isArray(policy.open_roles) ||
+      new Set(policy.open_roles).size !== policy.open_roles.length
+    ) {
+      throw protocolError(
+        "invalid_event",
+        "open_roles must be a list of unique roles",
+      );
     }
     for (const role of policy.open_roles) {
-      if (role !== "speaker" && role !== "observer") throw protocolError("invalid_event", `open_roles cannot contain ${role}`);
+      if (role !== "speaker" && role !== "observer")
+        throw protocolError(
+          "invalid_event",
+          `open_roles cannot contain ${role}`,
+        );
     }
   }
 }
@@ -1125,9 +1205,15 @@ export function validateRoomPolicy(policy: RoomPolicy | undefined): void {
  * Section 8.3 rule tying the policy to the room's visibility: a private room
  * admits agents only by invitation or review, so its `open_roles` must be empty.
  */
-export function validateRoomVisibilityPolicy(visibility: Visibility, policy: RoomPolicy | undefined): void {
+export function validateRoomVisibilityPolicy(
+  visibility: Visibility,
+  policy: RoomPolicy | undefined,
+): void {
   if (visibility === "private" && (policy?.open_roles?.length ?? 0) > 0) {
-    throw protocolError("invalid_event", "a private room cannot have open roles");
+    throw protocolError(
+      "invalid_event",
+      "a private room cannot have open roles",
+    );
   }
 }
 
@@ -1136,7 +1222,10 @@ export function validateRoomVisibilityPolicy(visibility: Visibility, policy: Roo
  * explicit `open_roles`, or by default `observer` in a public room and none
  * otherwise.
  */
-export function effectiveOpenRoles(visibility: Visibility, policy: RoomPolicy | undefined): Role[] {
+export function effectiveOpenRoles(
+  visibility: Visibility,
+  policy: RoomPolicy | undefined,
+): Role[] {
   if (policy?.open_roles !== undefined) return [...policy.open_roles];
   return visibility === "public" ? ["observer"] : [];
 }
@@ -1160,9 +1249,12 @@ export function validateRoomCreatePayload(payload: RoomCreatePayload): void {
   try {
     validateOrigin(payload.host);
   } catch {
-    throw protocolError("invalid_event", "room.create host must be an HTTPS origin");
+    throw protocolError(
+      "invalid_event",
+      "room.create host must be an HTTPS origin",
+    );
   }
-  if (payload.topic.trim() === "") {
+  if (isBlank(payload.topic)) {
     throw protocolError("invalid_event", "room topic must not be empty");
   }
   if (payload.start_time >= payload.end_time) {
@@ -1176,28 +1268,46 @@ export function validateRoomCreatePayload(payload: RoomCreatePayload): void {
 }
 
 /** Host binding check (Section 8.1): `host` must be the receiving host's API origin. */
-export function validateRoomCreateHost(payload: RoomCreatePayload, hostOrigin: string): void {
+export function validateRoomCreateHost(
+  payload: RoomCreatePayload,
+  hostOrigin: string,
+): void {
   if (payload.host !== hostOrigin) {
-    throw protocolError("host_mismatch", `room.create names ${payload.host}, not ${hostOrigin}`);
+    throw protocolError(
+      "host_mismatch",
+      `room.create names ${payload.host}, not ${hostOrigin}`,
+    );
   }
 }
 
 export function validateMessageCreatePayload(
   payload: MessageCreatePayload,
 ): void {
-  if (typeof payload.content_type !== "string" || payload.content_type.trim() === "") {
+  if (
+    typeof payload.content_type !== "string" ||
+    isBlank(payload.content_type)
+  ) {
     throw protocolError("invalid_event", "content_type must not be empty");
   }
   const content = payload.content as unknown;
-  if (typeof content !== "string" && (typeof content !== "object" || content === null || Array.isArray(content))) {
-    throw protocolError("invalid_event", "content must be a string or an object");
+  if (
+    typeof content !== "string" &&
+    (typeof content !== "object" || content === null || Array.isArray(content))
+  ) {
+    throw protocolError(
+      "invalid_event",
+      "content must be a string or an object",
+    );
   }
 }
 
 export function validateRoomJoinPayload(payload: RoomJoinPayload): void {
   for (const key of Object.keys(payload)) {
     if (key !== "role" && key !== "perspective") {
-      throw protocolError("invalid_event", `unknown room.join payload field: ${key}`);
+      throw protocolError(
+        "invalid_event",
+        `unknown room.join payload field: ${key}`,
+      );
     }
   }
   if (!includes(ROLES, payload.role)) {
@@ -1205,10 +1315,15 @@ export function validateRoomJoinPayload(payload: RoomJoinPayload): void {
   }
 }
 
-export function validateRoomJoinRequestPayload(payload: RoomJoinRequestPayload): void {
+export function validateRoomJoinRequestPayload(
+  payload: RoomJoinRequestPayload,
+): void {
   for (const key of Object.keys(payload)) {
     if (!["role", "perspective", "reason", "extra"].includes(key)) {
-      throw protocolError("invalid_event", `unknown room.join.request payload field: ${key}`);
+      throw protocolError(
+        "invalid_event",
+        `unknown room.join.request payload field: ${key}`,
+      );
     }
   }
   if (!includes(ROLES, payload.role)) {
@@ -1227,10 +1342,16 @@ export function validateJoinRequestEnvelope(
 ): void {
   validateDiscourseEnvelope(envelope);
   if (envelope.event.type !== eventType.ROOM_JOIN_REQUEST) {
-    throw protocolError("invalid_event", "embedded request must be a room.join.request");
+    throw protocolError(
+      "invalid_event",
+      "embedded request must be a room.join.request",
+    );
   }
   if (roomId !== undefined && envelope.event.room_id !== roomId) {
-    throw protocolError("room_id_mismatch", "join request belongs to another room");
+    throw protocolError(
+      "room_id_mismatch",
+      "join request belongs to another room",
+    );
   }
   validateRoomJoinRequestPayload(envelope.event.payload);
 }
@@ -1242,7 +1363,10 @@ export function validateRoomJoinReviewPayload(
 ): void {
   validateJoinRequestEnvelope(payload.request, roomId);
   if (payload.decision !== "approve" && payload.decision !== "reject") {
-    throw protocolError("invalid_event", `invalid review decision: ${payload.decision}`);
+    throw protocolError(
+      "invalid_event",
+      `invalid review decision: ${payload.decision}`,
+    );
   }
   if (payload.decision === "approve" && !includes(ROLES, payload.role)) {
     throw protocolError("invalid_event", "an approving review requires a role");
@@ -1268,7 +1392,10 @@ const ROOM_UPDATE_FIELDS = [
 export function validateRoomUpdatePayload(payload: RoomUpdatePayload): void {
   const keys = Object.keys(payload);
   if (keys.length === 0) {
-    throw protocolError("invalid_event", "room.update payload must not be empty");
+    throw protocolError(
+      "invalid_event",
+      "room.update payload must not be empty",
+    );
   }
   for (const key of keys) {
     if (!includes(ROOM_UPDATE_FIELDS, key)) {
@@ -1278,7 +1405,7 @@ export function validateRoomUpdatePayload(payload: RoomUpdatePayload): void {
       );
     }
   }
-  if (payload.topic !== undefined && payload.topic.trim() === "") {
+  if (payload.topic !== undefined && isBlank(payload.topic)) {
     throw protocolError("invalid_event", "room topic must not be empty");
   }
   if (
@@ -1322,7 +1449,10 @@ export class TypeRegistry {
     for (const declaration of declarations) {
       for (const name of registry.apply(declaration, packs)) {
         if (declared.has(name)) {
-          throw protocolError("type_conflict", `type ${name} is declared twice`);
+          throw protocolError(
+            "type_conflict",
+            `type ${name} is declared twice`,
+          );
         }
         declared.add(name);
       }
@@ -1335,9 +1465,17 @@ export class TypeRegistry {
    * returns the type names it declared. Declaring an existing type is a
    * redefinition: it must keep the type's kind, and the latest definition wins.
    */
-  apply(declaration: TypeDeclaration, packs: Record<string, Pack> = {}): string[] {
+  apply(
+    declaration: TypeDeclaration,
+    packs: Record<string, Pack> = {},
+  ): string[] {
     if (isPackImport(declaration)) {
-      return this.import(declaration, packs);
+      const staged = new TypeRegistry();
+      for (const [name, def] of this.types) staged.types.set(name, def);
+      const names = staged.import(declaration, packs);
+      this.types.clear();
+      for (const [name, def] of staged.types) this.types.set(name, def);
+      return names;
     }
     if (isTypeDef(declaration)) {
       this.define(declaration);
@@ -1361,17 +1499,26 @@ export class TypeRegistry {
     this.types.set(def.type, def);
   }
 
-  private import(declaration: PackImport, packs: Record<string, Pack>): string[] {
+  private import(
+    declaration: PackImport,
+    packs: Record<string, Pack>,
+  ): string[] {
     validatePackImport(declaration);
     const reference = declaration.use ?? (declaration.pack as string);
     const pack = packs[reference];
     if (!pack) {
-      throw protocolError("pack_unavailable", `pack not available: ${reference}`);
+      throw protocolError(
+        "pack_unavailable",
+        `pack not available: ${reference}`,
+      );
     }
     const available = new Set<string>();
     for (const def of pack.types) {
       if (available.has(def.type)) {
-        throw protocolError("type_conflict", `pack ${reference} defines ${def.type} twice`);
+        throw protocolError(
+          "type_conflict",
+          `pack ${reference} defines ${def.type} twice`,
+        );
       }
       available.add(def.type);
     }
@@ -1526,10 +1673,16 @@ export function buildServerRecord<P>(
 }
 
 export function isRedactedEnvelope(value: unknown): value is RedactedEnvelope {
-  return typeof value === "object" && value !== null && (value as RedactedEnvelope).redacted === true;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as RedactedEnvelope).redacted === true
+  );
 }
 
-export function isRedactedRecord(record: ArchiveRecord): record is RedactedServerRecord {
+export function isRedactedRecord(
+  record: ArchiveRecord,
+): record is RedactedServerRecord {
   return isRedactedEnvelope(record.envelope);
 }
 
@@ -1542,7 +1695,10 @@ export function redactServerRecord(record: ServerRecord): RedactedServerRecord {
   if (isBuiltinEventType(type) && type !== eventType.MESSAGE_CREATE) {
     throw protocolError("invalid_event", `${type} records cannot be redacted`);
   }
-  return { ...record, envelope: { hash: record.envelope.hash, redacted: true, type } };
+  return {
+    ...record,
+    envelope: { hash: record.envelope.hash, redacted: true, type },
+  };
 }
 
 export function verifyServerRecord(record: ArchiveRecord): void {
@@ -1562,7 +1718,10 @@ export function verifyServerRecord(record: ArchiveRecord): void {
   if (isRedactedRecord(record)) {
     const type = record.envelope.type;
     if (isBuiltinEventType(type) && type !== eventType.MESSAGE_CREATE) {
-      throw protocolError("invalid_record_chain", `${type} records cannot be redacted`);
+      throw protocolError(
+        "invalid_record_chain",
+        `${type} records cannot be redacted`,
+      );
     }
   }
 }
@@ -1581,7 +1740,10 @@ export function verifyServerRecordChain(records: ArchiveRecord[]): void {
     } else if (record.seq !== 1) {
       throw protocolError("invalid_record_chain", "first seq must be 1");
     } else if (record.pre_hash !== null) {
-      throw protocolError("invalid_record_chain", "first pre_hash must be null");
+      throw protocolError(
+        "invalid_record_chain",
+        "first pre_hash must be null",
+      );
     }
     previous = record;
   }
@@ -1599,13 +1761,23 @@ export function verifyArchiveRecords(
 ): number[] {
   verifyServerRecordChain(records);
   const last = records[records.length - 1];
-  if (!last || last.seq !== manifest.last_seq || last.hash !== manifest.last_hash) {
-    throw protocolError("invalid_record_chain", "archive does not end at last_seq / last_hash");
+  if (
+    !last ||
+    last.seq !== manifest.last_seq ||
+    last.hash !== manifest.last_hash
+  ) {
+    throw protocolError(
+      "invalid_record_chain",
+      "archive does not end at last_seq / last_hash",
+    );
   }
   const redacted: number[] = [];
   for (const record of records) {
     if (record.room_id !== manifest.room_id) {
-      throw protocolError("invalid_record_chain", "record belongs to another room");
+      throw protocolError(
+        "invalid_record_chain",
+        "record belongs to another room",
+      );
     }
     if (isRedactedRecord(record)) redacted.push(record.seq);
     else validateDiscourseEnvelope(record.envelope);
@@ -1638,7 +1810,11 @@ export function canSubmitEvent(
     case eventType.ROOM_CREATE:
       return true;
     case eventType.ROOM_JOIN:
-      return Boolean(context.directJoinAllowed) && !context.isCreator && context.role === undefined;
+      return (
+        Boolean(context.directJoinAllowed) &&
+        !context.isCreator &&
+        context.role === undefined
+      );
     case eventType.ROOM_JOIN_REQUEST:
       return !context.isCreator && context.role === undefined;
     case eventType.ROOM_LEAVE:
@@ -1697,7 +1873,9 @@ export function canAcceptRoomWrite(
   permission: PermissionContext,
   registry: TypeRegistry = new TypeRegistry(),
 ): boolean {
-  return canSubmitEvent(type, permission, registry) && canWriteInState(type, state);
+  return (
+    canSubmitEvent(type, permission, registry) && canWriteInState(type, state)
+  );
 }
 
 export function validateRoomWrite(
@@ -1723,4 +1901,11 @@ function hashCanonicalJson(value: unknown): string {
     );
   }
   return base64UrlEncode(sha3_256(new TextEncoder().encode(canonical)));
+}
+
+/** ADP blank-string whitespace, independent of the JavaScript Unicode version. */
+function isBlank(value: string): boolean {
+  return /^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*$/.test(
+    value,
+  );
 }

@@ -204,6 +204,7 @@ test("delegation pages and controller enumeration preserve authority and complet
   );
   const credential = delegation.materializeDelegationCredential(envelope, {
     acceptedAt: 101,
+    checkedAt: Date.now(),
   });
   let overreach = false;
   let credentialId = "del";
@@ -563,4 +564,32 @@ test("mail resolve projects the final pin once and isolates malformed Profile en
   assert.equal(result.mailboxes.length, 1);
   assert.equal(result.mailboxes[0].card.hash, closed.hash);
   assert.equal(result.mailboxes[0].usable, false);
+});
+
+test("archive JSONL rejects duplicate members before record verification", async () => {
+  const f = roomFixture();
+  const c = connector((async (url) => {
+    const path = new URL(String(url)).pathname;
+    if (path.includes(".well-known"))
+      return json({
+        protocol: "agent-discourse/1.0",
+        service: HOST,
+        endpoints: { rooms: `${HOST}/v1/rooms` },
+      });
+    if (path.endsWith("/archive")) return json(f.manifest);
+    if (path.endsWith(".jsonl"))
+      return new Response(
+        f.records
+          .map((r, i) =>
+            i === 0
+              ? JSON.stringify(r).replace('"seq":1', '"seq":999,"seq":1')
+              : JSON.stringify(r),
+          )
+          .join("\n"),
+      );
+    throw new Error("unexpected request");
+  }) as typeof fetch);
+  await assert.rejects(call(c, "room_archive", { room_id: f.id, host: HOST }), {
+    code: "invalid_event",
+  });
 });

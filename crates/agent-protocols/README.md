@@ -42,7 +42,7 @@ let profile = materialize_profile(&envelope)?;
 # Ok::<(), agent_protocols::SdkError>(())
 ```
 
-`next_nonce_at(created_at)` derives `max(last + 1, created_at)`, so nonces stay monotonic across restarts and devices. Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
+`next_nonce_at(created_at)` derives `max(last + 1, created_at)`, which reduces dependence on a counter; persisted state, shared-key coordination or bounded conflict resynchronization is still needed across restarts and devices. Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
 
 Optional collections in signed payloads, such as a profile's `capabilities` or a type definition's `extra`, are `Option`s. `None` means the member is absent and `Some(vec![])` is an explicit empty value, so an envelope signed by any SDK re-serializes to the bytes that were signed and its hash verifies.
 
@@ -310,3 +310,14 @@ integration before the new surface is available.
 Before publishing any card, durably save its independent secret, exact signed envelope and targets. A timeout can follow relay acceptance; retain every possibly published card/key, including nonce-resync intermediates, until its own `receive_until`. Reconcile by exact retry or a verified card read.
 
 Production connector hosts must install `with_mail_persistence(|snapshot, keys| ...)` to save keys first, then state, before network publication; a rejected/failed callback prevents the write. Without this hook the SDK core is memory-only and cannot provide crash durability. Snapshots include pending publications; save state after every tool call, including errors, and restore keys before `mail_sync`. `mail_sync` retries outstanding publications. `mail_mailboxes_list({host, limit, cursor})` imports one remote page; `key_available` distinguishes metadata recovery from a loaded decryption key, and `pending_routes` reports uncertain or failed publication targets. A publish with no confirmed route returns its retained mailbox plus errors, so the caller can resume rather than lose its key. `mail_resolve` returns one final pinned candidate per mailbox and isolates bad Profile endpoints.
+
+### Verified reads and boundary behavior
+
+HTTP JSON is parsed strictly from UTF-8 bytes before typed deserialization; signed content with duplicate members is rejected even inside response lists and archives. Nonce-cache expiration includes its final millisecond. Clock-derived nonces still need persisted state or conflict resynchronization across restores and shared-key devices; the Max-Seen-Nonce bound applies to the proposed next nonce.
+
+Delegation verification separates historical `verified` from current `usable`. Status must be no more than 300 seconds old, no more than 60 seconds ahead, and not precede acceptance. A newer event in supplied authoritative history makes an older credential unusable, including when acceptance timestamps tie. Refresh inconsistent state and obtain fresh authoritative status for sensitive actions; caller code still authenticates the subject and enforces scopes and constraints.
+
+Discourse uses a fixed whitespace set and absolute regex end anchors, including patternProperties. Type pack imports are atomic: a rejected declaration leaves the registry unchanged.
+
+`ProfileClient::latest_profile_update` reads and verifies the mandatory latest signed update. `profile::ProfileCache` pins the highest nonce across services, rejects rollback or same-nonce conflicts with `stale_profile`, and supports snapshots. Share and persist that cache across restarts; explicit historical reads do not downgrade it. A first-contact pin cannot prove global freshness. Full history beyond the latest update remains optional.
+The local connector persists profile pins in its snapshot and performs delegation checks using the clock after history retrieval.

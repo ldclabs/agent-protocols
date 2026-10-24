@@ -1509,9 +1509,10 @@ fn delegation_pagination_and_controller_enumeration() {
             .unwrap();
         let envelope: agent_protocols::identity::Envelope<DelegationPayload> =
             serde_json::from_value(json!(grant)).unwrap();
-        let credential =
+        let mut credential =
             materialize_delegation_credential(&envelope, DelegationStatus::Active, 101, None)
                 .unwrap();
+        credential.checked_at = unix_ms();
         services.fixture(
             "/v1/delegations/query",
             json!({"result":[],"next_cursor":"second"}),
@@ -1928,5 +1929,38 @@ fn resigning_pending_publication_updates_previously_successful_routes() {
             .as_object()
             .unwrap()
             .is_empty());
+    });
+}
+
+#[test]
+fn verified_profile_pins_survive_connector_restart() {
+    let services = Services::start();
+    run(async {
+        let vectors: Value = serde_json::from_str(include_str!(
+            "../../../docs/protocols/agent-profile/1.0.vectors.json"
+        ))
+        .unwrap();
+        let c = &vectors["latest_pins"];
+        let owner = c["owner"].as_str().unwrap();
+        let path = format!("/v1/profiles/{owner}/events");
+        services.fixture(&path, json!({"result":[c["updates"]["new"]]}));
+        let mut agent = services.connector(7);
+        let input = json!({"profile_service":services.origin,"ids":[owner]});
+        call(&mut agent, TOOL_PROFILES_GET, input.clone()).await;
+        let mut restored = LocalConnector::from_snapshot(
+            AgentSigner::from_seed([7; 32]),
+            &agent.snapshot().unwrap(),
+        )
+        .unwrap()
+        .with_http_client(tls_client());
+        services.fixture(&path, json!({"result":[c["updates"]["old"]]}));
+        assert_eq!(
+            restored
+                .call_tool(TOOL_PROFILES_GET, input)
+                .await
+                .unwrap_err()
+                .code(),
+            Some("stale_profile")
+        );
     });
 }

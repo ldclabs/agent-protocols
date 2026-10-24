@@ -75,7 +75,7 @@ class DelegationVerdict(TypedDict):
     credential: DelegationCredential
     # Latest-grant signature, controller, ceiling, and consistency checks passed.
     verified: bool
-    # Verified, and usable for the audience now.
+    # Verified, with fresh status consistent with supplied history and the audience/time checks.
     usable: bool
     # Every failed check.
     reasons: list[str]
@@ -382,11 +382,24 @@ def validate_controller_enumeration(document: PrincipalDocument, actor: AgentId,
         raise AgentProtocolError("delegation_ceiling_exceeded", "credential is outside the controller's ceiling")
 
 
+MAX_STATUS_AGE_MS = 300000
+STATUS_CLOCK_SKEW_MS = 60000
+
+
+def _validate_status_freshness(credential: DelegationCredential, now: int) -> None:
+    _timestamp(now, "now")
+    checked, accepted = credential.get("checked_at"), credential.get("accepted_at")
+    _timestamp(checked, "checked_at")
+    _timestamp(accepted, "accepted_at")
+    if checked < accepted or checked > now + STATUS_CLOCK_SKEW_MS: _fail("invalid status timestamps")
+    if now - checked > MAX_STATUS_AGE_MS: _fail("status is stale")
+
+
 def validate_delegation_use(credential: DelegationCredential, audience: str, now: int) -> None:
     """Audience/status/time check after cryptographic and historical verification.
     Caller still authenticates subject and enforces scopes and constraints."""
     validate_audience(audience)
-    _timestamp(now, "now")
+    _validate_status_freshness(credential, now)
     validate_delegation_grant_payload(credential)
     if (credential.get("protocol") != DELEGATION_PROTOCOL or credential.get("status") != "active"
         or audience not in credential["audiences"]
@@ -434,6 +447,16 @@ def verify_delegation_credential(
     except (AgentProtocolError, KeyError, TypeError, rfc8785.CanonicalizationError) as error:
         reasons.append(str(error))
     verified = not reasons
+    try: _validate_status_freshness(credential, now)
+    except (AgentProtocolError, KeyError, TypeError) as error: reasons.append(str(error))
+    current = next((i for i, r in enumerate(records) if r['envelope']['hash'] == credential.get('event_id')), -1)
+    for i, record in enumerate(records):
+        payload = record['envelope']['event']['payload']
+        if (record['envelope']['hash'] != credential.get('event_id') and payload.get('id') == credential.get('id')
+                and payload.get('principal_id') == credential.get('principal_id')
+                and (record['accepted_at'] > credential.get('accepted_at', -1) or (current >= 0 and i > current))):
+            reasons.append("credential status conflicts with supplied history")
+            break
     if credential.get("status") != "active":
         reasons.append(f"status is {credential.get('status')}")
     if audience not in (credential.get("audiences") or []):

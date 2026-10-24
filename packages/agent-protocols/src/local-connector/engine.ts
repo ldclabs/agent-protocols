@@ -1,3 +1,7 @@
+import { AgentProtocolError } from "../errors.js";
+import { parseStrictJson } from "../identity.js";
+import { ProfileCache } from "../profile.js";
+import { readProtocolJson } from "../http-client.js";
 // The stateful local connector engine. `LocalConnector` is transport-neutral:
 // it signs on the active agent's behalf, calls Agent Protocols services over
 // HTTP, materializes local room state by projecting accepted records, derives
@@ -704,6 +708,10 @@ export class LocalConnector {
         restored,
       );
     }
+    state.profilePins = new ProfileCache({
+      version: 1,
+      profiles: doc.profile_pins ?? [],
+    });
     state.profiles = new Map(Object.entries(doc.profiles));
     for (const entry of doc.join_requests) {
       state.joinRequests.set(
@@ -756,6 +764,7 @@ export class LocalConnector {
       hosts: Object.fromEntries(this.state.hosts),
       rooms: [...this.state.rooms.values()].map(roomToSnapshot),
       profiles: Object.fromEntries(this.state.profiles),
+      profile_pins: this.state.profilePins.snapshot().profiles,
       join_requests: [...this.state.joinRequests].map(([key, requests]) => ({
         ...roomKeyFromString(key),
         requests,
@@ -1125,7 +1134,7 @@ export class LocalConnector {
   }
 
   private async connectorJson(url: string, jwt?: string): Promise<unknown> {
-    return (await this.connectorResponse(url, jwt)).json();
+    return readProtocolJson(await this.connectorResponse(url, jwt));
   }
 
   private async profilesGet(input: ProfilesGetInput): Promise<{
@@ -1140,17 +1149,18 @@ export class LocalConnector {
     for (const id of input.ids ?? [this.agentId()]) {
       publicKeyBytes(id);
       try {
-        const page = await client.profileEvents(id, 1);
-        if (!page.result.length) {
-          missing.push(id);
-          continue;
-        }
-        const profile = materializeProfile(page.result[0]);
+        const envelope = await client.latestProfileUpdate(id);
+        const profile = materializeProfile(
+          this.state.profilePins.observe(envelope, id),
+        );
         if (profile.id !== id)
           throw invalidPayload("profile response belongs to another Agent ID");
         profiles.push(profile);
       } catch (error) {
-        if (error instanceof HttpResponseError && error.status === 404)
+        if (
+          (error instanceof HttpResponseError && error.status === 404) ||
+          (error instanceof AgentProtocolError && error.code === "not_found")
+        )
           missing.push(id);
         else throw error;
       }
@@ -1402,7 +1412,7 @@ export class LocalConnector {
         await (await this.connectorResponse(url)).arrayBuffer(),
       );
       verifyPackDigest(bytes, digest);
-      const document = JSON.parse(
+      const document = parseStrictJson(
         new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       ) as PackDocument;
       const pack = document.packs.find((p) => p.id === url);
@@ -1468,13 +1478,18 @@ export class LocalConnector {
       if (serviceOrigin(url) !== key.host) throw permissionDenied();
       return url;
     };
-    const log = await (
-      await this.connectorResponse(sameOrigin(manifest.formats.jsonl), jwt)
-    ).text();
+    const log = new TextDecoder("utf-8", {
+      fatal: true,
+      ignoreBOM: true,
+    }).decode(
+      await (
+        await this.connectorResponse(sameOrigin(manifest.formats.jsonl), jwt)
+      ).arrayBuffer(),
+    );
     const records = log
       .split("\n")
       .filter((line) => line.trim())
-      .map((line) => JSON.parse(line) as ArchiveRecord);
+      .map((line) => parseStrictJson(line) as ArchiveRecord);
     const redacted = verifyArchiveRecords(manifest, records);
     const packs = packMap(CONNECTOR_CATALOG.packs as PackDocument),
       documents: unknown[] = [];
@@ -1493,7 +1508,7 @@ export class LocalConnector {
         ).arrayBuffer(),
       );
       verifyPackDigest(bytes, entry.digest);
-      const document = JSON.parse(
+      const document = parseStrictJson(
         new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       ) as PackDocument;
       const pack = document.packs.find((p) => p.id === entry.pack);
@@ -2058,7 +2073,6 @@ export class LocalConnector {
       cursor: input.cursor,
       limit: input.limit,
     });
-    const now = unixTimeMillis();
     const delegations: DelegationVerdict[] = [];
     for (const credential of response.result) {
       let records: Awaited<
@@ -2084,7 +2098,7 @@ export class LocalConnector {
           document,
           document.id,
           input.audience,
-          now,
+          unixTimeMillis(),
         ),
       );
     }

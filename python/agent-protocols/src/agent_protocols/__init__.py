@@ -48,6 +48,7 @@ from .identity import (
     with_room_id,
 )
 from .profile import (
+    ProfileCache,
     PROFILE_PROTOCOL,
     PROFILE_UPDATE,
     latest_profile_update,
@@ -90,6 +91,7 @@ from .delegation import (
 )
 
 __all__ = [
+    "ProfileCache",
     "AGENT_ID_PREFIX",
     "CONTROLLER_CHALLENGE_PREFIX",
     "DELEGATION_ERROR_CODES",

@@ -372,7 +372,7 @@ def validate_room_head_precondition(event: Event) -> None:
     base_hash = event.get("base_hash")
     if type(base_seq) is not int or base_seq < 1 or base_seq > MAX_SAFE_NONCE:
         raise AgentProtocolError("invalid_event", "base_seq must be a positive safe JSON integer")
-    if not isinstance(base_hash, str) or not base_hash.strip():
+    if not isinstance(base_hash, str) or _is_blank(base_hash):
         raise AgentProtocolError("invalid_event", "base_hash must not be empty")
 
 
@@ -423,7 +423,7 @@ def validate_type_def(definition: dict[str, Any]) -> None:
     validate_custom_event_type_name(str(definition.get("type", "")))
     if definition.get("kind") not in TYPE_KINDS:
         raise AgentProtocolError("invalid_event", f"invalid type kind: {definition.get('kind')}")
-    if not str(definition.get("title", "")).strip():
+    if _is_blank(str(definition.get("title", ""))):
         raise AgentProtocolError("invalid_event", "type definition title must not be empty")
     schema = definition.get("schema")
     if not isinstance(schema, dict):
@@ -722,7 +722,7 @@ def validate_room_create_payload(payload: dict[str, Any]) -> None:
         validate_origin(payload.get("host"))
     except AgentProtocolError as exc:
         raise AgentProtocolError("invalid_event", "room.create host must be an HTTPS origin") from exc
-    if not str(payload.get("topic", "")).strip():
+    if _is_blank(str(payload.get("topic", ""))):
         raise AgentProtocolError("invalid_event", "room topic must not be empty")
     if payload.get("start_time", 0) >= payload.get("end_time", 0):
         raise AgentProtocolError("invalid_event", "start_time must be before end_time")
@@ -740,7 +740,7 @@ def validate_room_create_host(payload: dict[str, Any], host_origin: str) -> None
 
 def validate_message_create_payload(payload: dict[str, Any]) -> None:
     content_type = payload.get("content_type")
-    if not isinstance(content_type, str) or not content_type.strip():
+    if not isinstance(content_type, str) or _is_blank(content_type):
         raise AgentProtocolError("invalid_event", "content_type must not be empty")
     if not isinstance(payload.get("content"), (str, dict)):
         raise AgentProtocolError("invalid_event", "content must be a string or an object")
@@ -802,7 +802,7 @@ def validate_room_update_payload(payload: dict[str, Any]) -> None:
                 "invalid_event", f"room.update payload field {field} is not updatable"
             )
     topic = payload.get("topic")
-    if topic is not None and not str(topic).strip():
+    if topic is not None and _is_blank(str(topic)):
         raise AgentProtocolError("invalid_event", "room topic must not be empty")
     start_time = payload.get("start_time")
     end_time = payload.get("end_time")
@@ -851,7 +851,11 @@ class TypeRegistry:
         a redefinition: it must keep the type's kind, and the latest
         definition wins."""
         if is_pack_import(declaration):
-            return self._import(declaration, packs or {})
+            staged = TypeRegistry()
+            staged._types = dict(self._types)
+            names = staged._import(declaration, packs or {})
+            self._types = staged._types
+            return names
         if isinstance(declaration, dict) and "type" in declaration:
             self.define(declaration)
             return [declaration["type"]]
@@ -943,7 +947,7 @@ def _compile_schema(schema: dict[str, Any]) -> Draft202012Validator:
     except Exception as error:  # jsonschema.SchemaError
         raise AgentProtocolError("invalid_type_schema", f"invalid type schema: {error}") from error
     # Annotation keywords are never asserted (Section 12.3.1).
-    return Draft202012Validator(_strip_annotations(schema))
+    return Draft202012Validator(_portable_validation_schema(schema))
 
 
 def verify_pack_digest(data: bytes, digest: str) -> None:
@@ -1161,3 +1165,65 @@ def _hash_canonical_json(value: Any) -> str:
     data = canonical if isinstance(canonical, bytes) else canonical.encode()
     digest = hashlib.sha3_256(data).digest()
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+def _is_blank(value: str) -> bool:
+    return re.fullmatch(r"[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*", value) is not None
+
+
+def _portable_validation_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Python end anchors without changing the signed schema or local $ref targets."""
+    from urllib.parse import quote, unquote
+    result = _strip_annotations(schema)
+    renames: list[tuple[int, tuple[str, ...], tuple[str, ...]]] = []
+    references: list[tuple[dict[str, Any], int]] = []
+    resources = 0
+
+    def pattern(value: str) -> str:
+        # Only an unescaped final dollar is the ADP end-of-input anchor.
+        slashes = len(value[:-1]) - len(value[:-1].rstrip("\\"))
+        return value[:-1] + r"\Z" if value.endswith("$") and slashes % 2 == 0 else value
+
+    def visit(node: Any, scopes: list[tuple[int, tuple[str, ...], tuple[str, ...]]]) -> None:
+        nonlocal resources
+        if not isinstance(node, dict): return
+        if "$id" in node:
+            resources += 1
+            scopes = [*scopes, (resources, (), ())]
+        if "$ref" in node: references.append((node, scopes[-1][0]))
+        if "pattern" in node: node["pattern"] = pattern(node["pattern"])
+
+        def descend(child: Any, old: tuple[str, ...], new: tuple[str, ...] | None = None) -> None:
+            visit(child, [(owner, before + old, after + (old if new is None else new))
+                          for owner, before, after in scopes])
+
+        for keyword in _SUBSCHEMA_KEYWORDS:
+            descend(node.get(keyword), (keyword,))
+        for keyword in _SUBSCHEMA_ARRAY_KEYWORDS:
+            for i, child in enumerate(node.get(keyword, []) if isinstance(node.get(keyword), list) else []):
+                descend(child, (keyword, str(i)))
+        for keyword in _SUBSCHEMA_MAP_KEYWORDS:
+            values = node.get(keyword)
+            if not isinstance(values, dict): continue
+            rewritten = {}
+            for key, child in values.items():
+                mapped = pattern(key) if keyword == "patternProperties" else key
+                for owner, before, after in scopes:
+                    old, new = before + (keyword, key), after + (keyword, mapped)
+                    if old != new: renames.append((owner, old, new))
+                descend(child, (keyword, key), (keyword, mapped))
+                rewritten[mapped] = child
+            node[keyword] = rewritten
+
+    visit(result, [(0, (), ())])
+    for node, resource in references:
+        reference = unquote(node["$ref"])
+        if not reference.startswith("#/"): continue
+        path = tuple(v.replace("~1", "/").replace("~0", "~") for v in reference[2:].split("/"))
+        for owner, old, new in sorted(renames, key=lambda entry: len(entry[1]), reverse=True):
+            if owner == resource and path[:len(old)] == old:
+                path = new + path[len(old):]
+                pointer = "/".join(v.replace("~", "~0").replace("/", "~1") for v in path)
+                node["$ref"] = "#/" + quote(pointer, safe="/~")
+                break
+    return result

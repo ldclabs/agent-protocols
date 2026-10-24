@@ -20,8 +20,8 @@ use crate::error::Result;
 use crate::error::SdkError;
 use crate::identity::{AgentId, Envelope, ErrorResponse, ListResponse, MAX_NONCE_HEADER};
 use crate::profile::{
-    AgentProfile, ProfileBatchReadRequest, ProfileBatchReadResponse, ProfileEventsResponse,
-    ProfileServiceDiscovery, ProfileServiceEndpoints, ProfileUpdatePayload,
+    AgentProfile, ProfileBatchReadRequest, ProfileBatchReadResponse, ProfileCache,
+    ProfileEventsResponse, ProfileServiceDiscovery, ProfileServiceEndpoints, ProfileUpdatePayload,
 };
 
 /// Principal URLs come from signed events that anyone can submit, so every
@@ -31,10 +31,10 @@ const MAX_PRINCIPAL_DOCUMENT_BYTES: usize = 1024 * 1024;
 
 /// Reads a JSON body, turning a non-2xx response into [`SdkError::HttpStatus`]
 /// with the Agent Identity error code and `Max-Seen-Nonce` header when present.
-async fn read_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+pub(crate) async fn read_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
     let status = response.status();
     if status.is_success() {
-        return Ok(response.json().await?);
+        return decode_json(&response.bytes().await?);
     }
     let max_seen_nonce = max_seen_nonce(&response);
     let body = response.text().await.unwrap_or_default();
@@ -68,7 +68,14 @@ async fn read_bounded_json<T: DeserializeOwned>(
         let body = String::from_utf8_lossy(&bytes).into_owned();
         return Err(http_status_error(status.as_u16(), max_seen_nonce, body));
     }
-    Ok(serde_json::from_slice(&bytes)?)
+    decode_json(&bytes)
+}
+
+pub(crate) fn decode_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| SdkError::protocol("invalid_event", "response is not UTF-8"))?;
+    let value = crate::identity::parse_strict_json(text)?;
+    Ok(serde_json::from_value(value)?)
 }
 
 fn max_seen_nonce(response: &reqwest::Response) -> Option<String> {
@@ -117,6 +124,7 @@ fn join_url(base_url: &str, path: &str) -> String {
 /// document instead, whose endpoints clients MUST prefer.
 #[derive(Clone, Debug)]
 pub struct ProfileClient {
+    profile_cache: std::sync::Arc<std::sync::Mutex<ProfileCache>>,
     profiles_url: String,
     batch_url: String,
     inner: reqwest::Client,
@@ -147,6 +155,7 @@ impl ProfileClient {
             .clone()
             .unwrap_or_else(|| format!("{profiles_url}/batch"));
         Self {
+            profile_cache: Default::default(),
             profiles_url,
             batch_url,
             inner,
@@ -173,6 +182,37 @@ impl ProfileClient {
     /// Base URL of profile reads, event history, and submission (Section 7.1).
     pub fn profiles_url(&self) -> &str {
         &self.profiles_url
+    }
+
+    pub fn with_profile_cache(
+        mut self,
+        cache: std::sync::Arc<std::sync::Mutex<ProfileCache>>,
+    ) -> Self {
+        self.profile_cache = cache;
+        self
+    }
+    pub fn profile_cache(&self) -> std::sync::Arc<std::sync::Mutex<ProfileCache>> {
+        self.profile_cache.clone()
+    }
+    pub async fn latest_profile_update(
+        &self,
+        owner: &AgentId,
+    ) -> Result<Envelope<ProfileUpdatePayload>> {
+        let page = self.profile_events(owner, Some(1)).await?;
+        if page.result.len() > 1 {
+            return Err(SdkError::protocol(
+                "invalid_response",
+                "invalid latest profile page",
+            ));
+        }
+        let envelope = page
+            .result
+            .first()
+            .ok_or_else(|| SdkError::protocol("not_found", "profile not found"))?;
+        self.profile_cache
+            .lock()
+            .map_err(|_| SdkError::protocol("invalid_request", "profile cache lock poisoned"))?
+            .observe(envelope, owner)
     }
 
     pub async fn get_profile(&self, agent_id: &AgentId) -> Result<AgentProfile> {

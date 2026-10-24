@@ -291,7 +291,7 @@ pub struct DelegationVerdict {
     pub credential: DelegationCredential,
     /// Latest-grant signature, controller, ceiling, and consistency checks passed.
     pub verified: bool,
-    /// Verified, and usable for the audience now.
+    /// Verified, with fresh status consistent with supplied history and the audience/time checks.
     pub usable: bool,
     /// Every failed check.
     pub reasons: Vec<String>,
@@ -723,6 +723,24 @@ pub fn validate_controller_enumeration(
     Ok(())
 }
 
+pub const MAX_STATUS_AGE_MS: i64 = 300_000;
+pub const STATUS_CLOCK_SKEW_MS: i64 = 60_000;
+
+fn validate_status_freshness(credential: &DelegationCredential, now: i64) -> Result<()> {
+    timestamp(now, "now")?;
+    timestamp(credential.checked_at, "checked_at")?;
+    timestamp(credential.accepted_at, "accepted_at")?;
+    if credential.checked_at < credential.accepted_at
+        || credential.checked_at > now.saturating_add(STATUS_CLOCK_SKEW_MS)
+    {
+        return fail("invalid status timestamps");
+    }
+    if now.saturating_sub(credential.checked_at) > MAX_STATUS_AGE_MS {
+        return fail("status is stale");
+    }
+    Ok(())
+}
+
 /// Audience/status/time only, after signature/history checks. Caller still
 /// authenticates the subject and enforces scopes and constraints.
 pub fn validate_delegation_use(
@@ -731,7 +749,7 @@ pub fn validate_delegation_use(
     now: i64,
 ) -> Result<()> {
     validate_audience(audience)?;
-    timestamp(now, "now")?;
+    validate_status_freshness(credential, now)?;
     validate_delegation_grant_payload(&grant_from_credential(credential), None)?;
     if credential.protocol != PROTOCOL
         || credential.status != DelegationStatus::Active
@@ -765,6 +783,24 @@ pub fn verify_delegation_credential(
         reasons.push(error.to_string());
     }
     let verified = reasons.is_empty();
+    if let Err(error) = validate_status_freshness(credential, now) {
+        reasons.push(error.to_string());
+    }
+    let current = records
+        .iter()
+        .position(|r| r.envelope.hash == credential.event_id);
+    if records.iter().enumerate().any(|(index, r)| {
+        let (id, principal) = match &r.envelope.event.payload {
+            DelegationPayload::Grant(p) => (&p.id, &p.principal_id),
+            DelegationPayload::Revoke(p) => (&p.id, &p.principal_id),
+        };
+        r.envelope.hash != credential.event_id
+            && id == &credential.id
+            && principal == &credential.principal_id
+            && (r.accepted_at > credential.accepted_at || current.is_some_and(|at| index > at))
+    }) {
+        reasons.push("credential status conflicts with supplied history".into());
+    }
     if credential.status != DelegationStatus::Active {
         let status = serde_json::to_value(credential.status)
             .ok()

@@ -35,14 +35,9 @@ export const DELEGATION_ERROR_CODES: readonly string[] = [
 ];
 
 export type DelegationEventType =
-  | typeof DELEGATION_GRANT
-  | typeof DELEGATION_REVOKE;
+  typeof DELEGATION_GRANT | typeof DELEGATION_REVOKE;
 
-export type DelegationStatus =
-  | "active"
-  | "suspended"
-  | "expired"
-  | "revoked";
+export type DelegationStatus = "active" | "suspended" | "expired" | "revoked";
 
 export interface PrincipalLink {
   name: string;
@@ -102,8 +97,7 @@ export interface DelegationRevokePayload {
 }
 
 export type DelegationPayload =
-  | DelegationGrantPayload
-  | DelegationRevokePayload;
+  DelegationGrantPayload | DelegationRevokePayload;
 
 export interface DelegationCredential {
   id: string;
@@ -158,7 +152,7 @@ export interface DelegationVerdict {
   credential: DelegationCredential;
   /** Latest-grant signature, controller, ceiling, and consistency checks passed. */
   verified: boolean;
-  /** Verified, and usable for the audience now: active, in its window, audience listed. */
+  /** Verified, active for the audience now, with fresh status consistent with supplied history. */
   usable: boolean;
   /** Every failed check. */
   reasons: string[];
@@ -196,7 +190,10 @@ export function delegationRevokeEvent(
   );
 }
 
-export function validateController(controller: Controller, retired = false): void {
+export function validateController(
+  controller: Controller,
+  retired = false,
+): void {
   if (!isRecord(controller)) fail("controller must be an object");
   validateAgentId(controller.id);
   if (controller.source !== "local") validateOrigin(controller.source);
@@ -204,45 +201,75 @@ export function validateController(controller: Controller, retired = false): voi
   if (controller.name !== undefined) validateNonEmpty(controller.name, "name");
   if (controller.delegation !== undefined && controller.delegation !== "*") {
     const policy = controller.delegation;
-    if (!isRecord(policy) || Object.keys(policy).sort().join(",") !== "audiences,scopes") fail("invalid delegation policy");
+    if (
+      !isRecord(policy) ||
+      Object.keys(policy).sort().join(",") !== "audiences,scopes"
+    )
+      fail("invalid delegation policy");
     stringList(policy.scopes, "scopes");
     stringList(policy.audiences, "audiences");
     for (const audience of policy.audiences) validateAudience(audience);
   }
   if (retired) {
     timestamp(controller.retired_at, "retired_at");
-    if (controller.retired_at! < controller.valid_from) fail("retired_at precedes valid_from");
+    if (controller.retired_at! < controller.valid_from)
+      fail("retired_at precedes valid_from");
     if (controller.invalid_from !== undefined) {
       timestamp(controller.invalid_from, "invalid_from");
-      if (controller.invalid_from < controller.valid_from || controller.invalid_from > controller.retired_at!) fail("invalid compromise interval");
+      if (
+        controller.invalid_from < controller.valid_from ||
+        controller.invalid_from > controller.retired_at!
+      )
+        fail("invalid compromise interval");
     }
-  } else if (controller.retired_at !== undefined || controller.invalid_from !== undefined) fail("current controller has retirement fields");
+  } else if (
+    controller.retired_at !== undefined ||
+    controller.invalid_from !== undefined
+  )
+    fail("current controller has retirement fields");
 }
 
 export function validatePrincipalDocument(document: PrincipalDocument): void {
   if (!isRecord(document)) fail("principal must be an object");
   validateHttpsUrl(document.id, "principal.id");
-  if (document.protocol !== DELEGATION_PROTOCOL) fail("invalid principal protocol");
+  if (document.protocol !== DELEGATION_PROTOCOL)
+    fail("invalid principal protocol");
   timestamp(document.updated_at, "updated_at");
-  if (!Array.isArray(document.controllers) || (document.retired_controllers !== undefined && !Array.isArray(document.retired_controllers))) fail("controllers must be arrays");
+  if (
+    !Array.isArray(document.controllers) ||
+    (document.retired_controllers !== undefined &&
+      !Array.isArray(document.retired_controllers))
+  )
+    fail("controllers must be arrays");
   const records = new Map<string, Controller>();
   let delegates = false;
-  for (const [list, retired] of [[document.controllers, false], [document.retired_controllers ?? [], true]] as const) {
+  for (const [list, retired] of [
+    [document.controllers, false],
+    [document.retired_controllers ?? [], true],
+  ] as const) {
     for (const record of list) {
       validateController(record, retired);
       if (records.has(record.id)) fail("duplicate controller key");
       records.set(record.id, record);
       if (record.delegation !== undefined) delegates = true;
-      if (record.valid_from > document.updated_at || (record.retired_at !== undefined && record.retired_at > document.updated_at)) fail("controller timestamp exceeds document update");
+      if (
+        record.valid_from > document.updated_at ||
+        (record.retired_at !== undefined &&
+          record.retired_at > document.updated_at)
+      )
+        fail("controller timestamp exceeds document update");
     }
   }
   if (document.aliases !== undefined) {
     stringList(document.aliases, "aliases", true);
     for (const alias of document.aliases) validateHttpsUrl(alias, "alias");
   }
-  if (document.avatar_url !== undefined) validateHttpsUrl(document.avatar_url, "avatar_url");
-  if (document.delegation_service !== undefined) validateOrigin(document.delegation_service);
-  else if (delegates) fail("delegation_service is required when a controller carries delegation");
+  if (document.avatar_url !== undefined)
+    validateHttpsUrl(document.avatar_url, "avatar_url");
+  if (document.delegation_service !== undefined)
+    validateOrigin(document.delegation_service);
+  else if (delegates)
+    fail("delegation_service is required when a controller carries delegation");
 }
 
 /**
@@ -288,8 +315,10 @@ export function controllerCoversCredential(
   if (controller.delegation === undefined) return false;
   if (controller.delegation === "*") return true;
   const policy = controller.delegation;
-  return credential.scopes.every((x) => policy.scopes.includes(x)) &&
-    credential.audiences.every((x) => policy.audiences.includes(x));
+  return (
+    credential.scopes.every((x) => policy.scopes.includes(x)) &&
+    credential.audiences.every((x) => policy.audiences.includes(x))
+  );
 }
 
 export function validateDelegationGrantPayload(
@@ -304,8 +333,10 @@ export function validateDelegationGrantPayload(
   stringList(payload.audiences, "audiences");
   for (const audience of payload.audiences) validateAudience(audience);
   if (createdAt !== undefined) timestamp(createdAt, "created_at");
-  if (payload.not_before !== undefined) timestamp(payload.not_before, "not_before");
-  if (payload.expires_at !== undefined) timestamp(payload.expires_at, "expires_at");
+  if (payload.not_before !== undefined)
+    timestamp(payload.not_before, "not_before");
+  if (payload.expires_at !== undefined)
+    timestamp(payload.expires_at, "expires_at");
   if (payload.constraints !== undefined && !isRecord(payload.constraints)) {
     throw protocolError("invalid_delegation", "constraints must be an object");
   }
@@ -346,14 +377,21 @@ export function validateDelegationQueryRequest(
         "query must include at least one of subject or principal_id",
       );
     }
-  } else if (request.subject === undefined || request.principal_id === undefined) {
+  } else if (
+    request.subject === undefined ||
+    request.principal_id === undefined
+  ) {
     throw protocolError(
       "invalid_request",
       "public query must include both subject and principal_id",
     );
   }
   if (request.id !== undefined) validateDelegationId(request.id);
-  if (request.status !== undefined && !["active", "suspended", "expired", "revoked"].includes(request.status)) fail("invalid status");
+  if (
+    request.status !== undefined &&
+    !["active", "suspended", "expired", "revoked"].includes(request.status)
+  )
+    fail("invalid status");
   if (request.subject !== undefined) validateAgentId(request.subject);
   if (request.principal_id !== undefined) {
     validateHttpsUrl(request.principal_id, "principal_id");
@@ -362,10 +400,7 @@ export function validateDelegationQueryRequest(
     request.limit !== undefined &&
     (!Number.isSafeInteger(request.limit) || request.limit < 1)
   ) {
-    throw protocolError(
-      "invalid_request",
-      "limit must be a positive integer",
-    );
+    throw protocolError("invalid_request", "limit must be a positive integer");
   }
 }
 
@@ -378,8 +413,15 @@ export function validateDelegationRevokePayload(
 }
 
 export function validateDelegationId(value: unknown): asserts value is string {
-  if (typeof value !== "string" || !DELEGATION_ID_PATTERN.test(value) || value === "." || value === "..") {
-    fail("delegation id must match [A-Za-z0-9._~-]{1,128} and not be a dot segment");
+  if (
+    typeof value !== "string" ||
+    !DELEGATION_ID_PATTERN.test(value) ||
+    value === "." ||
+    value === ".."
+  ) {
+    fail(
+      "delegation id must match [A-Za-z0-9._~-]{1,128} and not be a dot segment",
+    );
   }
 }
 
@@ -416,42 +458,76 @@ export function validateDelegationEnvelope(
  * and the service's actual acceptance time; this function does not authorize it. */
 export function materializeDelegationCredential(
   envelope: Envelope<DelegationPayload>,
-  options: { acceptedAt: number; previous?: DelegationCredential; status?: DelegationStatus; checkedAt?: number },
+  options: {
+    acceptedAt: number;
+    previous?: DelegationCredential;
+    status?: DelegationStatus;
+    checkedAt?: number;
+  },
 ): DelegationCredential {
   validateDelegationEnvelope(envelope);
   timestamp(options.acceptedAt, "accepted_at");
   const event = envelope.event;
   const previous = options.previous;
   checkPrevious(event, previous);
-  if (previous && options.acceptedAt < previous.accepted_at) fail("acceptance order reversed");
+  if (previous && options.acceptedAt < previous.accepted_at)
+    fail("acceptance order reversed");
   const checkedAt = options.checkedAt ?? options.acceptedAt;
   timestamp(checkedAt, "checked_at");
   if (checkedAt < options.acceptedAt) fail("checked_at precedes acceptance");
   if (event.type === DELEGATION_REVOKE) {
     if (!previous) fail("revocation requires previous credential");
-    return { ...structuredClone(previous!), controller: event.actor, status: "revoked", event_id: envelope.hash, accepted_at: options.acceptedAt, checked_at: checkedAt };
+    return {
+      ...structuredClone(previous!),
+      controller: event.actor,
+      status: "revoked",
+      event_id: envelope.hash,
+      accepted_at: options.acceptedAt,
+      checked_at: checkedAt,
+    };
   }
   const payload = event.payload as DelegationGrantPayload;
-  if (payload.expires_at !== undefined && payload.expires_at <= options.acceptedAt) {
+  if (
+    payload.expires_at !== undefined &&
+    payload.expires_at <= options.acceptedAt
+  ) {
     throw protocolError("grant_expired", "grant expired at acceptance");
   }
   const status = options.status ?? "active";
-  if (!["active", "suspended", "expired", "revoked"].includes(status)) fail("invalid status");
-  return { ...structuredClone(payload), protocol: DELEGATION_PROTOCOL, controller: event.actor, status,
-    event_id: envelope.hash, grant_event_id: envelope.hash, accepted_at: options.acceptedAt, checked_at: checkedAt };
+  if (!["active", "suspended", "expired", "revoked"].includes(status))
+    fail("invalid status");
+  return {
+    ...structuredClone(payload),
+    protocol: DELEGATION_PROTOCOL,
+    controller: event.actor,
+    status,
+    event_id: envelope.hash,
+    grant_event_id: envelope.hash,
+    accepted_at: options.acceptedAt,
+    checked_at: checkedAt,
+  };
 }
 
 /** Pre-signing authority check. Input previous state and document must be trusted.
  * This does not verify signatures, fetch HTTPS, check cache age, or enforce nonce/time windows. */
-export function validateDelegationEventAuthority(event: Event<DelegationPayload>, document: PrincipalDocument,
-  acceptedAt: number, previous?: DelegationCredential): void {
+export function validateDelegationEventAuthority(
+  event: Event<DelegationPayload>,
+  document: PrincipalDocument,
+  acceptedAt: number,
+  previous?: DelegationCredential,
+): void {
   checkAuthority(event, document, acceptedAt, previous, false);
 }
 
 /** Online acceptance checks over a document read at resolvedUrl. Services must also
  * enforce fresh resolution, Identity live replay rules, and atomic persistence. */
-export function validateDelegationAcceptance(envelope: Envelope<DelegationPayload>, document: PrincipalDocument,
-  resolvedUrl: string, acceptedAt: number, previous?: DelegationCredential): void {
+export function validateDelegationAcceptance(
+  envelope: Envelope<DelegationPayload>,
+  document: PrincipalDocument,
+  resolvedUrl: string,
+  acceptedAt: number,
+  previous?: DelegationCredential,
+): void {
   validateDelegationEnvelope(envelope);
   validatePrincipalResolution(document, resolvedUrl);
   checkAuthority(envelope.event, document, acceptedAt, previous, false);
@@ -459,11 +535,21 @@ export function validateDelegationAcceptance(envelope: Envelope<DelegationPayloa
 
 /** Uses caller-trusted acceptance evidence, never an event's self-reported time as proof.
  * Current status, evidence authenticity and application constraints are separate checks. */
-export function validateHistoricalDelegation(record: DelegationRecord,
-  document: PrincipalDocument, resolvedUrl: string, previous?: DelegationCredential): void {
+export function validateHistoricalDelegation(
+  record: DelegationRecord,
+  document: PrincipalDocument,
+  resolvedUrl: string,
+  previous?: DelegationCredential,
+): void {
   validateDelegationEnvelope(record.envelope);
   validatePrincipalResolution(document, resolvedUrl);
-  checkAuthority(record.envelope.event, document, record.accepted_at, previous, true);
+  checkAuthority(
+    record.envelope.event,
+    document,
+    record.accepted_at,
+    previous,
+    true,
+  );
 }
 
 /** Per-result enumeration check; the caller authenticates actor and resolves the document. */
@@ -473,30 +559,78 @@ export function validateControllerEnumeration(
   now: number,
   credential: Pick<DelegationCredential, "scopes" | "audiences">,
 ): void {
-  validatePrincipalDocument(document); timestamp(now, "now");
-  stringList(credential.scopes, "scopes"); stringList(credential.audiences, "audiences");
-  const controller = document.controllers.find(c => c.id === actor);
-  if (!controller || now < controller.valid_from) throw protocolError("controller_not_current", "controller cannot enumerate");
-  if (controller.delegation === undefined) throw protocolError("delegation_not_permitted", "controller cannot enumerate");
+  validatePrincipalDocument(document);
+  timestamp(now, "now");
+  stringList(credential.scopes, "scopes");
+  stringList(credential.audiences, "audiences");
+  const controller = document.controllers.find((c) => c.id === actor);
+  if (!controller || now < controller.valid_from)
+    throw protocolError(
+      "controller_not_current",
+      "controller cannot enumerate",
+    );
+  if (controller.delegation === undefined)
+    throw protocolError(
+      "delegation_not_permitted",
+      "controller cannot enumerate",
+    );
   if (!controllerCoversCredential(controller, credential)) {
-    throw protocolError("delegation_ceiling_exceeded", "credential is outside the controller's ceiling");
+    throw protocolError(
+      "delegation_ceiling_exceeded",
+      "credential is outside the controller's ceiling",
+    );
   }
 }
 
 /** Checks audience/status/time only, after cryptographic and historical verification.
  * The application still authenticates the subject and enforces scopes and constraints. */
-export function validateDelegationUse(credential: DelegationCredential, audience: string, now: number): void {
-  validateAudience(audience); timestamp(now, "now");
+export const MAX_STATUS_AGE_MS = 300000;
+export const STATUS_CLOCK_SKEW_MS = 60000;
+
+function validateStatusFreshness(
+  credential: DelegationCredential,
+  now: number,
+): void {
+  timestamp(now, "now");
+  timestamp(credential.checked_at, "checked_at");
+  timestamp(credential.accepted_at, "accepted_at");
+  if (
+    credential.checked_at < credential.accepted_at ||
+    credential.checked_at > now + STATUS_CLOCK_SKEW_MS
+  )
+    fail("invalid status timestamps");
+  if (now - credential.checked_at > MAX_STATUS_AGE_MS) fail("status is stale");
+}
+
+export function validateDelegationUse(
+  credential: DelegationCredential,
+  audience: string,
+  now: number,
+): void {
+  validateAudience(audience);
+  validateStatusFreshness(credential, now);
   validateDelegationGrantPayload(credential);
-  if (credential.protocol !== DELEGATION_PROTOCOL || credential.status !== "active" ||
-      !credential.audiences.includes(audience) || (credential.not_before !== undefined && now < credential.not_before) ||
-      (credential.expires_at !== undefined && now >= credential.expires_at)) fail("delegation is not usable");
+  if (
+    credential.protocol !== DELEGATION_PROTOCOL ||
+    credential.status !== "active" ||
+    !credential.audiences.includes(audience) ||
+    (credential.not_before !== undefined && now < credential.not_before) ||
+    (credential.expires_at !== undefined && now >= credential.expires_at)
+  )
+    fail("delegation is not usable");
 }
 
 /** Grant fields a credential carries from its latest grant. */
 const GRANT_FIELDS = [
-  "id", "principal_id", "subject", "relationship", "scopes", "audiences",
-  "constraints", "not_before", "expires_at",
+  "id",
+  "principal_id",
+  "subject",
+  "relationship",
+  "scopes",
+  "audiences",
+  "constraints",
+  "not_before",
+  "expires_at",
 ] as const;
 
 /**
@@ -519,18 +653,29 @@ export function verifyDelegationCredential(
 ): DelegationVerdict {
   const reasons: string[] = [];
   try {
-    const record = records.find((candidate) => candidate.envelope.hash === credential.grant_event_id);
+    const record = records.find(
+      (candidate) => candidate.envelope.hash === credential.grant_event_id,
+    );
     if (!record) fail("latest grant record is missing");
     validateHistoricalDelegation(record!, document, resolvedUrl);
-    if (record!.envelope.event.type !== DELEGATION_GRANT) fail("grant_event_id does not name a grant");
+    if (record!.envelope.event.type !== DELEGATION_GRANT)
+      fail("grant_event_id does not name a grant");
     const grant = record!.envelope.event.payload as DelegationGrantPayload;
-    if (credential.protocol !== DELEGATION_PROTOCOL ||
-        GRANT_FIELDS.some((field) => canonicalize(grant[field]) !== canonicalize(credential[field]))) {
+    if (
+      credential.protocol !== DELEGATION_PROTOCOL ||
+      GRANT_FIELDS.some(
+        (field) =>
+          canonicalize(grant[field]) !== canonicalize(credential[field]),
+      )
+    ) {
       fail("credential does not match its latest grant");
     }
     if (credential.event_id === credential.grant_event_id) {
-      if (credential.accepted_at !== record!.accepted_at || credential.controller !== record!.envelope.event.actor ||
-          credential.status === "revoked") {
+      if (
+        credential.accepted_at !== record!.accepted_at ||
+        credential.controller !== record!.envelope.event.actor ||
+        credential.status === "revoked"
+      ) {
         fail("credential does not match its latest grant");
       }
     } else if (credential.status !== "revoked") {
@@ -540,10 +685,34 @@ export function verifyDelegationCredential(
     reasons.push(error instanceof Error ? error.message : String(error));
   }
   const verified = reasons.length === 0;
-  if (credential.status !== "active") reasons.push(`status is ${credential.status}`);
-  if (!credential.audiences?.includes(audience)) reasons.push(`audience ${audience} is not granted`);
-  if (credential.not_before !== undefined && now < credential.not_before) reasons.push("not yet valid");
-  if (credential.expires_at !== undefined && now >= credential.expires_at) reasons.push("expired");
+  try {
+    validateStatusFreshness(credential, now);
+  } catch (error) {
+    reasons.push(error instanceof Error ? error.message : String(error));
+  }
+  const current = records.findIndex(
+    (r) => r.envelope.hash === credential.event_id,
+  );
+  if (
+    records.some(
+      (r, index) =>
+        r.envelope.hash !== credential.event_id &&
+        r.envelope.event.payload.id === credential.id &&
+        r.envelope.event.payload.principal_id === credential.principal_id &&
+        (r.accepted_at > credential.accepted_at ||
+          (current >= 0 && index > current)),
+    )
+  ) {
+    reasons.push("credential status conflicts with supplied history");
+  }
+  if (credential.status !== "active")
+    reasons.push(`status is ${credential.status}`);
+  if (!credential.audiences?.includes(audience))
+    reasons.push(`audience ${audience} is not granted`);
+  if (credential.not_before !== undefined && now < credential.not_before)
+    reasons.push("not yet valid");
+  if (credential.expires_at !== undefined && now >= credential.expires_at)
+    reasons.push("expired");
   return { credential, verified, usable: reasons.length === 0, reasons };
 }
 
@@ -563,15 +732,27 @@ export function auditDelegationHistory(
   let replayed: DelegationCredential | undefined;
   for (const record of records) {
     validateHistoricalDelegation(record, document, resolvedUrl, replayed);
-    replayed = materializeDelegationCredential(record.envelope, { acceptedAt: record.accepted_at, previous: replayed });
+    replayed = materializeDelegationCredential(record.envelope, {
+      acceptedAt: record.accepted_at,
+      previous: replayed,
+    });
   }
   const r = replayed!;
   // Only status and the service's check time may differ from event replay.
   const fields = [
-    ...GRANT_FIELDS, "protocol", "event_id", "grant_event_id", "controller", "accepted_at",
+    ...GRANT_FIELDS,
+    "protocol",
+    "event_id",
+    "grant_event_id",
+    "controller",
+    "accepted_at",
   ] as const;
-  if (fields.some((field) => canonicalize(r[field]) !== canonicalize(credential[field])) ||
-      (r.status === "revoked") !== (credential.status === "revoked")) {
+  if (
+    fields.some(
+      (field) => canonicalize(r[field]) !== canonicalize(credential[field]),
+    ) ||
+    (r.status === "revoked") !== (credential.status === "revoked")
+  ) {
     fail("credential does not match its accepted records");
   }
 }
@@ -585,65 +766,138 @@ export function validateAudience(value: unknown): void {
   validateOrigin(value);
 }
 
-function eventIdentity(event: Event<DelegationPayload>): { id: string; principalId: string } {
-  const payload = event.payload as DelegationGrantPayload | DelegationRevokePayload;
+function eventIdentity(event: Event<DelegationPayload>): {
+  id: string;
+  principalId: string;
+} {
+  const payload = event.payload as
+    DelegationGrantPayload | DelegationRevokePayload;
   return { id: payload.id, principalId: payload.principal_id };
 }
 
-function checkPrevious(event: Event<DelegationPayload>, previous?: DelegationCredential): void {
+function checkPrevious(
+  event: Event<DelegationPayload>,
+  previous?: DelegationCredential,
+): void {
   if (!previous) {
-    if (event.type === DELEGATION_REVOKE) throw protocolError("credential_not_found", "revocation requires previous credential");
+    if (event.type === DELEGATION_REVOKE)
+      throw protocolError(
+        "credential_not_found",
+        "revocation requires previous credential",
+      );
     return;
   }
-  stringList(previous.scopes, "previous.scopes"); stringList(previous.audiences, "previous.audiences");
+  stringList(previous.scopes, "previous.scopes");
+  stringList(previous.audiences, "previous.audiences");
   timestamp(previous.accepted_at, "previous.accepted_at");
   const { id, principalId } = eventIdentity(event);
-  const sameSubject = event.type !== DELEGATION_GRANT || (event.payload as DelegationGrantPayload).subject === previous.subject;
-  if (previous.id !== id || previous.principal_id !== principalId || previous.protocol !== DELEGATION_PROTOCOL || !sameSubject) {
-    throw protocolError("credential_identity_mismatch", "credential principal, subject, and protocol are immutable");
+  const sameSubject =
+    event.type !== DELEGATION_GRANT ||
+    (event.payload as DelegationGrantPayload).subject === previous.subject;
+  if (
+    previous.id !== id ||
+    previous.principal_id !== principalId ||
+    previous.protocol !== DELEGATION_PROTOCOL ||
+    !sameSubject
+  ) {
+    throw protocolError(
+      "credential_identity_mismatch",
+      "credential principal, subject, and protocol are immutable",
+    );
   }
 }
 
-function checkAuthority(event: Event<DelegationPayload>, document: PrincipalDocument, acceptedAt: number,
-  previous: DelegationCredential | undefined, historical: boolean): void {
-  validatePrincipalDocument(document); timestamp(acceptedAt, "accepted_at"); timestamp(event.created_at, "created_at"); validateAgentId(event.actor);
+function checkAuthority(
+  event: Event<DelegationPayload>,
+  document: PrincipalDocument,
+  acceptedAt: number,
+  previous: DelegationCredential | undefined,
+  historical: boolean,
+): void {
+  validatePrincipalDocument(document);
+  timestamp(acceptedAt, "accepted_at");
+  timestamp(event.created_at, "created_at");
+  validateAgentId(event.actor);
   if (event.protocol !== DELEGATION_PROTOCOL) fail("invalid event protocol");
   const grant = event.type === DELEGATION_GRANT;
-  if (grant) validateDelegationGrantPayload(event.payload as DelegationGrantPayload, event.created_at);
-  else if (event.type === DELEGATION_REVOKE) validateDelegationRevokePayload(event.payload as DelegationRevokePayload);
+  if (grant)
+    validateDelegationGrantPayload(
+      event.payload as DelegationGrantPayload,
+      event.created_at,
+    );
+  else if (event.type === DELEGATION_REVOKE)
+    validateDelegationRevokePayload(event.payload as DelegationRevokePayload);
   else fail("invalid event type");
-  if (eventIdentity(event).principalId !== document.id) throw protocolError("principal_not_canonical", "principal mismatch");
-  const records = historical ? [...document.controllers, ...document.retired_controllers ?? []] : document.controllers;
-  const controller = records.find(c => c.id === event.actor);
-  if (!controller) throw protocolError("controller_not_current", "actor is not a controller of the principal");
-  if (controller.delegation === undefined) throw protocolError("delegation_not_permitted", "actor has no delegation authority");
+  if (eventIdentity(event).principalId !== document.id)
+    throw protocolError("principal_not_canonical", "principal mismatch");
+  const records = historical
+    ? [...document.controllers, ...(document.retired_controllers ?? [])]
+    : document.controllers;
+  const controller = records.find((c) => c.id === event.actor);
+  if (!controller)
+    throw protocolError(
+      "controller_not_current",
+      "actor is not a controller of the principal",
+    );
+  if (controller.delegation === undefined)
+    throw protocolError(
+      "delegation_not_permitted",
+      "actor has no delegation authority",
+    );
   for (const time of [event.created_at, acceptedAt]) {
-    if (time < controller.valid_from || (controller.retired_at !== undefined && time >= controller.retired_at) || (controller.invalid_from !== undefined && time >= controller.invalid_from)) {
-      throw protocolError("controller_not_current", "outside controller authority interval");
+    if (
+      time < controller.valid_from ||
+      (controller.retired_at !== undefined && time >= controller.retired_at) ||
+      (controller.invalid_from !== undefined && time >= controller.invalid_from)
+    ) {
+      throw protocolError(
+        "controller_not_current",
+        "outside controller authority interval",
+      );
     }
   }
   checkPrevious(event, previous);
-  if (previous && acceptedAt < previous.accepted_at) fail("acceptance order reversed");
+  if (previous && acceptedAt < previous.accepted_at)
+    fail("acceptance order reversed");
   if (previous && !controllerCoversCredential(controller, previous)) {
-    throw protocolError("delegation_ceiling_exceeded", "credential is outside the controller's ceiling");
+    throw protocolError(
+      "delegation_ceiling_exceeded",
+      "credential is outside the controller's ceiling",
+    );
   }
   if (grant) {
     const payload = event.payload as DelegationGrantPayload;
-    if (payload.expires_at !== undefined && payload.expires_at <= acceptedAt) throw protocolError("grant_expired", "grant expired at acceptance");
+    if (payload.expires_at !== undefined && payload.expires_at <= acceptedAt)
+      throw protocolError("grant_expired", "grant expired at acceptance");
     if (!controllerCoversCredential(controller, payload)) {
-      throw protocolError("delegation_ceiling_exceeded", "grant exceeds controller delegation policy");
+      throw protocolError(
+        "delegation_ceiling_exceeded",
+        "grant exceeds controller delegation policy",
+      );
     }
   }
 }
 
-function fail(message: string): never { throw protocolError("invalid_delegation", message); }
-function timestamp(value: unknown, field: string): void {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) fail(`${field} must be a non-negative safe integer`);
+function fail(message: string): never {
+  throw protocolError("invalid_delegation", message);
 }
-function stringList(value: unknown, field: string, empty = false): asserts value is string[] {
-  if (!Array.isArray(value) || (!empty && value.length === 0)) fail(`${field} must be a non-empty array`);
-  for (const item of value) { validateNonEmpty(item, field); if (item === "*") fail(`${field} cannot contain wildcard`); }
-  if (new Set(value).size !== value.length) fail(`${field} contains duplicates`);
+function timestamp(value: unknown, field: string): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    fail(`${field} must be a non-negative safe integer`);
+}
+function stringList(
+  value: unknown,
+  field: string,
+  empty = false,
+): asserts value is string[] {
+  if (!Array.isArray(value) || (!empty && value.length === 0))
+    fail(`${field} must be a non-empty array`);
+  for (const item of value) {
+    validateNonEmpty(item, field);
+    if (item === "*") fail(`${field} cannot contain wildcard`);
+  }
+  if (new Set(value).size !== value.length)
+    fail(`${field} contains duplicates`);
 }
 function validateHttpsUrl(value: unknown, field: string): void {
   if (typeof value !== "string") {

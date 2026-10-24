@@ -11,8 +11,9 @@ use serde_json::json;
 use crate::discourse::{AgentStatus, ArchiveRecord, RoomJoinRequest, RoomResponse};
 use crate::error::Result;
 use crate::identity::AgentId;
+use crate::identity::Envelope;
 use crate::mail::{MailCardCache, MailboxCard, MessagePayload, Packet};
-use crate::profile::AgentProfile;
+use crate::profile::{AgentProfile, ProfileCache, ProfileUpdatePayload};
 
 use super::inputs::{RoomSendMessageInput, RoomSubmitEventInput};
 use super::views::{
@@ -28,6 +29,7 @@ pub type RoomKey = (String, String);
 
 #[derive(Clone, Debug, Default)]
 pub struct LocalConnectorState {
+    pub(crate) profile_pins: ProfileCache,
     pub hosts: BTreeMap<String, AgentProtocolsHost>,
     pub(crate) rooms: BTreeMap<RoomKey, LocalRoomState>,
     pub(crate) profiles: BTreeMap<AgentId, AgentProfile>,
@@ -211,6 +213,8 @@ pub const LOCAL_CONNECTOR_SNAPSHOT_VERSION: u64 = 2;
 /// lists whose entries carry both; the other maps keep their string keys.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ConnectorSnapshot {
+    #[serde(default)]
+    profile_pins: Vec<Envelope<ProfileUpdatePayload>>,
     pub(crate) version: u64,
     pub(crate) agent_id: AgentId,
     pub(crate) next_nonce: u64,
@@ -276,6 +280,9 @@ impl ConnectorSnapshot {
             hosts: state.hosts.clone(),
             rooms: state.rooms.values().cloned().collect(),
             profiles: state.profiles.clone(),
+            profile_pins: serde_json::from_value(
+                state.profile_pins.snapshot()?["profiles"].take(),
+            )?,
             join_requests: state
                 .join_requests
                 .iter()
@@ -338,6 +345,9 @@ impl ConnectorSnapshot {
                 })
                 .collect(),
             profiles: self.profiles,
+            profile_pins: ProfileCache::from_snapshot(
+                &json!({"version":1,"profiles":self.profile_pins}),
+            )?,
             join_requests: self
                 .join_requests
                 .into_iter()

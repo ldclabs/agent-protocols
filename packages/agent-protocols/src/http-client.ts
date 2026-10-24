@@ -64,6 +64,7 @@ import {
 } from "./identity.js";
 import {
   AgentProfile,
+  ProfileCache,
   ProfileBatchReadResponse,
   ProfileEventsResponse,
   ProfileServiceDiscovery,
@@ -126,6 +127,7 @@ export class ProfileClient {
     baseUrl: string,
     private readonly fetchImpl: FetchLike = fetch,
     endpoints?: Partial<ProfileServiceEndpoints>,
+    readonly profileCache = new ProfileCache(),
   ) {
     const base = baseUrl.replace(/\/$/, "");
     this.profilesUrl = (endpoints?.profiles ?? `${base}/v1/profiles`).replace(
@@ -142,18 +144,36 @@ export class ProfileClient {
   static async discover(
     origin: string,
     fetchImpl: FetchLike = fetch,
+    profileCache = new ProfileCache(),
   ): Promise<ProfileClient> {
     const base = origin.replace(/\/$/, "");
     try {
       const response = await fetchImpl(`${base}/.well-known/agent-profile`);
       if (response.ok) {
-        const discovery = (await response.json()) as ProfileServiceDiscovery;
-        return new ProfileClient(base, fetchImpl, discovery.endpoints);
+        const discovery =
+          await readProtocolJson<ProfileServiceDiscovery>(response);
+        return new ProfileClient(
+          base,
+          fetchImpl,
+          discovery.endpoints,
+          profileCache,
+        );
       }
     } catch {
       // Discovery is optional; the default paths apply.
     }
-    return new ProfileClient(base, fetchImpl);
+    return new ProfileClient(base, fetchImpl, undefined, profileCache);
+  }
+
+  async latestProfileUpdate(
+    agentId: AgentId,
+  ): Promise<Envelope<ProfileUpdatePayload>> {
+    const page = await this.profileEvents(agentId, 1);
+    if (!page || !Array.isArray(page.result) || page.result.length > 1)
+      throw protocolError("invalid_response", "invalid latest profile page");
+    if (!page.result.length)
+      throw protocolError("not_found", "profile not found");
+    return this.profileCache.observe(page.result[0], agentId);
   }
 
   async getProfile(agentId: AgentId): Promise<AgentProfile> {
@@ -182,7 +202,7 @@ export class ProfileClient {
 
   private async getJson<T>(url: string): Promise<T> {
     const response = await this.fetchImpl(url);
-    return readJson<T>(response);
+    return readProtocolJson<T>(response);
   }
 
   private async postJson<T>(url: string, body: unknown): Promise<T> {
@@ -191,7 +211,7 @@ export class ProfileClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    return readJson<T>(response);
+    return readProtocolJson<T>(response);
   }
 }
 
@@ -229,7 +249,8 @@ export class DiscourseClient {
     try {
       const response = await fetchImpl(`${base}/.well-known/agent-discourse`);
       if (response.ok) {
-        const discovery = (await response.json()) as DiscourseProtocolDiscovery;
+        const discovery =
+          await readProtocolJson<DiscourseProtocolDiscovery>(response);
         return new DiscourseClient(base, fetchImpl, discovery.endpoints);
       }
     } catch {
@@ -389,7 +410,7 @@ export class DiscourseClient {
     const response = await this.fetchImpl(url, {
       headers: jwt ? { authorization: `Bearer ${jwt}` } : undefined,
     });
-    return readJson<T>(response);
+    return readProtocolJson<T>(response);
   }
 
   private async postJson<T>(
@@ -405,7 +426,7 @@ export class DiscourseClient {
       },
       body: JSON.stringify(body),
     });
-    return readJson<T>(response);
+    return readProtocolJson<T>(response);
   }
 
   private async putJson<T>(
@@ -421,7 +442,7 @@ export class DiscourseClient {
       },
       body: JSON.stringify(body),
     });
-    return readJson<T>(response);
+    return readProtocolJson<T>(response);
   }
 
   private roomUrl(roomId: string): string {
@@ -463,7 +484,8 @@ export class DelegationClient {
     try {
       const response = await fetchImpl(`${base}/.well-known/agent-delegation`);
       if (response.ok) {
-        const discovery = (await response.json()) as DelegationServiceDiscovery;
+        const discovery =
+          await readProtocolJson<DelegationServiceDiscovery>(response);
         return new DelegationClient(base, fetchImpl, discovery.endpoints);
       }
     } catch {
@@ -561,7 +583,7 @@ export class DelegationClient {
       },
       body: JSON.stringify(request),
     });
-    return readJson<DelegationQueryResponse>(response);
+    return readProtocolJson<DelegationQueryResponse>(response);
   }
 
   private async readPrincipal(
@@ -601,7 +623,7 @@ export class DelegationClient {
 
   private async getJson<T>(url: string): Promise<T> {
     const response = await this.fetchImpl(url);
-    return readJson<T>(response);
+    return readProtocolJson<T>(response);
   }
 
   private async postJson<T>(url: string, body: unknown): Promise<T> {
@@ -610,7 +632,7 @@ export class DelegationClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    return readJson<T>(response);
+    return readProtocolJson<T>(response);
   }
 }
 
@@ -639,7 +661,7 @@ function addQuery(
   return encoded ? `${path}?${encoded}` : path;
 }
 
-async function readJson<T>(response: Response): Promise<T> {
+export async function readProtocolJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
     throw new HttpResponseError(
@@ -648,7 +670,16 @@ async function readJson<T>(response: Response): Promise<T> {
       response.headers?.get?.(MAX_NONCE_HEADER) ?? undefined,
     );
   }
-  return response.json() as Promise<T>;
+  const bytes = await response.arrayBuffer();
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes,
+    );
+  } catch {
+    throw protocolError("invalid_event", "response is not UTF-8");
+  }
+  return parseStrictJson(text) as T;
 }
 
 /** Like {@link readJson}, but rejects a body over `limit` bytes. */
@@ -697,7 +728,7 @@ async function readBoundedJson<T>(
       response.headers?.get?.(MAX_NONCE_HEADER) ?? undefined,
     );
   }
-  return JSON.parse(text) as T;
+  return parseStrictJson(text) as T;
 }
 
 /**

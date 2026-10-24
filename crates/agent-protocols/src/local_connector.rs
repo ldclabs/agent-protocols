@@ -1107,7 +1107,6 @@ impl LocalConnector {
             ..DelegationQueryRequest::default()
         };
         let response = service.query_delegations(&request, None).await?;
-        let now = unix_ms();
         let mut delegations = Vec::new();
         for credential in response.result {
             let verdict = match service.all_delegation_events(&credential.id).await {
@@ -1117,7 +1116,7 @@ impl LocalConnector {
                     &document,
                     &document.id,
                     &input.audience,
-                    now,
+                    unix_ms(),
                 ),
                 Err(error) => DelegationVerdict {
                     credential,

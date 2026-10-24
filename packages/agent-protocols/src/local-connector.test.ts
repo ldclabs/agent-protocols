@@ -1506,6 +1506,7 @@ test("delegation_check verifies each candidate for the requested audience", asyn
   );
   const credential = delegation.materializeDelegationCredential(envelope, {
     acceptedAt: 600,
+    checkedAt: Date.now(),
   });
   const forged = {
     ...credential,

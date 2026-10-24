@@ -494,7 +494,7 @@
           "$ref": "#/$defs/httpsOrigin"
         },
         "topic": {
-          "$ref": "#/$defs/nonEmptyString"
+          "$ref": "#/$defs/nonBlankString"
         },
         "agenda": {
           "type": "string"
@@ -571,7 +571,7 @@
       "minProperties": 1,
       "properties": {
         "topic": {
-          "$ref": "#/$defs/nonEmptyString"
+          "$ref": "#/$defs/nonBlankString"
         },
         "agenda": {
           "type": "string"
@@ -684,7 +684,7 @@
           "$ref": "#/$defs/kind"
         },
         "title": {
-          "$ref": "#/$defs/nonEmptyString"
+          "$ref": "#/$defs/nonBlankString"
         },
         "description": {
           "type": "string"
@@ -966,7 +966,7 @@
       ],
       "properties": {
         "content_type": {
-          "$ref": "#/$defs/nonEmptyString"
+          "$ref": "#/$defs/nonBlankString"
         },
         "content": {
           "oneOf": [
@@ -1478,6 +1478,10 @@
         }
       },
       "additionalProperties": false
+    },
+    "nonBlankString": {
+      "type": "string",
+      "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
     }
   }
 }

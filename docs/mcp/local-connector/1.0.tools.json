@@ -4044,7 +4044,7 @@
   },
   {
     "name": "agent_protocols_delegation_check",
-    "description": "Read and verify one page of delegations for an audience. Follow next_cursor until complete is true before concluding no usable credential exists.",
+    "description": "Read and verify one page of delegations for an audience. Follow next_cursor until complete is true before concluding no usable credential exists. Usability requires fresh checked_at and no conflict with newer authoritative accepted history; historical verification alone is insufficient.",
     "annotations": {
       "readOnlyHint": true,
       "idempotentHint": true,
@@ -6249,9 +6249,9 @@
   },
   {
     "name": "agent_protocols_profiles_get",
-    "description": "Read complete signed Agent Profiles, verifying the latest update for each Agent ID. Omit ids for yourself. Read before profile_update to preserve fields. Unknown profiles appear in missing.",
+    "description": "Read complete signed Agent Profiles, verifying the latest update for each Agent ID. Omit ids for yourself. Read before profile_update to preserve fields. Unknown profiles appear in missing. Verify the mandatory latest signed update and persist greatest-nonce pins across services; reject known rollback with stale_profile.",
     "annotations": {
-      "readOnlyHint": true,
+      "readOnlyHint": false,
       "idempotentHint": true,
       "destructiveHint": false,
       "openWorldHint": true

@@ -1080,13 +1080,11 @@ pub fn validate_room_path<P>(envelope: &Envelope<P>, path_room_id: &str) -> Resu
 
 fn validate_room_head_precondition<P>(event: &Event<P>) -> Result<()> {
     match (event.base_seq, event.base_hash.as_deref()) {
-        (Some(seq), Some(hash)) if seq > 0 && seq <= MAX_SAFE_NONCE && !hash.trim().is_empty() => {
-            Ok(())
-        }
+        (Some(seq), Some(hash)) if seq > 0 && seq <= MAX_SAFE_NONCE && !is_blank(hash) => Ok(()),
         (Some(0), _) => Err(invalid_event(
             "base_seq must be a positive safe JSON integer",
         )),
-        (Some(_), Some(hash)) if hash.trim().is_empty() => {
+        (Some(_), Some(hash)) if is_blank(hash) => {
             Err(invalid_event("base_hash must not be empty"))
         }
         (Some(seq), _) if seq > MAX_SAFE_NONCE => {
@@ -1135,7 +1133,7 @@ pub fn validate_custom_event_type_name(name: &str) -> Result<()> {
 
 pub fn validate_type_def(def: &TypeDef) -> Result<()> {
     validate_custom_event_type_name(&def.name)?;
-    if def.title.trim().is_empty() {
+    if is_blank(&def.title) {
         return Err(invalid_event("type definition title must not be empty"));
     }
     if !def.schema.is_object() {
@@ -1530,7 +1528,7 @@ pub fn validate_room_create_payload(payload: &RoomCreatePayload) -> Result<()> {
     if validate_origin(&payload.host).is_err() {
         return Err(invalid_event("room.create host must be an HTTPS origin"));
     }
-    if payload.topic.trim().is_empty() {
+    if is_blank(&payload.topic) {
         return Err(invalid_event("room topic must not be empty"));
     }
     if payload.start_time >= payload.end_time {
@@ -1557,7 +1555,7 @@ pub fn validate_room_create_host(payload: &RoomCreatePayload, host_origin: &str)
 }
 
 pub fn validate_message_create_payload(payload: &MessageCreatePayload) -> Result<()> {
-    if payload.content_type.trim().is_empty() {
+    if is_blank(&payload.content_type) {
         return Err(invalid_event("content_type must not be empty"));
     }
     if !payload.content.is_string() && !payload.content.is_object() {
@@ -1609,7 +1607,7 @@ pub fn validate_room_update_payload(payload: &RoomUpdatePayload) -> Result<()> {
     if payload.is_empty() {
         return Err(invalid_event("room.update payload must not be empty"));
     }
-    if matches!(&payload.topic, Some(topic) if topic.trim().is_empty()) {
+    if matches!(&payload.topic, Some(topic) if is_blank(topic)) {
         return Err(invalid_event("room topic must not be empty"));
     }
     if let (Some(start_time), Some(end_time)) = (payload.start_time, payload.end_time) {
@@ -1673,7 +1671,12 @@ impl TypeRegistry {
                 self.define(def.clone())?;
                 Ok(vec![def.name.clone()])
             }
-            TypeDeclaration::Import(import) => self.import(import, packs),
+            TypeDeclaration::Import(import) => {
+                let mut staged = self.clone();
+                let names = staged.import(import, packs)?;
+                *self = staged;
+                Ok(names)
+            }
         }
     }
 
@@ -2202,6 +2205,11 @@ where
     let bytes = serde_jcs::to_vec(value).map_err(|err| SdkError::CanonicalJson(err.to_string()))?;
     let digest = Sha3_256::digest(bytes);
     Ok(URL_SAFE_NO_PAD.encode(digest))
+}
+
+/// ADP blank-string whitespace; do not use the platform's Unicode whitespace table.
+fn is_blank(value: &str) -> bool {
+    value.chars().all(|c| matches!(c, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{0085}' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}'))
 }
 
 #[cfg(test)]

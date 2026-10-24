@@ -9,14 +9,18 @@ import {
   RoomJoinRequest,
   RoomResponse,
 } from "../discourse.js";
-import { AgentId } from "../identity.js";
+import { AgentId, Envelope } from "../identity.js";
 import {
   MailCardCache,
   MailboxCard,
   MailMessagePayload,
   MailPacket,
 } from "../mail.js";
-import { AgentProfile } from "../profile.js";
+import {
+  AgentProfile,
+  ProfileCache,
+  ProfileUpdatePayload,
+} from "../profile.js";
 
 import {
   ActiveTurn,
@@ -113,6 +117,7 @@ export class MailState {
  * host persists through {@link LocalConnector.snapshot}.
  */
 export class LocalConnectorState {
+  profilePins = new ProfileCache();
   hosts = new Map<string, AgentProtocolsHost>();
   rooms = new Map<string, LocalRoomState>();
   profiles = new Map<AgentId, AgentProfile>();
@@ -155,6 +160,7 @@ export interface LocalRoomSnapshot {
  * `LocalConnector::snapshot` uses the same layout.
  */
 export interface LocalConnectorSnapshot {
+  profile_pins?: Envelope<ProfileUpdatePayload>[];
   version: number;
   agent_id: AgentId;
   next_nonce: number;

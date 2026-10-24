@@ -177,3 +177,32 @@ def latest_profile_update(envelopes: list[Envelope]) -> Envelope | None:
     if not envelopes:
         return None
     return max(envelopes, key=lambda envelope: envelope["event"]["nonce"])
+
+
+class ProfileCache:
+    """Verified latest updates across services. Persist snapshots; first contact proves no global freshness."""
+    def __init__(self, snapshot: dict[str, Any] | None = None):
+        self._profiles: dict[AgentId, Envelope] = {}
+        if snapshot is not None:
+            if snapshot.get('version') != 1 or not isinstance(snapshot.get('profiles'), list):
+                raise AgentProtocolError('invalid_request', 'invalid profile cache snapshot')
+            for envelope in snapshot['profiles']: self.observe(envelope, envelope['event']['actor'])
+
+    def observe(self, envelope: Envelope, owner: AgentId) -> Envelope:
+        import copy
+        validate_profile_update(envelope)
+        if envelope['event']['actor'] != owner:
+            raise AgentProtocolError('invalid_actor', 'profile response owner mismatch')
+        old = self._profiles.get(owner)
+        if old and old['hash'] != envelope['hash'] and envelope['event']['nonce'] <= old['event']['nonce']:
+            raise AgentProtocolError('stale_profile', 'profile is older than or conflicts with the pinned update')
+        self._profiles[owner] = copy.deepcopy(envelope)
+        return copy.deepcopy(envelope)
+
+    def get(self, owner: AgentId) -> Envelope | None:
+        import copy
+        return copy.deepcopy(self._profiles.get(owner))
+
+    def snapshot(self) -> dict[str, Any]:
+        import copy
+        return {'version':1, 'profiles':[copy.deepcopy(value) for _, value in sorted(self._profiles.items())]}

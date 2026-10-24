@@ -227,7 +227,7 @@ impl LocalConnector {
         for (url, digest) in referenced_packs(&records)? {
             let bytes = self.connector_get(&url, None).await?.bytes().await?;
             verify_pack_digest(&bytes, &digest)?;
-            let document: PackDocument = serde_json::from_slice(&bytes)?;
+            let document: PackDocument = crate::http_client::decode_json(&bytes)?;
             let pack = document.packs.iter().find(|p| p.id == url).ok_or_else(|| {
                 SdkError::InvalidPayload("external pack identity mismatch".into())
             })?;
@@ -268,14 +268,14 @@ impl LocalConnector {
         self.require_allowed_host(&key.0)?;
         let client = self.discourse(&key.0).await?;
         let jwt = self.request_jwt(&key.0)?;
-        let manifest: ArchiveManifest = self
-            .connector_get(
+        let manifest: ArchiveManifest = crate::http_client::read_json(
+            self.connector_get(
                 &format!("{}/{}/archive", client.rooms_url(), key.1),
                 Some(&jwt),
             )
-            .await?
-            .json()
-            .await?;
+            .await?,
+        )
+        .await?;
         if manifest.protocol != "agent-discourse/1.0"
             || manifest.kind != "room.archive"
             || manifest.room_id != key.1
@@ -289,12 +289,14 @@ impl LocalConnector {
         if service_origin(url)? != key.0 {
             return Err(SdkError::PermissionDenied);
         }
-        let log = self.connector_get(url, Some(&jwt)).await?.text().await?;
+        let bytes = self.connector_get(url, Some(&jwt)).await?.bytes().await?;
+        let log = std::str::from_utf8(&bytes)
+            .map_err(|_| SdkError::protocol("invalid_event", "archive is not UTF-8"))?;
         let records: Vec<ArchiveRecord> = log
             .lines()
             .filter(|s| !s.trim().is_empty())
-            .map(serde_json::from_str)
-            .collect::<std::result::Result<_, _>>()?;
+            .map(|line| crate::http_client::decode_json(line.as_bytes()))
+            .collect::<Result<_>>()?;
         let redacted = verify_archive_records(&manifest, &records)?;
         let registered: PackDocument =
             serde_json::from_value(catalog::catalog_data()["packs"].clone())?;
@@ -319,7 +321,7 @@ impl LocalConnector {
                 .bytes()
                 .await?;
             verify_pack_digest(&bytes, &entry.digest)?;
-            let document: PackDocument = serde_json::from_slice(&bytes)?;
+            let document: PackDocument = crate::http_client::decode_json(&bytes)?;
             let pack = document
                 .packs
                 .iter()

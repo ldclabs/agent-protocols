@@ -518,7 +518,8 @@
           "$ref": "#/$defs/timestampMs"
         },
         "checked_at": {
-          "$ref": "#/$defs/timestampMs"
+          "$ref": "#/$defs/timestampMs",
+          "description": "Status production time; semantic checks require accepted_at <= checked_at <= now + 60000 and now - checked_at <= 300000."
         }
       },
       "additionalProperties": false

@@ -363,7 +363,8 @@
           "minLength": 1
         }
       },
-      "additionalProperties": true
+      "additionalProperties": true,
+      "description": "The latest signed update read (default limit or limit=1) is mandatory. Extended history and cursor pagination require event-history."
     },
     "discoveryDocument": {
       "type": "object",

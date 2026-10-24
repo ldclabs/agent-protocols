@@ -26,6 +26,7 @@ class FakeResponse:
             self.status_code = status
         self.headers = headers or {}
         self.text = text if text is not None else json.dumps(payload)
+        self.content = self.text.encode("utf-8")
 
     def json(self):
         return self._payload

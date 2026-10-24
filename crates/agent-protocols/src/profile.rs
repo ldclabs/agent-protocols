@@ -306,6 +306,62 @@ pub fn latest_profile_update(
     envelopes.iter().max_by_key(|envelope| envelope.event.nonce)
 }
 
+/// Verified latest updates across services. Persist snapshots to retain rollback protection.
+#[derive(Clone, Debug, Default)]
+pub struct ProfileCache {
+    profiles: BTreeMap<AgentId, Envelope<ProfileUpdatePayload>>,
+}
+impl ProfileCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn observe(
+        &mut self,
+        envelope: &Envelope<ProfileUpdatePayload>,
+        owner: &AgentId,
+    ) -> Result<Envelope<ProfileUpdatePayload>> {
+        validate_profile_update(envelope)?;
+        if &envelope.event.actor != owner {
+            return Err(SdkError::protocol(
+                "invalid_actor",
+                "profile response owner mismatch",
+            ));
+        }
+        if self
+            .profiles
+            .get(owner)
+            .is_some_and(|old| old.hash != envelope.hash && envelope.event.nonce <= old.event.nonce)
+        {
+            return Err(SdkError::protocol(
+                "stale_profile",
+                "profile is older than or conflicts with the pinned update",
+            ));
+        }
+        self.profiles.insert(owner.clone(), envelope.clone());
+        Ok(envelope.clone())
+    }
+    pub fn get(&self, owner: &AgentId) -> Option<&Envelope<ProfileUpdatePayload>> {
+        self.profiles.get(owner)
+    }
+    pub fn snapshot(&self) -> Result<Value> {
+        Ok(serde_json::json!({"version":1,"profiles":self.profiles.values().collect::<Vec<_>>()}))
+    }
+    pub fn from_snapshot(value: &Value) -> Result<Self> {
+        if value["version"] != 1 || !value["profiles"].is_array() {
+            return Err(SdkError::protocol(
+                "invalid_request",
+                "invalid profile cache snapshot",
+            ));
+        }
+        let mut cache = Self::new();
+        for item in value["profiles"].as_array().unwrap() {
+            let envelope: Envelope<ProfileUpdatePayload> = serde_json::from_value(item.clone())?;
+            cache.observe(&envelope, &envelope.event.actor)?;
+        }
+        Ok(cache)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

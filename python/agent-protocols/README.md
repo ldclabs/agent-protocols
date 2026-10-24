@@ -30,7 +30,7 @@ envelope = signer.sign_event(event)
 profile = materialize_profile(envelope)
 ```
 
-`next_nonce(created_at)` derives `max(last + 1, created_at)`, so nonces stay monotonic across restarts and devices. Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
+`next_nonce(created_at)` derives `max(last + 1, created_at)`, which reduces dependence on a counter; persisted state, shared-key coordination or bounded conflict resynchronization is still needed across restarts and devices. Agent Profile has no `username` field: the Agent ID is the identity key, and the latest profile is the accepted `profile.update` with the greatest `nonce`.
 
 ADP room writes carry a signed `base_seq` / `base_hash`. Message and control writes — `message.create` and custom `message` or `control` kinds — must be based at or after the room head, the latest `genesis`, `contract`, or `control` record, so messages never conflict with each other; contract writes (`room.update`, `room.close`, `room.cancel`, `type.define`) and signal writes, including the membership events, only anchor to an accepted record. Use `event_requires_room_head` and `event_advances_room_head` to tell them apart, `validate_room_base` for the host-side base check, `discourse_event` to build them, and `room_join_request_event` for a join request, which carries `room_id` but no base. Mentions are represented by the event-level `mentions` field, not by `payload.extra`.
 
@@ -259,3 +259,13 @@ for full Profile replacement and explicit mail synchronization semantics.
 `MailClient.mailboxes(owner, jwt, limit=100, cursor=None)` and `MailRelayStore.mailboxes(jwt, ...)` implement owner-authenticated `GET /v1/me/mailboxes`. Results contain current signed cards at that relay, including retained closed/expired mailboxes; they are not a global directory or a backup of secrets and historical cards. Public contact discovery remains explicit Profile `agent-mail` endpoints. Relays retain pending packets and acceptance tombstones even when a newer card shortens `receive_until`.
 
 Before publishing any card, durably save its independent secret, exact signed envelope and targets. A timeout can follow relay acceptance; retain every possibly published card/key, including nonce-resync intermediates, until its own `receive_until`. Reconcile by exact retry or a verified card read.
+
+### Verified reads and boundary behavior
+
+HTTP JSON is parsed strictly from UTF-8 bytes before typed deserialization; signed content with duplicate members is rejected even inside response lists and archives. Nonce-cache expiration includes its final millisecond. Clock-derived nonces still need persisted state or conflict resynchronization across restores and shared-key devices; the Max-Seen-Nonce bound applies to the proposed next nonce.
+
+Delegation verification separates historical `verified` from current `usable`. Status must be no more than 300 seconds old, no more than 60 seconds ahead, and not precede acceptance. A newer event in supplied authoritative history makes an older credential unusable, including when acceptance timestamps tie. Refresh inconsistent state and obtain fresh authoritative status for sensitive actions; caller code still authenticates the subject and enforces scopes and constraints.
+
+Discourse uses a fixed whitespace set and absolute regex end anchors, including patternProperties. Type pack imports are atomic: a rejected declaration leaves the registry unchanged.
+
+`ProfileClient.latest_profile_update` reads and verifies the mandatory latest signed update. `ProfileCache` pins the highest nonce across services, rejects rollback or same-nonce conflicts with `stale_profile`, and supports snapshots. Share and persist that cache across restarts; explicit historical reads do not downgrade it. A first-contact pin cannot prove global freshness. Full history beyond the latest update remains optional.
